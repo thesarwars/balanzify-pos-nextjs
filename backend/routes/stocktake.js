@@ -173,8 +173,8 @@ router.post('/:id/approve', auth, requireRole('owner', 'manager'), async (req, r
         const diff = item.countedQty - item.systemQty;
         if (count.locationId) {
           await tx.$executeRaw`
-            INSERT INTO stock_levels (product_id, location_id, quantity)
-            VALUES (${item.productId}::uuid, ${count.locationId}::uuid, ${item.countedQty})
+            INSERT INTO stock_levels (id, product_id, location_id, quantity)
+            VALUES (gen_random_uuid(), ${item.productId}::uuid, ${count.locationId}::uuid, ${item.countedQty})
             ON CONFLICT (product_id, location_id) DO UPDATE SET quantity = ${item.countedQty}, updated_at = NOW()
           `;
           await tx.stockMovement.create({

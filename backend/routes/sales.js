@@ -330,8 +330,8 @@ router.post('/', auth, validate(SaleSchemaV3), async (req, res, next) => {
           }
           const newQty = qty - stockQty;
           await tx.$executeRaw`
-            INSERT INTO stock_levels (product_id, location_id, quantity)
-            VALUES (${item.product_id}::uuid, ${locId}::uuid, ${newQty})
+            INSERT INTO stock_levels (id, product_id, location_id, quantity)
+            VALUES (gen_random_uuid(), ${item.product_id}::uuid, ${locId}::uuid, ${newQty})
             ON CONFLICT (product_id, location_id)
             DO UPDATE SET quantity = ${newQty}, updated_at = NOW()
           `;
@@ -946,8 +946,8 @@ router.post('/:id/refund', auth, requireRole('owner', 'manager'), async (req, re
       for (const item of items) {
         if (item.restock !== false && sale.locationId) {
           await tx.$executeRaw`
-            INSERT INTO stock_levels (product_id, location_id, quantity)
-            VALUES (${item.product_id}::uuid, ${sale.locationId}::uuid, ${item.quantity})
+            INSERT INTO stock_levels (id, product_id, location_id, quantity)
+            VALUES (gen_random_uuid(), ${item.product_id}::uuid, ${sale.locationId}::uuid, ${item.quantity})
             ON CONFLICT (product_id, location_id)
             DO UPDATE SET quantity = stock_levels.quantity + ${item.quantity}
           `;

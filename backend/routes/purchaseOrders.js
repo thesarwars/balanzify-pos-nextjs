@@ -121,8 +121,8 @@ router.put('/:id/status', auth, requireRole('owner', 'manager'), validate(POStat
           const locId = po.locationId;
           if (locId) {
             await tx.$executeRaw`
-              INSERT INTO stock_levels (product_id, location_id, quantity)
-              VALUES (${ri.product_id}::uuid, ${locId}::uuid, ${ri.qty})
+              INSERT INTO stock_levels (id, product_id, location_id, quantity)
+              VALUES (gen_random_uuid(), ${ri.product_id}::uuid, ${locId}::uuid, ${ri.qty})
               ON CONFLICT (product_id, location_id) DO UPDATE
               SET quantity = stock_levels.quantity + ${ri.qty}, updated_at = NOW()
             `;

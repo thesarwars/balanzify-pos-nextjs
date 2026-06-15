@@ -44,8 +44,8 @@ router.post('/', auth, requireRole('owner', 'manager'), validate(ProductVariantS
       });
       if (opening_stock > 0 && location_id) {
         await tx.$executeRaw`
-          INSERT INTO stock_levels (product_id, variant_id, location_id, quantity)
-          VALUES (${req.params.productId}::uuid, ${v.id}::uuid, ${location_id}::uuid, ${opening_stock})
+          INSERT INTO stock_levels (id, product_id, variant_id, location_id, quantity)
+          VALUES (gen_random_uuid(), ${req.params.productId}::uuid, ${v.id}::uuid, ${location_id}::uuid, ${opening_stock})
           ON CONFLICT (product_id, location_id) DO UPDATE SET quantity = stock_levels.quantity + ${opening_stock}
         `;
       }
