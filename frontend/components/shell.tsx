@@ -15,7 +15,7 @@ import { isNavBlocked, setNavBlock, navBlockMessage, navBlockTitle } from '@/lib
 export const NAV = [
   { sect: null, items: [
     { id: 'dashboard', label: 'Dashboard', icon: '▦' },
-    { id: 'pos', label: 'Point of Sale', icon: '⊞', highlight: true },
+    { id: 'pos', label: 'Point of Sale', icon: '⊞' },
   ]},
   { sect: 'Inventory', items: [
     { id: 'locations', label: 'Locations', icon: '☖' },
