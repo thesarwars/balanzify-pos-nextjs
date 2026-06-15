@@ -1880,6 +1880,29 @@ function realPayMethod(m: any): string {
 }
 const isUuid = (v: any) => typeof v === 'string' && /^[0-9a-f-]{32,36}$/i.test(v);
 
+// Map a backend Shift row → the cash-register shape the POS UI expects.
+// Backend shift: { id, locationId, location:{name}, openingFloat, totalCash,
+//   totalZaad, totalCard, totalSales, totalTransactions, expectedCash, openedAt }
+function realRegister(s: any): any {
+  if (!s) return null;
+  const opening = Number(s.openingFloat || 0);
+  const cash = Number(s.totalCash || 0);
+  return {
+    id: s.id,
+    location_id: s.locationId || null,
+    location_name: (s.location && s.location.name) || '—',
+    opening_cash: opening,
+    total_sales: Number(s.totalSales || 0),
+    tx_count: Number(s.totalTransactions || 0),
+    refunds: 0, // backend does not track a per-shift refund total yet
+    totals: { cash, zaad: Number(s.totalZaad || 0), evc: 0, card: Number(s.totalCard || 0), bank: 0, advance: 0 },
+    // expectedCash is only persisted at close; for an open till compute it live.
+    expected_cash: s.expectedCash != null ? Number(s.expectedCash) : opening + cash,
+    opened_at: s.openedAt ? String(s.openedAt).slice(0, 19).replace('T', ' ') : '',
+    status: s.status,
+  };
+}
+
 // ═══════════════════════════════════════════════════════════════════
 //  PUBLIC API  —  what every screen imports.
 //  One method per endpoint; the name says which URL it hits.
@@ -2029,11 +2052,16 @@ const API: any = {
       if (REAL_MODE) {
         const pays = (payload.payments || []).filter((p: any) => Number(p.amount) > 0);
         const split = pays.length > 1;
+        // The backend requires the idempotency key to be minted server-side first
+        // (POST /sales/initiate) — it must already exist in sale_keys, otherwise
+        // POST /sales rejects with "Invalid transaction token."
+        const init = await realReq('POST', '/sales/initiate');
         const body: any = {
-          idempotency_key: 'pos-' + (hasWindow() && (window as any).crypto?.randomUUID ? (window as any).crypto.randomUUID() : Date.now() + '-' + Math.round(Math.random() * 1e9)),
+          idempotency_key: init.idempotency_key,
           items: (payload.lines || []).map((l: any) => ({ product_id: l.product_id, quantity: l.quantity, override_price: l.unit_price })),
           customer_id: isUuid(payload.contact_id) ? payload.contact_id : undefined,
           location_id: isUuid(payload.location_id) ? payload.location_id : undefined,
+          shift_id: isUuid(payload.shift_id) ? payload.shift_id : undefined,  // attribute the sale to the open till
           payment_method: split ? 'split' : realPayMethod((pays[0] && pays[0].method) || payload.method),
           discount_type: payload.discount_type === 'percentage' ? 'pct' : 'flat',
           discount_value: Number(payload.discount_amount || 0),
@@ -2090,7 +2118,17 @@ const API: any = {
 
   // GET /connector/api/contactapi
   contact: {
-    async list(params: any = {}) { return (await transport('GET', '/connector/api/contactapi', { query: params })).data; },
+    async list(params: any = {}) {
+      if (REAL_MODE) {
+        const res = await realReq('GET', '/customers', { query: params });
+        return (res.customers || res.data || []).map((c: any) => ({
+          id: c.id, name: c.name, mobile: c.phone || '', email: c.email || '',
+          loyalty_points: c.loyaltyPoints || 0, type: 'customer',
+          credit_limit: Number(c.creditLimit || 0), outstanding: Number(c.outstandingBalance || 0), ...c,
+        }));
+      }
+      return (await transport('GET', '/connector/api/contactapi', { query: params })).data;
+    },
     async get(id: any) { return (await transport('GET', '/connector/api/contactapi/' + id)).data[0]; },
     async create(body: any) { return (await transport('POST', '/connector/api/contactapi', { body })).data; },
     async update(id: any, body: any) { return (await transport('PUT', '/connector/api/contactapi/' + id, { body })).data; },
@@ -2119,7 +2157,13 @@ const API: any = {
   },
   permissions: { async list() { return (await transport('GET', '/connector/api/permission-list')).data; } },
   location: {
-    async list() { return (await transport('GET', '/connector/api/business-location')).data; },
+    async list() {
+      if (REAL_MODE) {
+        const res = await realReq('GET', '/locations');
+        return (res.locations || res.data || []).map((l: any) => ({ id: l.id, name: l.name, type: l.type, status: l.isActive ? 'active' : 'inactive', ...l }));
+      }
+      return (await transport('GET', '/connector/api/business-location')).data;
+    },
     async get(id: any) { return (await transport('GET', '/connector/api/business-location/' + id)).data[0]; },
     async create(body: any) { return (await transport('POST', '/connector/api/business-location', { body })).data; },
     async update(id: any, body: any) { return (await transport('PUT', '/connector/api/business-location/' + id, { body })).data; },
@@ -2268,10 +2312,34 @@ const API: any = {
     async registers() { return (await transport('GET', '/connector/api/cash-register-report')).data; },
   },
   register: {
-    async current() { return (await transport('GET', '/connector/api/cash-register')).data; },
-    async open(body: any) { return (await transport('POST', '/connector/api/cash-register', { body })).data; },
-    async shifts() { return (await transport('GET', '/connector/api/cash-register/shifts')).data; },
-    async close(id: any, body: any) { return (await transport('POST', '/connector/api/cash-register/' + id + '/close', { body })).data; },
+    async current() {
+      if (REAL_MODE) return realRegister(await realReq('GET', '/sales/shifts/current'));
+      return (await transport('GET', '/connector/api/cash-register')).data;
+    },
+    async open(body: any) {
+      if (REAL_MODE) {
+        await realReq('POST', '/sales/shifts/open', { body: {
+          location_id: isUuid(body.location_id) ? body.location_id : undefined,
+          opening_float: Number(body.opening_cash || 0),
+        }});
+        // Re-fetch current so the returned record carries the location name (include).
+        return realRegister(await realReq('GET', '/sales/shifts/current'));
+      }
+      return (await transport('POST', '/connector/api/cash-register', { body })).data;
+    },
+    async shifts() {
+      // Employee-shift assignment is an HRM concept not wired to the POS backend
+      // yet — return none in real mode so the optional picker stays hidden.
+      if (REAL_MODE) return [];
+      return (await transport('GET', '/connector/api/cash-register/shifts')).data;
+    },
+    async close(id: any, body: any) {
+      if (REAL_MODE) return realRegister(await realReq('POST', '/sales/shifts/' + id + '/close', { body: {
+        actual_cash: Number(body.total_cash || 0),
+        notes: body.note || undefined,
+      }}));
+      return (await transport('POST', '/connector/api/cash-register/' + id + '/close', { body })).data;
+    },
   },
   heldSale: {
     async list(type: any) { return (await transport('GET', '/connector/api/held-sale', { query: { type } })).data; },

@@ -205,7 +205,7 @@ function POS({ T, tweaks }: { T: any; tweaks: any }) {
     setPostErr(null); setPosting(true);
     try {
       const created = await API.sell.create({
-        location_id: 1, contact_id: customer ? customer.id : 1, customer_name: customer ? customer.name : 'Walk-in',
+        location_id: (register && register.location_id) || 1, shift_id: register ? register.id : undefined, contact_id: customer ? customer.id : 1, customer_name: customer ? customer.name : 'Walk-in',
         method: payments[0] ? payments[0].method : 'cash', amount: total, discount_amount: discount, discount_type: 'fixed', tax_amount: tax,
         redeem_points: redeemPts,
         payments: payments.filter((p: any) => Number(p.amount) > 0).map((p: any) => ({ method: p.method, amount: Number(p.amount) })),
@@ -720,18 +720,18 @@ function custRow(T: any, active: any): React.CSSProperties {
 // ── Cash register: open / details / close ───────────────────────────
 function RegisterModal({ T, mode, register, onClose, onOpened, onClosed, onSwitchClose }: { T: any; mode: any; register: any; onClose: () => void; onOpened: (r: any) => void; onClosed: () => void; onSwitchClose: () => void }) {
   const [openingCash, setOpeningCash] = useStateP('100');
-  const [locId, setLocId] = useStateP(1);
+  const [locId, setLocId] = useStateP<any>('');   // location id (UUID in real mode)
   const [locs, setLocs] = useStateP<any[]>([]);
   const [closeForm, setCloseForm] = useStateP<any>({ total_cash: '', total_card: '', total_cheque: '', note: '' });
   const [busy, setBusy] = useStateP(false);
   const [err, setErr] = useStateP<any>(null);
   const [shiftId, setShiftId] = useStateP<any>('');
   const [shifts, setShifts] = useStateP<any[]>([]);
-  useEffectP(() => { if (mode === 'open') { API.location.list().then(setLocs).catch(() => {}); API.register.shifts().then(setShifts).catch(() => {}); } }, [mode]);
+  useEffectP(() => { if (mode === 'open') { API.location.list().then((ls: any[]) => { setLocs(ls); if (ls && ls[0]) setLocId(String(ls[0].id)); }).catch(() => {}); API.register.shifts().then(setShifts).catch(() => {}); } }, [mode]);
 
   async function doOpen() {
     setBusy(true); setErr(null);
-    try { const r = await API.register.open({ opening_cash: Number(openingCash || 0), location_id: locId, shift_id: shiftId || undefined }); onOpened(r); }
+    try { const r = await API.register.open({ opening_cash: Number(openingCash || 0), location_id: locId || undefined, shift_id: shiftId || undefined }); onOpened(r); }
     catch (e: any) { setErr(e.message); } finally { setBusy(false); }
   }
   async function doClose() {
@@ -746,7 +746,7 @@ function RegisterModal({ T, mode, register, onClose, onOpened, onClosed, onSwitc
         footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Cancel</Btn><Btn T={T} kind="accent" onClick={doOpen} disabled={busy}>{busy ? 'Opening…' : 'Open register'}</Btn></>}>
         <FormGrid>
           <Field T={T} label="Cash in hand" full><TextField T={T} type="number" value={openingCash} onChange={setOpeningCash} placeholder="0.00" /></Field>
-          <Field T={T} label="Location" full><SelectField T={T} value={String(locId)} options={locs.map((l: any) => String(l.id))} onChange={(v: any) => setLocId(Number(v))} render={(v: any) => (locs.find((l: any) => String(l.id) === v) || {}).name} /></Field>
+          <Field T={T} label="Location" full><SelectField T={T} value={String(locId)} options={locs.map((l: any) => String(l.id))} onChange={(v: any) => setLocId(v)} render={(v: any) => (locs.find((l: any) => String(l.id) === v) || {}).name} /></Field>
           {shifts.length > 0 && <Field T={T} label="Assign shift (optional)" full><SelectField T={T} value={String(shiftId)} options={['', ...shifts.map((s: any) => String(s.id))]} onChange={(v: any) => setShiftId(v)} render={(v: any) => { if (!v) return 'No shift — default cashier'; const s = shifts.find((x: any) => String(x.id) === v) || {}; return `${s.employee_name} · ${s.start}–${s.end}`; }} /></Field>}
         </FormGrid>
         <div style={{ fontSize: 11.5, color: T.inkMute, marginTop: 10, lineHeight: 1.5 }}>{shifts.length > 0 ? 'Assigning a shift records who is on the till for this session.' : 'Every sale this session is logged to the register. Close it at the end of the shift to reconcile cash.'}</div>
