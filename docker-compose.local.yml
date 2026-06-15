@@ -1,0 +1,80 @@
+# Local stack — NO nginx, NO certbot, NO SSL.
+# Frontend published on :3500, API on :5000 (frontend calls it directly via CORS).
+# Prisma owns the schema (migrate deploy on api boot) — no schema.sql initdb mount.
+#   docker compose -f docker-compose.local.yml up -d --build
+name: balanzify-local
+
+networks:
+  bz_net:
+    driver: bridge
+
+volumes:
+  pg_local:
+    driver: local
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: balanzify
+      POSTGRES_USER: balanzify
+      POSTGRES_PASSWORD: balanzify
+    volumes:
+      - pg_local:/var/lib/postgresql/data
+    networks: [bz_net]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U balanzify -d balanzify"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --save "" --appendonly no
+    networks: [bz_net]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: production
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 5000
+      DATABASE_URL: postgresql://balanzify:balanzify@postgres:5432/balanzify?schema=public
+      JWT_SECRET: local-dev-jwt-secret-change-me-0123456789abcdef
+      REDIS_URL: redis://redis:6379
+      FRONTEND_URL: http://localhost:3500
+      ALLOWED_ORIGINS: http://localhost:3500
+      LOG_LEVEL: info
+    ports:
+      - "5000:5000"
+    networks: [bz_net]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: production
+      args:
+        NEXT_PUBLIC_API_MODE: real
+        NEXT_PUBLIC_BACKEND_URL: http://localhost:5000
+    restart: unless-stopped
+    ports:
+      - "3500:80"
+    networks: [bz_net]
+    depends_on:
+      - api

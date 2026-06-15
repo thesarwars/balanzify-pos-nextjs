@@ -1,0 +1,11 @@
+# Build context is the frontend/ dir; exclude build outputs and docs.
+node_modules
+.next
+out
+.git
+.gitignore
+.vscode
+.DS_Store
+*.log
+npm-debug.log*
+*.md
