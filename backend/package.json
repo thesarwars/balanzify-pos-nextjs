@@ -11,7 +11,11 @@
     "test:coverage": "jest --coverage --runInBand --forceExit",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate deploy",
-    "db:push": "prisma db push"
+    "db:push": "prisma db push",
+    "db:seed": "node prisma/seed.js"
+  },
+  "prisma": {
+    "seed": "node prisma/seed.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.490.0",
