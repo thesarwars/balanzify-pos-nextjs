@@ -1,0 +1,94 @@
+groups:
+  - name: balanzify_api
+    interval: 30s
+    rules:
+
+      - alert: HighErrorRate
+        expr: rate(http_errors_total[5m]) > 0.05
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High API error rate (>5%)"
+          description: "Error rate is {{ $value | humanizePercentage }} over the last 5 minutes."
+
+      - alert: SlowAPIResponses
+        expr: histogram_quantile(0.95, rate(http_request_duration_ms_bucket[5m])) > 2000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "95th percentile API response time > 2 seconds"
+          description: "P95 latency is {{ $value }}ms. Investigate slow queries."
+
+      - alert: DatabaseDown
+        expr: db_connected == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Database connection lost"
+          description: "API cannot reach PostgreSQL. Immediate action required."
+
+      - alert: HighMemoryUsage
+        expr: process_memory_heap_used_bytes / process_memory_heap_total_bytes > 0.90
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Node.js heap usage above 90%"
+          description: "Heap is at {{ $value | humanizePercentage }}. Risk of OOM crash."
+
+      - alert: DBPoolSaturation
+        expr: db_pool_waiting_requests > 10
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Database connection pool saturated"
+          description: "{{ $value }} requests are waiting for a DB connection."
+
+      - alert: FraudSignalsElevated
+        expr: rate(fraud_signals_total[10m]) > 0.1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Elevated fraud signal rate"
+          description: "Fraud signals firing at {{ $value }}/s. Review activity logs immediately."
+
+      - alert: AuthBruteForce
+        expr: rate(auth_attempts_total{success="false"}[5m]) > 1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Elevated failed authentication rate"
+          description: "Failed logins at {{ $value }}/s. Possible brute force in progress."
+
+  - name: infrastructure
+    rules:
+
+      - alert: DiskSpaceLow
+        expr: (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) < 0.15
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disk space below 15%"
+
+      - alert: DiskSpaceCritical
+        expr: (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) < 0.05
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Disk space critically low (<5%)"
+
+      - alert: HighCPU
+        expr: 100 - (avg by(instance)(rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "CPU usage above 85% for 10 minutes"

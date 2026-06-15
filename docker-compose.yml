@@ -1,0 +1,258 @@
+version: '3.9'
+
+# ── Networks ───────────────────────────────────────────────────────────────────
+networks:
+  frontend_net:
+    driver: bridge
+  backend_net:
+    driver: bridge
+  db_net:
+    driver: bridge
+
+# ── Volumes ────────────────────────────────────────────────────────────────────
+volumes:
+  postgres_data:
+    driver: local
+  postgres_backups:
+    driver: local
+  api_logs:
+    driver: local
+  nginx_certs:
+    driver: local
+  certbot_webroot:
+    driver: local
+
+services:
+
+  # ── PostgreSQL ───────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-balanzify}
+      POSTGRES_USER: ${DB_USER:-balanzify}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - postgres_backups:/backups
+      - ./backend/config/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    networks:
+      - db_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-balanzify} -d ${DB_NAME:-balanzify}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    # No ports exposed externally — only accessible within db_net
+    command: >
+      postgres
+        -c max_connections=200
+        -c shared_buffers=256MB
+        -c effective_cache_size=768MB
+        -c maintenance_work_mem=64MB
+        -c checkpoint_completion_target=0.9
+        -c wal_buffers=16MB
+        -c default_statistics_target=100
+        -c random_page_cost=1.1
+        -c effective_io_concurrency=200
+        -c log_min_duration_statement=2000
+        -c log_checkpoints=on
+        -c log_connections=on
+        -c log_disconnections=on
+
+  # ── Automated backups ────────────────────────────────────────────────────────
+  backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      PGPASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME:-balanzify}
+      DB_USER: ${DB_USER:-balanzify}
+      DB_HOST: postgres
+      BACKUP_KEEP_DAYS: 30
+    volumes:
+      - postgres_backups:/backups
+    networks:
+      - db_net
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      sh -c '
+        while true; do
+          FILENAME="/backups/backup_$$(date +%Y%m%d_%H%M%S).sql.gz"
+          pg_dump -h $$DB_HOST -U $$DB_USER -d $$DB_NAME | gzip > $$FILENAME
+          echo "[backup] Created $$FILENAME"
+          find /backups -name "backup_*.sql.gz" -mtime +$$BACKUP_KEEP_DAYS -delete
+          echo "[backup] Cleanup done. Next backup in 24h."
+          sleep 86400
+        done
+      '
+
+  # ── Redis (rate limiting + session cache) ────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: >
+      redis-server
+        --maxmemory 256mb
+        --maxmemory-policy allkeys-lru
+        --save ""
+        --appendonly no
+    networks:
+      - backend_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 300M
+
+  # ── API ───────────────────────────────────────────────────────────────────────
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: production
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 5000
+      # Prisma requires DATABASE_URL — assembled from individual DB_* vars
+      DATABASE_URL: postgresql://${DB_USER:-balanzify}:${DB_PASSWORD}@postgres:5432/${DB_NAME:-balanzify}?schema=public
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-balanzify}
+      DB_USER: ${DB_USER:-balanzify}
+      DB_PASSWORD: ${DB_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      FRONTEND_URL: ${FRONTEND_URL:-https://yourdomain.com}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-https://yourdomain.com}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      REDIS_URL: redis://redis:6379
+      # Email (choose one: SMTP or AWS SES)
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      EMAIL_FROM: ${EMAIL_FROM:-noreply@balanzify.com}
+      # Optional: AWS S3 for file uploads
+      S3_BUCKET: ${S3_BUCKET:-}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      # Payment providers
+      ZAAD_MERCHANT_TILL: ${ZAAD_MERCHANT_TILL:-}
+      ZAAD_MERCHANT_NAME: ${ZAAD_MERCHANT_NAME:-}
+      ZAAD_API_URL: ${ZAAD_API_URL:-}
+      ZAAD_MERCHANT_ID: ${ZAAD_MERCHANT_ID:-}
+      ZAAD_API_KEY: ${ZAAD_API_KEY:-}
+      MPESA_CONSUMER_KEY: ${MPESA_CONSUMER_KEY:-}
+      MPESA_CONSUMER_SECRET: ${MPESA_CONSUMER_SECRET:-}
+      MPESA_SHORTCODE: ${MPESA_SHORTCODE:-}
+      MPESA_PASSKEY: ${MPESA_PASSKEY:-}
+      MPESA_MERCHANT_NAME: ${MPESA_MERCHANT_NAME:-}
+      MPESA_CALLBACK_URL: ${MPESA_CALLBACK_URL:-}
+      MPESA_ENV: ${MPESA_ENV:-sandbox}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      MOOV_API_KEY: ${MOOV_API_KEY:-}
+      MOOV_API_SECRET: ${MOOV_API_SECRET:-}
+      MOOV_ACCOUNT_ID: ${MOOV_ACCOUNT_ID:-}
+      MOOV_WEBHOOK_SECRET: ${MOOV_WEBHOOK_SECRET:-}
+      MOOV_ENV: ${MOOV_ENV:-sandbox}
+      EVC_MERCHANT_CODE: ${EVC_MERCHANT_CODE:-}
+      EVC_MERCHANT_NAME: ${EVC_MERCHANT_NAME:-}
+      # Currency
+      OPEN_EXCHANGE_RATES_APP_ID: ${OPEN_EXCHANGE_RATES_APP_ID:-}
+      # Receipts
+      RECEIPT_BASE_URL: ${RECEIPT_BASE_URL:-}
+      # AI Insights
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes:
+      - api_logs:/app/logs
+    networks:
+      - backend_net
+      - db_net
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:5000/ready', r => process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
+        reservations:
+          memory: 256M
+
+  # ── Frontend ──────────────────────────────────────────────────────────────────
+  frontend:
+    # The Next.js app builds to a static export served by nginx.
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: production
+    restart: unless-stopped
+    networks:
+      - frontend_net
+    depends_on:
+      - api
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ── Nginx reverse proxy ───────────────────────────────────────────────────────
+  nginx:
+    image: nginx:1.25-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      BALANZIFY_DOMAIN: ${DOMAIN:-yourdomain.com}
+    volumes:
+      - ./infrastructure/nginx/nginx.conf:/etc/nginx/nginx.conf.template:ro
+      - nginx_certs:/etc/nginx/certs
+      - certbot_webroot:/var/www/certbot
+      - api_logs:/var/log/nginx
+    command: >
+      sh -c "envsubst '$$BALANZIFY_DOMAIN' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
+             && nginx -g 'daemon off;'"
+    networks:
+      - frontend_net
+      - backend_net
+    depends_on:
+      - api
+      - frontend
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+
+  # ── Certbot (SSL certificate provisioning and auto-renewal) ──────────────────
+  certbot:
+    image: certbot/certbot:latest
+    restart: unless-stopped
+    volumes:
+      - nginx_certs:/etc/letsencrypt
+      - certbot_webroot:/var/www/certbot
+    entrypoint: >
+      sh -c "trap exit TERM; while :; do
+        certbot renew --webroot --webroot-path=/var/www/certbot --quiet;
+        sleep 12h & wait $${!};
+      done"

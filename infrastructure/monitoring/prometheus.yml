@@ -1,0 +1,29 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    app: balanzify
+    env: production
+
+rule_files:
+  - alert_rules.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+
+scrape_configs:
+  - job_name: balanzify_api
+    static_configs:
+      - targets: ['api:5000']
+    metrics_path: /metrics
+    # Metrics endpoint is internal — no auth needed within Docker network
+
+  - job_name: postgres
+    static_configs:
+      - targets: ['postgres_exporter:9187']
+
+  - job_name: node
+    static_configs:
+      - targets: ['node_exporter:9100']

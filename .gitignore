@@ -1,0 +1,28 @@
+# dependencies
+node_modules/
+
+# Next.js build output
+.next/
+out/
+
+# logs
+*.log
+logs/
+backend/logs/
+
+# env / secrets  (keep *.example and .env.template)
+.env
+.env.local
+.env*.local
+.env.ec2
+
+# editor / OS
+.DS_Store
+.vscode/
+
+# certs / keys
+*.pem
+*.key
+
+# winston audit logs
+*-audit.json

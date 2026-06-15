@@ -1,0 +1,118 @@
+# EC2 deployment: external RDS + S3 + Let's Encrypt SSL
+# Usage:
+#   1. Point balanzify.ai A record → EC2 public IP
+#   2. ./scripts/deploy-ec2.sh
+#   3. ./scripts/setup-ssl-ec2.sh
+
+networks:
+  frontend_net:
+    driver: bridge
+  backend_net:
+    driver: bridge
+
+volumes:
+  api_logs:
+    driver: local
+  nginx_certs:
+    driver: local
+  certbot_webroot:
+    driver: local
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: >
+      redis-server
+        --maxmemory 256mb
+        --maxmemory-policy allkeys-lru
+        --save ""
+        --appendonly no
+    networks:
+      - backend_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: production
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      PORT: 5000
+      REDIS_URL: redis://redis:6379
+    volumes:
+      - api_logs:/app/logs
+    networks:
+      - backend_net
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:5000/ready', r => process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+
+  frontend:
+    # The Next.js app builds to a static export served by nginx.
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: production
+    restart: unless-stopped
+    networks:
+      - frontend_net
+    depends_on:
+      - api
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  nginx:
+    image: nginx:1.25-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      BALANZIFY_DOMAIN: ${DOMAIN:-pos.balanzify.ai}
+    volumes:
+      - ./infrastructure/nginx/nginx.conf:/etc/nginx/nginx.conf.template:ro
+      - ./infrastructure/nginx/nginx.http-only.conf:/etc/nginx/nginx.http-only.conf:ro
+      - ./infrastructure/nginx/nginx-entrypoint.sh:/docker-entrypoint.d/99-balanzify.sh:ro
+      - nginx_certs:/etc/nginx/certs
+      - certbot_webroot:/var/www/certbot
+    networks:
+      - frontend_net
+      - backend_net
+    depends_on:
+      - api
+      - frontend
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+
+  certbot:
+    image: certbot/certbot:latest
+    restart: unless-stopped
+    volumes:
+      - nginx_certs:/etc/letsencrypt
+      - certbot_webroot:/var/www/certbot
+    entrypoint: >
+      sh -c "trap exit TERM; while :; do
+        certbot renew --webroot --webroot-path=/var/www/certbot --quiet;
+        sleep 12h & wait $${!};
+      done"

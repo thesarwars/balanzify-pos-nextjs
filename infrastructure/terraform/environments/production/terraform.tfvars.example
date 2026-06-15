@@ -1,0 +1,30 @@
+# ============================================================
+# Balanzify AWS Production — Terraform Variables
+# Copy this file to terraform.tfvars and fill in your values.
+# NEVER commit terraform.tfvars to git.
+# ============================================================
+
+aws_region  = "us-east-1"
+environment = "production"
+
+# Your domain — must already exist as a Route53 hosted zone
+domain      = "app.balanzify.com"
+domain_zone = "balanzify.com"
+
+# Generate: openssl rand -hex 64
+jwt_secret = ""
+
+# Generate: openssl rand -hex 32
+db_password = ""
+
+# Infrastructure sizing — start small, scale up
+db_instance_class  = "db.t4g.medium"   # ~$50/mo — upgrade to db.r8g.large for high load
+redis_node_type    = "cache.t4g.micro" # ~$12/mo
+api_cpu            = 512               # 0.5 vCPU
+api_memory         = 1024              # 1 GB
+api_desired_count  = 2                 # minimum 2 for HA
+api_max_count      = 10
+frontend_desired_count = 2
+
+# SNS ARN for CloudWatch alerts (optional — create in AWS console first)
+alarm_sns_arn = ""
