@@ -184,7 +184,7 @@ function POS({ T, tweaks }: { T: any; tweaks: any }) {
   async function park(type: any) {
     if (!cart.length) return;
     try {
-      await API.heldSale.save({ type, customer_id: customer ? customer.id : null, customer_name: customer ? customer.name : 'Walk-in', cart, total });
+      await API.heldSale.save({ type, customer_id: customer ? customer.id : null, customer_name: customer ? customer.name : 'Walk-in', cart, total, shift_id: register ? register.id : undefined });
       refreshParked(); clear();
     } catch (e: any) { setPostErr(e.message); }
   }
