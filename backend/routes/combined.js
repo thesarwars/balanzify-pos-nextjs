@@ -132,8 +132,8 @@ stockRouter.post('/adjustments/:id/approve', auth, requireRole('owner', 'manager
 
     await prisma.$transaction(async (tx) => {
       await tx.$executeRaw`
-        INSERT INTO stock_levels (product_id, location_id, quantity)
-        VALUES (${adj.productId}::uuid, ${adj.locationId}::uuid, ${adj.quantity})
+        INSERT INTO stock_levels (id, product_id, location_id, quantity)
+        VALUES (gen_random_uuid(), ${adj.productId}::uuid, ${adj.locationId}::uuid, ${adj.quantity})
         ON CONFLICT (product_id, location_id) DO UPDATE
         SET quantity = GREATEST(0, stock_levels.quantity + ${adj.quantity}), updated_at = NOW()
       `;
@@ -309,10 +309,10 @@ stockRouter.put('/transfers/:id', auth, validate(TransferSchema), async (req, re
       // 5. Apply the updated item quantities into inventory locations
       for (const item of items) {
         await tx.$executeRaw`
-          INSERT INTO stock_levels (product_id, location_id, quantity) VALUES (${item.product_id}::uuid, ${from_location_id}::uuid, 0)
+          INSERT INTO stock_levels (id, product_id, location_id, quantity) VALUES (gen_random_uuid(), ${item.product_id}::uuid, ${from_location_id}::uuid, 0)
           ON CONFLICT (product_id, location_id) DO UPDATE SET quantity = GREATEST(0, stock_levels.quantity - ${item.qty}), updated_at = NOW()`;
         await tx.$executeRaw`
-          INSERT INTO stock_levels (product_id, location_id, quantity) VALUES (${item.product_id}::uuid, ${to_location_id}::uuid, ${item.qty})
+          INSERT INTO stock_levels (id, product_id, location_id, quantity) VALUES (gen_random_uuid(), ${item.product_id}::uuid, ${to_location_id}::uuid, ${item.qty})
           ON CONFLICT (product_id, location_id) DO UPDATE SET quantity = stock_levels.quantity + ${item.qty}, updated_at = NOW()`;
       }
 
