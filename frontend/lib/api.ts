@@ -2342,9 +2342,43 @@ const API: any = {
     },
   },
   heldSale: {
-    async list(type: any) { return (await transport('GET', '/connector/api/held-sale', { query: { type } })).data; },
-    async save(body: any) { return (await transport('POST', '/connector/api/held-sale', { body })).data; },
-    async remove(id: any) { return (await transport('DELETE', '/connector/api/held-sale/' + id)).data; },
+    async list(type: any) {
+      if (REAL_MODE) {
+        const res = await realReq('GET', '/sales/held');
+        return (res.held_sales || res.data || []).map((h: any) => {
+          // The backend HoldSale has no type/customer_id columns — we pack them
+          // into label as "type|customer_id" on save and unpack them here.
+          const [kind, cid] = String(h.label || 'suspended').split('|');
+          const cart = Array.isArray(h.items) ? h.items : [];
+          return {
+            id: h.id, type: kind || 'suspended', customer_id: cid || null,
+            customer_name: h.customerName || 'Walk-in',
+            ref: 'HELD-' + String(h.id).replace(/-/g, '').slice(0, 4).toUpperCase(),
+            item_count: cart.reduce((n: number, i: any) => n + Number(i.qty || i.quantity || 1), 0),
+            cart, total: Number(h.subtotal || 0),
+            created_at: h.createdAt ? String(h.createdAt).slice(0, 10) : '',
+          };
+        });
+      }
+      return (await transport('GET', '/connector/api/held-sale', { query: { type } })).data;
+    },
+    async save(body: any) {
+      if (REAL_MODE) {
+        const cart = (body.cart && body.cart.length) ? body.cart : (body.items || []);
+        return await realReq('POST', '/sales/held', { body: {
+          label: `${body.type || 'suspended'}|${isUuid(body.customer_id) ? body.customer_id : ''}`,
+          customer_name: body.customer_name || 'Walk-in',
+          items: cart.length ? cart : [{ note: 'empty' }],   // backend requires a non-empty array
+          subtotal: Number(body.total || 0),
+          shift_id: isUuid(body.shift_id) ? body.shift_id : undefined,
+        }});
+      }
+      return (await transport('POST', '/connector/api/held-sale', { body })).data;
+    },
+    async remove(id: any) {
+      if (REAL_MODE) return await realReq('DELETE', '/sales/held/' + id);
+      return (await transport('DELETE', '/connector/api/held-sale/' + id)).data;
+    },
   },
   transfer: {
     async list() { return (await transport('GET', '/connector/api/stock-transfer')).data; },
