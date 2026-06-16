@@ -12,7 +12,7 @@ const {
   ExpenseSchema, ExpenseCategorySchema,
   PaymentAccountSchema, AccountTransferSchema, AccountDepositSchema,
   CustomerGroupSchema, UnitSchema, BrandSchema, VariationTemplateSchema, DiscountSchema,
-  PriceGroupSchema,
+  PriceGroupSchema, InvoiceLayoutSchema, InvoiceSchemeSchema,
 } = require('../validation/schemas');
 const { trackLogin } = require('../lib/metrics');
 
@@ -1288,11 +1288,94 @@ priceGroupsRouter.delete('/:id', auth, requireRole('owner', 'manager'), async (r
   } catch (err) { next(err); }
 });
 
+// ── INVOICE LAYOUTS & SCHEMES ─────────────────────────────────────────────────
+const invoiceLayoutsRouter = express.Router();
+
+function mapInvoiceLayout(b) {
+  const m = {};
+  if (b.name                !== undefined) m.name = b.name;
+  if (b.design              !== undefined) m.design = b.design;
+  if (b.header_text         !== undefined) m.headerText = b.header_text;
+  if (b.footer_text         !== undefined) m.footerText = b.footer_text;
+  if (b.show_address        !== undefined) m.showAddress = b.show_address;
+  if (b.show_tax_summary    !== undefined) m.showTaxSummary = b.show_tax_summary;
+  if (b.show_total_in_words !== undefined) m.showTotalInWords = b.show_total_in_words;
+  if (b.show_discount       !== undefined) m.showDiscount = b.show_discount;
+  if (b.show_qr             !== undefined) m.showQr = b.show_qr;
+  if (b.show_letterhead     !== undefined) m.showLetterhead = b.show_letterhead;
+  if (b.hide_prices         !== undefined) m.hidePrices = b.hide_prices;
+  if (b.is_default          !== undefined) m.isDefault = b.is_default;
+  return m;
+}
+
+invoiceLayoutsRouter.get('/', auth, async (req, res, next) => {
+  try {
+    const layouts = await prisma.invoiceLayout.findMany({
+      where: { businessId: req.user.business_id },
+      orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
+    });
+    res.json({ layouts });
+  } catch (err) { next(err); }
+});
+invoiceLayoutsRouter.post('/', auth, requireRole('owner', 'manager'), validate(InvoiceLayoutSchema), async (req, res, next) => {
+  try {
+    const count = await prisma.invoiceLayout.count({ where: { businessId: req.user.business_id } });
+    const layout = await prisma.invoiceLayout.create({
+      data: { businessId: req.user.business_id, ...mapInvoiceLayout(req.body), ...(count === 0 && { isDefault: true }) },
+    });
+    res.status(201).json(layout);
+  } catch (err) { next(err); }
+});
+invoiceLayoutsRouter.put('/:id', auth, requireRole('owner', 'manager'), validate(InvoiceLayoutSchema.partial()), async (req, res, next) => {
+  try {
+    const existing = await prisma.invoiceLayout.findFirst({ where: { id: req.params.id, businessId: req.user.business_id } });
+    if (!existing) return res.status(404).json({ title: 'Not found', status: 404 });
+    if (req.body.is_default === true) {
+      await prisma.invoiceLayout.updateMany({ where: { businessId: req.user.business_id, isDefault: true, id: { not: req.params.id } }, data: { isDefault: false } });
+    }
+    const layout = await prisma.invoiceLayout.update({ where: { id: req.params.id }, data: mapInvoiceLayout(req.body) });
+    res.json(layout);
+  } catch (err) { next(err); }
+});
+invoiceLayoutsRouter.delete('/:id', auth, requireRole('owner', 'manager'), async (req, res, next) => {
+  try {
+    const l = await prisma.invoiceLayout.findFirst({ where: { id: req.params.id, businessId: req.user.business_id } });
+    if (!l) return res.status(404).json({ title: 'Not found', status: 404 });
+    if (l.isDefault) return res.status(422).json({ title: 'The default layout cannot be deleted.', status: 422 });
+    await prisma.invoiceLayout.delete({ where: { id: req.params.id } });
+    res.json({ message: 'Layout deleted.' });
+  } catch (err) { next(err); }
+});
+
+const invoiceSchemesRouter = express.Router();
+
+invoiceSchemesRouter.get('/', auth, async (req, res, next) => {
+  try {
+    const schemes = await prisma.invoiceScheme.findMany({ where: { businessId: req.user.business_id }, orderBy: { createdAt: 'asc' } });
+    res.json({ schemes });
+  } catch (err) { next(err); }
+});
+invoiceSchemesRouter.post('/', auth, requireRole('owner', 'manager'), validate(InvoiceSchemeSchema), async (req, res, next) => {
+  try {
+    const { name, prefix, start_number, total_digits } = req.body;
+    const scheme = await prisma.invoiceScheme.create({ data: { businessId: req.user.business_id, name, prefix: prefix || null, startNumber: start_number ?? 1, totalDigits: total_digits ?? 4 } });
+    res.status(201).json(scheme);
+  } catch (err) { next(err); }
+});
+invoiceSchemesRouter.delete('/:id', auth, requireRole('owner', 'manager'), async (req, res, next) => {
+  try {
+    const s = await prisma.invoiceScheme.findFirst({ where: { id: req.params.id, businessId: req.user.business_id } });
+    if (!s) return res.status(404).json({ title: 'Not found', status: 404 });
+    await prisma.invoiceScheme.delete({ where: { id: req.params.id } });
+    res.json({ message: 'Scheme deleted.' });
+  } catch (err) { next(err); }
+});
+
 module.exports = {
   suppliersRouter, stockRouter, tasksRouter, projectsRouter,
   reportsRouter, usersRouter, categoriesRouter, locationsRouter,
   customersRouter, settingsRouter, notificationsRouter,
   expensesRouter, expenseCategoriesRouter, paymentAccountsRouter,
   customerGroupsRouter, unitsRouter, brandsRouter, variationsRouter,
-  discountsRouter, priceGroupsRouter,
+  discountsRouter, priceGroupsRouter, invoiceLayoutsRouter, invoiceSchemesRouter,
 };

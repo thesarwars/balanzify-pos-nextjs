@@ -2138,6 +2138,30 @@ function toRealExpenseBody(f: any): any {
   };
 }
 
+// ── Invoice layouts (/api/v1/invoice-layouts) ─────────────────────────────────
+function adaptRealInvoiceLayout(l: any): any {
+  if (!l) return l;
+  return {
+    id: l.id, name: l.name, design: l.design || 'classic',
+    header_text: l.headerText || '', footer_text: l.footerText || '',
+    show_address: l.showAddress !== false,
+    show_tax_summary: l.showTaxSummary !== false,
+    show_total_in_words: !!l.showTotalInWords,
+    show_discount: l.showDiscount !== false,
+    show_qr: !!l.showQr,
+    show_letterhead: !!l.showLetterhead,
+    hide_prices: !!l.hidePrices,
+    is_default: !!l.isDefault,
+    _real: l,
+  };
+}
+const INVOICE_LAYOUT_KEYS = ['name', 'design', 'header_text', 'footer_text', 'show_address', 'show_tax_summary', 'show_total_in_words', 'show_discount', 'show_qr', 'show_letterhead', 'hide_prices', 'is_default'];
+function toRealInvoiceLayoutBody(f: any): any {
+  const b: any = {};
+  for (const k of INVOICE_LAYOUT_KEYS) if (f[k] !== undefined) b[k] = f[k];
+  return b;
+}
+
 // ── Discounts (/api/v1/discounts) ─────────────────────────────────────────────
 function adaptRealDiscount(d: any): any {
   if (!d) return d;
@@ -2732,14 +2756,38 @@ const API: any = {
     },
   },
   invoiceScheme: {
-    async list() { return (await transport('GET', '/connector/api/invoice-scheme')).data; },
-    async create(body: any) { return (await transport('POST', '/connector/api/invoice-scheme', { body })).data; },
+    async list() {
+      if (REAL_MODE) {
+        const res = await realReq('GET', '/invoice-schemes');
+        return ((res && (res.schemes || res.data)) || []).map((s: any) => ({ id: s.id, name: s.name, prefix: s.prefix || '', start_number: s.startNumber, total_digits: s.totalDigits }));
+      }
+      return (await transport('GET', '/connector/api/invoice-scheme')).data;
+    },
+    async create(body: any) {
+      if (REAL_MODE) return await realReq('POST', '/invoice-schemes', { body: { name: body.name, prefix: body.prefix || undefined, start_number: Number(body.start_number || 1), total_digits: Number(body.total_digits || 4) } });
+      return (await transport('POST', '/connector/api/invoice-scheme', { body })).data;
+    },
   },
   invoiceLayout: {
-    async list() { return (await transport('GET', '/connector/api/invoice-layout')).data; },
-    async create(body: any) { return (await transport('POST', '/connector/api/invoice-layout', { body })).data; },
-    async update(id: any, body: any) { return (await transport('PUT', '/connector/api/invoice-layout/' + id, { body })).data; },
-    async remove(id: any) { return (await transport('DELETE', '/connector/api/invoice-layout/' + id)).data; },
+    async list() {
+      if (REAL_MODE) {
+        const res = await realReq('GET', '/invoice-layouts');
+        return ((res && (res.layouts || res.data)) || []).map(adaptRealInvoiceLayout);
+      }
+      return (await transport('GET', '/connector/api/invoice-layout')).data;
+    },
+    async create(body: any) {
+      if (REAL_MODE) return adaptRealInvoiceLayout(await realReq('POST', '/invoice-layouts', { body: { name: body.name } }));
+      return (await transport('POST', '/connector/api/invoice-layout', { body })).data;
+    },
+    async update(id: any, body: any) {
+      if (REAL_MODE) return adaptRealInvoiceLayout(await realReq('PUT', '/invoice-layouts/' + id, { body: toRealInvoiceLayoutBody(body) }));
+      return (await transport('PUT', '/connector/api/invoice-layout/' + id, { body })).data;
+    },
+    async remove(id: any) {
+      if (REAL_MODE) return await realReq('DELETE', '/invoice-layouts/' + id);
+      return (await transport('DELETE', '/connector/api/invoice-layout/' + id)).data;
+    },
   },
   priceGroup: {
     async list() {
