@@ -340,6 +340,28 @@ const PriceGroupSchema = z.object({
   percent: z.coerce.number().min(-100).max(1000).default(0),
 });
 
+const InvoiceLayoutSchema = z.object({
+  name:                shortStr(255),
+  design:              z.enum(['classic', 'elegant', 'slim']).optional(),
+  header_text:         optStr(500),
+  footer_text:         optStr(500),
+  show_address:        z.coerce.boolean().optional(),
+  show_tax_summary:    z.coerce.boolean().optional(),
+  show_total_in_words: z.coerce.boolean().optional(),
+  show_discount:       z.coerce.boolean().optional(),
+  show_qr:             z.coerce.boolean().optional(),
+  show_letterhead:     z.coerce.boolean().optional(),
+  hide_prices:         z.coerce.boolean().optional(),
+  is_default:          z.coerce.boolean().optional(),
+});
+
+const InvoiceSchemeSchema = z.object({
+  name:         shortStr(255),
+  prefix:       optStr(20),
+  start_number: z.coerce.number().int().min(0).default(1),
+  total_digits: z.coerce.number().int().min(1).max(12).default(4),
+});
+
 const DiscountSchema = z.object({
   name:                  shortStr(255),
   type:                  z.enum(['percentage', 'fixed']).default('percentage'),
@@ -573,7 +595,7 @@ module.exports = {
   ExpenseSchema, ExpenseCategorySchema,
   PaymentAccountSchema, AccountTransferSchema, AccountDepositSchema,
   CustomerGroupSchema, UnitSchema, BrandSchema, VariationTemplateSchema, DiscountSchema,
-  PriceGroupSchema,
+  PriceGroupSchema, InvoiceLayoutSchema, InvoiceSchemeSchema,
   PaginationSchema, ProductVariantSchema,
   CouponSchema, ApplyCouponSchema, LoyaltyRuleSchema, PettyCashSchema,
   BundleSchema, ScheduledReportSchema, CustomerSegmentSchema,

@@ -308,6 +308,8 @@ model Business {
   variationTemplates VariationTemplate[]
   discounts          Discount[]
   priceGroups        PriceGroup[]
+  invoiceLayouts     InvoiceLayout[]
+  invoiceSchemes     InvoiceScheme[]
 
   // ── Module licensing: which products this business has enabled ──
   // Each module is sellable as a separate product (pos, inventory, hotel,
@@ -432,6 +434,42 @@ model CustomerGroup {
 
   @@unique([businessId, name])
   @@map("customer_groups")
+}
+
+model InvoiceLayout {
+  id               String   @id @default(uuid()) @db.Uuid
+  businessId       String   @map("business_id") @db.Uuid
+  name             String   @db.VarChar(255)
+  design           String   @default("classic") @db.VarChar(20)
+  headerText       String?  @map("header_text")
+  footerText       String?  @map("footer_text")
+  showAddress      Boolean  @default(true)  @map("show_address")
+  showTaxSummary   Boolean  @default(true)  @map("show_tax_summary")
+  showTotalInWords Boolean  @default(false) @map("show_total_in_words")
+  showDiscount     Boolean  @default(true)  @map("show_discount")
+  showQr           Boolean  @default(false) @map("show_qr")
+  showLetterhead   Boolean  @default(false) @map("show_letterhead")
+  hidePrices       Boolean  @default(false) @map("hide_prices")
+  isDefault        Boolean  @default(false) @map("is_default")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@map("invoice_layouts")
+}
+
+model InvoiceScheme {
+  id          String   @id @default(uuid()) @db.Uuid
+  businessId  String   @map("business_id") @db.Uuid
+  name        String   @db.VarChar(255)
+  prefix      String?  @db.VarChar(20)
+  startNumber Int      @default(1) @map("start_number")
+  totalDigits Int      @default(4) @map("total_digits")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@map("invoice_schemes")
 }
 
 model PriceGroup {
