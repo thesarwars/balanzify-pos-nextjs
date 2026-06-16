@@ -2133,6 +2133,25 @@ function toRealExpenseBody(f: any): any {
   };
 }
 
+// ── Payment accounts (/api/v1/payment-accounts) ───────────────────────────────
+function adaptRealPaymentAccount(a: any): any {
+  if (!a) return a;
+  return {
+    id: a.id, name: a.name, type: a.type || 'Cash',
+    account_number: a.accountNumber || '',
+    balance: Number(a.balance || 0),
+    _real: a,
+  };
+}
+function toRealPaymentAccountBody(f: any): any {
+  return {
+    name: f.name,
+    type: ['Cash', 'Bank', 'Mobile money', 'Other'].includes(f.type) ? f.type : 'Cash',
+    account_number: f.account_number || undefined,
+    balance: Number(f.balance || 0),
+  };
+}
+
 // ── Stock adjustments (/api/v1/stock/adjustments) ─────────────────────────────
 // The backend stores one row per product; the screen models a multi-line
 // adjustment. We surface each backend row as a single-line adjustment and split
@@ -2699,12 +2718,33 @@ const API: any = {
     },
   },
   paymentAccount: {
-    async list() { return (await transport('GET', '/connector/api/payment-account')).data; },
-    async types() { return (await transport('GET', '/connector/api/account-type')).data; },
-    async create(body: any) { return (await transport('POST', '/connector/api/payment-account', { body })).data; },
-    async remove(id: any) { return (await transport('DELETE', '/connector/api/payment-account/' + id)).data; },
-    async transfer(body: any) { return (await transport('POST', '/connector/api/payment-account/transfer', { body })).data; },
-    async deposit(id: any, amount: any) { return (await transport('POST', '/connector/api/payment-account/' + id + '/deposit', { body: { amount } })).data; },
+    async list() {
+      if (REAL_MODE) {
+        const res = await realReq('GET', '/payment-accounts');
+        return ((res && (res.accounts || res.data)) || []).map(adaptRealPaymentAccount);
+      }
+      return (await transport('GET', '/connector/api/payment-account')).data;
+    },
+    async types() {
+      if (REAL_MODE) return ['Cash', 'Bank', 'Mobile money', 'Other'];
+      return (await transport('GET', '/connector/api/account-type')).data;
+    },
+    async create(body: any) {
+      if (REAL_MODE) return adaptRealPaymentAccount(await realReq('POST', '/payment-accounts', { body: toRealPaymentAccountBody(body) }));
+      return (await transport('POST', '/connector/api/payment-account', { body })).data;
+    },
+    async remove(id: any) {
+      if (REAL_MODE) return await realReq('DELETE', '/payment-accounts/' + id);
+      return (await transport('DELETE', '/connector/api/payment-account/' + id)).data;
+    },
+    async transfer(body: any) {
+      if (REAL_MODE) return await realReq('POST', '/payment-accounts/transfer', { body: { from_id: body.from_id, to_id: body.to_id, amount: Number(body.amount) } });
+      return (await transport('POST', '/connector/api/payment-account/transfer', { body })).data;
+    },
+    async deposit(id: any, amount: any) {
+      if (REAL_MODE) return adaptRealPaymentAccount(await realReq('POST', '/payment-accounts/' + id + '/deposit', { body: { amount: Number(amount) } }));
+      return (await transport('POST', '/connector/api/payment-account/' + id + '/deposit', { body: { amount } })).data;
+    },
   },
   restaurant: {
     async tables() { return (await transport('GET', '/connector/api/restaurant/table')).data; },
