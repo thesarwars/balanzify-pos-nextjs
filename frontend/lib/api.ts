@@ -1996,6 +1996,8 @@ function adaptRealCustomer(c: any): any {
     credit_limit: Number(c.creditLimit || 0),
     due: Number(c.outstandingBalance || 0),
     total_sale: 0, total_purchase: 0, opening_balance: 0, advance_balance: 0,
+    customer_group_id: c.customerGroupId || '1',                       // '1' = Retail / no group
+    group_name: (c.customerGroup && c.customerGroup.name) || 'Retail',
     _real: c,
   };
 }
@@ -2006,6 +2008,7 @@ function toRealCustomerBody(f: any): any {
     email: f.email || undefined,
     address: f.address || undefined,
     credit_limit: f.credit_limit ? Number(f.credit_limit) : 0,
+    customer_group_id: isUuid(f.customer_group_id) ? f.customer_group_id : null,  // '1'/Retail → no group
   };
 }
 function adaptRealSupplier(s: any): any {
@@ -2554,9 +2557,21 @@ const API: any = {
     },
   },
   customerGroup: {
-    async list() { return (await transport('GET', '/connector/api/customer-group')).data; },
-    async create(body: any) { return (await transport('POST', '/connector/api/customer-group', { body })).data; },
-    async remove(id: any) { return (await transport('DELETE', '/connector/api/customer-group/' + id)).data; },
+    async list() {
+      if (REAL_MODE) {
+        const res = await realReq('GET', '/customer-groups');
+        return ((res && (res.groups || res.data)) || []).map((g: any) => ({ id: g.id, name: g.name, amount: Number(g.discountPct || 0), member_count: (g._count && g._count.customers) || 0 }));
+      }
+      return (await transport('GET', '/connector/api/customer-group')).data;
+    },
+    async create(body: any) {
+      if (REAL_MODE) return await realReq('POST', '/customer-groups', { body: { name: body.name, amount: Number(body.amount || 0) } });
+      return (await transport('POST', '/connector/api/customer-group', { body })).data;
+    },
+    async remove(id: any) {
+      if (REAL_MODE) return await realReq('DELETE', '/customer-groups/' + id);
+      return (await transport('DELETE', '/connector/api/customer-group/' + id)).data;
+    },
   },
   user: {
     async list() {

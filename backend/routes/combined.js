@@ -11,6 +11,7 @@ const {
   SettingsSchema, CategorySchema, LocationSchema, CustomerSchema,
   ExpenseSchema, ExpenseCategorySchema,
   PaymentAccountSchema, AccountTransferSchema, AccountDepositSchema,
+  CustomerGroupSchema,
 } = require('../validation/schemas');
 const { trackLogin } = require('../lib/metrics');
 
@@ -874,6 +875,7 @@ customersRouter.get('/', auth, async (req, res, next) => {
   try {
     const customers = await prisma.customer.findMany({
       where: { businessId: req.user.business_id, isActive: true },
+      include: { customerGroup: { select: { name: true, discountPct: true } } },
       orderBy: { name: 'asc' },
     });
     res.json({ customers });
@@ -882,14 +884,14 @@ customersRouter.get('/', auth, async (req, res, next) => {
 
 customersRouter.post('/', auth, validate(CustomerSchema), async (req, res, next) => {
   try {
-    const customer = await prisma.customer.create({ data: { businessId: req.user.business_id, name: req.body.name, phone: req.body.phone, whatsapp: req.body.whatsapp, email: req.body.email, address: req.body.address, creditLimit: req.body.credit_limit || 0, notes: req.body.notes } });
+    const customer = await prisma.customer.create({ data: { businessId: req.user.business_id, name: req.body.name, phone: req.body.phone, whatsapp: req.body.whatsapp, email: req.body.email, address: req.body.address, creditLimit: req.body.credit_limit || 0, customerGroupId: req.body.customer_group_id || null, notes: req.body.notes } });
     res.status(201).json(customer);
   } catch (err) { next(err); }
 });
 
 customersRouter.put('/:id', auth, validate(CustomerSchema.partial()), async (req, res, next) => {
   try {
-    const customer = await prisma.customer.update({ where: { id: req.params.id }, data: { name: req.body.name, phone: req.body.phone, whatsapp: req.body.whatsapp, email: req.body.email, address: req.body.address, creditLimit: req.body.credit_limit, notes: req.body.notes } });
+    const customer = await prisma.customer.update({ where: { id: req.params.id }, data: { name: req.body.name, phone: req.body.phone, whatsapp: req.body.whatsapp, email: req.body.email, address: req.body.address, creditLimit: req.body.credit_limit, customerGroupId: req.body.customer_group_id, notes: req.body.notes } });
     res.json(customer);
   } catch (err) { next(err); }
 });
@@ -1078,9 +1080,44 @@ paymentAccountsRouter.delete('/:id', auth, requireRole('owner', 'manager'), asyn
   } catch (err) { next(err); }
 });
 
+// ── CUSTOMER GROUPS ───────────────────────────────────────────────────────────
+const customerGroupsRouter = express.Router();
+
+customerGroupsRouter.get('/', auth, async (req, res, next) => {
+  try {
+    const groups = await prisma.customerGroup.findMany({
+      where: { businessId: req.user.business_id },
+      include: { _count: { select: { customers: true } } },
+      orderBy: { name: 'asc' },
+    });
+    res.json({ groups });
+  } catch (err) { next(err); }
+});
+
+customerGroupsRouter.post('/', auth, requireRole('owner', 'manager'), validate(CustomerGroupSchema), async (req, res, next) => {
+  try {
+    const group = await prisma.customerGroup.upsert({
+      where: { businessId_name: { businessId: req.user.business_id, name: req.body.name } },
+      create: { businessId: req.user.business_id, name: req.body.name, discountPct: req.body.amount || 0 },
+      update: { discountPct: req.body.amount || 0 },
+    });
+    res.status(201).json(group);
+  } catch (err) { next(err); }
+});
+
+customerGroupsRouter.delete('/:id', auth, requireRole('owner', 'manager'), async (req, res, next) => {
+  try {
+    const grp = await prisma.customerGroup.findFirst({ where: { id: req.params.id, businessId: req.user.business_id } });
+    if (!grp) return res.status(404).json({ title: 'Not found', status: 404 });
+    await prisma.customerGroup.delete({ where: { id: req.params.id } });  // FK sets customers.customer_group_id NULL
+    res.json({ message: 'Group removed.' });
+  } catch (err) { next(err); }
+});
+
 module.exports = {
   suppliersRouter, stockRouter, tasksRouter, projectsRouter,
   reportsRouter, usersRouter, categoriesRouter, locationsRouter,
   customersRouter, settingsRouter, notificationsRouter,
   expensesRouter, expenseCategoriesRouter, paymentAccountsRouter,
+  customerGroupsRouter,
 };

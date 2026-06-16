@@ -316,7 +316,13 @@ const CustomerSchema = z.object({
   email: email.optional().nullable(),
   address: optStr(500),
   credit_limit: money.default(0),
+  customer_group_id: uuid.optional().nullable(),
   notes: optStr(2000),
+});
+
+const CustomerGroupSchema = z.object({
+  name:   shortStr(255),
+  amount: z.coerce.number().min(-100).max(1000).default(0),  // pricing %: negative = discount
 });
 
 const ExpenseSchema = z.object({
@@ -531,6 +537,7 @@ module.exports = {
   SettingsSchema, CategorySchema, LocationSchema, CustomerSchema,
   ExpenseSchema, ExpenseCategorySchema,
   PaymentAccountSchema, AccountTransferSchema, AccountDepositSchema,
+  CustomerGroupSchema,
   PaginationSchema, ProductVariantSchema,
   CouponSchema, ApplyCouponSchema, LoyaltyRuleSchema, PettyCashSchema,
   BundleSchema, ScheduledReportSchema, CustomerSegmentSchema,
