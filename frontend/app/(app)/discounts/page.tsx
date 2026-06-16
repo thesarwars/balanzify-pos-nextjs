@@ -105,11 +105,13 @@ function DiscountEditor({ T, discount, brands, locs, cats, onClose, onSaved }: {
   const [busy, setBusy] = useStateDc(false);
   const [err, setErr] = useStateDc<any>(null);
   const set = (k: string, v: any) => setF((s: any) => ({ ...s, [k]: v }));
+  // Keep numeric ids numeric (mock) but pass uuid ids through unchanged (real backend).
+  const idv = (v: any) => /^\d+$/.test(String(v)) ? Number(v) : v;
 
   async function save() {
     if (!f.name.trim()) { setErr('Discount name is required.'); return; }
     setBusy(true); setErr(null);
-    const body = { ...f, brand_id: f.brand_id ? Number(f.brand_id) : null, location_id: f.location_id ? Number(f.location_id) : null, category: f.category || null, value: Number(f.value || 0), priority: Number(f.priority || 1) };
+    const body = { ...f, brand_id: f.brand_id ? idv(f.brand_id) : null, location_id: f.location_id ? idv(f.location_id) : null, category: f.category || null, value: Number(f.value || 0), priority: Number(f.priority || 1) };
     try { if (editing) await API.discount.update(discount.id, body); else await API.discount.create(body); onSaved(); }
     catch (ex: any) { setErr(ex.message || 'Could not save the discount.'); } finally { setBusy(false); }
   }
