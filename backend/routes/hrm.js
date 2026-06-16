@@ -6,7 +6,7 @@ const express = require('express');
 const prisma = require('../lib/prisma');
 const { auth, requireRole } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
-const { EmployeeSchema, OrgUnitSchema, HrmSettingsSchema, EmployeeShiftSchema } = require('../validation/schemas');
+const { EmployeeSchema, OrgUnitSchema, HrmSettingsSchema, EmployeeShiftSchema, AttendanceClockSchema } = require('../validation/schemas');
 
 const router = express.Router();
 
@@ -52,12 +52,13 @@ async function employeeSales(businessId, userId, pct) {
 router.get('/summary', auth, async (req, res, next) => {
   try {
     const businessId = req.user.business_id;
-    const [employees, onLeave] = await Promise.all([
+    const [employees, onLeave, present] = await Promise.all([
       prisma.employee.count({ where: { businessId } }),
       prisma.employee.count({ where: { businessId, status: 'on_leave' } }),
+      prisma.attendance.count({ where: { businessId, date: new Date(serverDate()), clockIn: { not: null } } }),
     ]);
-    // present / pending_leave / payroll / open_todos arrive in later HRM phases.
-    res.json({ employees, present: 0, on_leave: onLeave, pending_leave: 0, payroll: 0, open_todos: 0 });
+    // pending_leave / payroll / open_todos arrive in later HRM phases.
+    res.json({ employees, present, on_leave: onLeave, pending_leave: 0, payroll: 0, open_todos: 0 });
   } catch (err) { next(err); }
 });
 
@@ -231,6 +232,172 @@ router.put('/employee/:id/shift', auth, requireRole('owner', 'manager'), validat
       update: { ...(type && { type }), ...(start && { start }), ...(end && { end }) },
     });
     res.json({ employee_id: sh.employeeId, type: sh.type, start: sh.start, end: sh.end });
+  } catch (err) { next(err); }
+});
+
+// ── Attendance ──────────────────────────────────────────────────────────────────
+const hm2min = (hm) => { const [h, m] = String(hm || '0:0').split(':').map(Number); return (h || 0) * 60 + (m || 0); };
+const pad2 = (n) => String(n).padStart(2, '0');
+function serverNowHM() { const d = new Date(); return pad2(d.getHours()) + ':' + pad2(d.getMinutes()); }
+function serverDate() { const d = new Date(); return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; }
+const hoursLabel = (h) => h > 0 ? `${Math.floor(h)}h ${Math.round((h % 1) * 60)}m` : '—';
+
+function decorateAtt(rec, empName) {
+  const breaks = Array.isArray(rec.breaks) ? rec.breaks : [];
+  let breakMin = 0, onBreak = false, openStart = null;
+  for (const b of breaks) { if (b.end) breakMin += hm2min(b.end) - hm2min(b.start); else { onBreak = true; openStart = b.start; } }
+  let hours = 0, status = rec.status;
+  if (rec.clockIn && !rec.clockOut) {
+    const end = onBreak ? openStart : serverNowHM();
+    hours = Math.max(0, (hm2min(end) - hm2min(rec.clockIn) - breakMin) / 60);
+    status = onBreak ? 'on break' : 'running';
+  } else if (rec.clockIn && rec.clockOut) {
+    hours = Math.max(0, (hm2min(rec.clockOut) - hm2min(rec.clockIn) - breakMin) / 60);
+  }
+  return {
+    id: rec.id, employee_id: rec.employeeId, employee_name: empName,
+    date: rec.date.toISOString().slice(0, 10),
+    clock_in: rec.clockIn || '', clock_out: rec.clockOut || '',
+    status, on_break: onBreak, break_min: breakMin,
+    hours: +hours.toFixed(2), hours_label: hoursLabel(hours),
+  };
+}
+
+async function clockStatusFor(businessId, employeeId, at) {
+  const sh = await prisma.employeeShift.findUnique({ where: { employeeId } });
+  if (sh && sh.type === 'flexible') return 'present';
+  const s = await loadSettings(businessId);
+  return hm2min(at) > hm2min(s.workStart) + s.graceMinutes ? 'late' : 'present';
+}
+
+router.get('/attendance', auth, async (req, res, next) => {
+  try {
+    const rows = await prisma.attendance.findMany({
+      where: { businessId: req.user.business_id },
+      include: { employee: { select: { name: true } } },
+      orderBy: { date: 'desc' }, take: 300,
+    });
+    res.json(rows.map(r => decorateAtt(r, r.employee?.name || '—')));
+  } catch (err) { next(err); }
+});
+
+router.post('/attendance/clock', auth, validate(AttendanceClockSchema), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const emp = await prisma.employee.findFirst({ where: { id: req.body.employee_id, businessId }, select: { id: true, name: true } });
+    if (!emp) return res.status(404).json({ title: 'Employee not found', status: 404 });
+    const at = req.body.at || serverNowHM();
+    const date = new Date(req.body.date || serverDate());
+    const existing = await prisma.attendance.findUnique({ where: { employeeId_date: { employeeId: emp.id, date } } });
+    let rec;
+    if (!existing || (!existing.clockIn)) {
+      const status = await clockStatusFor(businessId, emp.id, at);
+      rec = existing
+        ? await prisma.attendance.update({ where: { id: existing.id }, data: { clockIn: at, status } })
+        : await prisma.attendance.create({ data: { businessId, employeeId: emp.id, date, clockIn: at, status } });
+    } else if (!existing.clockOut) {
+      rec = await prisma.attendance.update({ where: { id: existing.id }, data: { clockOut: at } });
+    } else {
+      rec = existing;
+    }
+    res.json(decorateAtt(rec, emp.name));
+  } catch (err) { next(err); }
+});
+
+router.post('/attendance/break', auth, validate(AttendanceClockSchema), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const emp = await prisma.employee.findFirst({ where: { id: req.body.employee_id, businessId }, select: { id: true, name: true } });
+    if (!emp) return res.status(404).json({ title: 'Employee not found', status: 404 });
+    const at = req.body.at || serverNowHM();
+    const date = new Date(req.body.date || serverDate());
+    const rec = await prisma.attendance.findUnique({ where: { employeeId_date: { employeeId: emp.id, date } } });
+    if (!rec || !rec.clockIn || rec.clockOut) return res.status(400).json({ title: 'Employee must be clocked in', status: 400 });
+    const breaks = Array.isArray(rec.breaks) ? rec.breaks : [];
+    const open = breaks.find(b => !b.end);
+    if (open) open.end = at; else breaks.push({ start: at, end: '' });
+    const updated = await prisma.attendance.update({ where: { id: rec.id }, data: { breaks } });
+    res.json(decorateAtt(updated, emp.name));
+  } catch (err) { next(err); }
+});
+
+router.post('/attendance/auto-absent', auth, requireRole('owner', 'manager'), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const date = new Date(req.body.date || serverDate());
+    const [emps, present, shifts] = await Promise.all([
+      prisma.employee.findMany({ where: { businessId, status: 'active' }, select: { id: true } }),
+      prisma.attendance.findMany({ where: { businessId, date }, select: { employeeId: true } }),
+      prisma.employeeShift.findMany({ where: { employee: { businessId } }, select: { employeeId: true, type: true } }),
+    ]);
+    const has = new Set(present.map(p => p.employeeId));
+    const flexible = new Set(shifts.filter(s => s.type === 'flexible').map(s => s.employeeId));
+    const toAdd = emps.filter(e => !has.has(e.id) && !flexible.has(e.id));
+    if (toAdd.length) {
+      await prisma.attendance.createMany({ data: toAdd.map(e => ({ businessId, employeeId: e.id, date, status: 'absent' })), skipDuplicates: true });
+    }
+    res.json({ added: toAdd.length });
+  } catch (err) { next(err); }
+});
+
+// ── Attendance summary (monthly metrics + pay derivation) ──
+async function buildSummary(emp, records, settings) {
+  const present = records.filter(r => r.status === 'present').length;
+  const late = records.filter(r => r.status === 'late').length;
+  const absent = records.filter(r => r.status === 'absent' || !r.clockIn).length;
+  const daysWorked = records.filter(r => r.clockIn).length;
+  const totalHours = records.reduce((s, r) => s + decorateAtt(r, '').hours, 0);
+  const std = parseFloat(settings.standardHours), wd = settings.workingDays || 26;
+  const otRate = parseFloat(settings.overtimeRate), lateDed = parseFloat(settings.lateDeduction);
+  const salary = parseFloat(emp.salary || 0);
+  const expected = std * daysWorked;
+  const overtime = Math.max(0, totalHours - expected);
+  const hourly = std > 0 && wd > 0 ? salary / (wd * std) : 0;
+  const absentDed = settings.absentDeduction === 'day' ? (wd > 0 ? salary / wd : 0) : parseFloat(settings.absentDeduction) || 0;
+  const lateDeduction = late * lateDed;
+  const absentDeduction = absent * absentDed;
+  return {
+    employee_id: emp.id, employee_name: emp.name, month: settings._month,
+    present, late, absent, days_worked: daysWorked,
+    total_hours: +totalHours.toFixed(2), expected_hours: +expected.toFixed(2),
+    overtime_hours: +overtime.toFixed(2), hourly_rate: +hourly.toFixed(2),
+    overtime_pay: +(overtime * hourly * otRate).toFixed(2),
+    late_deduction: +lateDeduction.toFixed(2), absent_deduction: +absentDeduction.toFixed(2),
+    total_deduction: +(lateDeduction + absentDeduction).toFixed(2),
+  };
+}
+function monthRange(month) {
+  const m = /^\d{4}-\d{2}$/.test(month || '') ? month : serverDate().slice(0, 7);
+  const start = new Date(m + '-01');
+  const end = new Date(start); end.setMonth(end.getMonth() + 1);
+  return { m, start, end };
+}
+
+router.get('/attendance-summary', auth, async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const { m, start, end } = monthRange(req.query.month);
+    const settings = await loadSettings(businessId); settings._month = m;
+    const [emps, records] = await Promise.all([
+      prisma.employee.findMany({ where: { businessId }, select: { id: true, name: true, salary: true } }),
+      prisma.attendance.findMany({ where: { businessId, date: { gte: start, lt: end } } }),
+    ]);
+    const byEmp = {};
+    records.forEach(r => { (byEmp[r.employeeId] ||= []).push(r); });
+    const out = await Promise.all(emps.map(e => buildSummary(e, byEmp[e.id] || [], settings)));
+    res.json(out);
+  } catch (err) { next(err); }
+});
+
+router.get('/attendance-summary/:empId', auth, async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const { m, start, end } = monthRange(req.query.month);
+    const emp = await prisma.employee.findFirst({ where: { id: req.params.empId, businessId }, select: { id: true, name: true, salary: true } });
+    if (!emp) return res.status(404).json({ title: 'Not found', status: 404 });
+    const settings = await loadSettings(businessId); settings._month = m;
+    const records = await prisma.attendance.findMany({ where: { businessId, employeeId: emp.id, date: { gte: start, lt: end } } });
+    res.json(await buildSummary(emp, records, settings));
   } catch (err) { next(err); }
 });
 

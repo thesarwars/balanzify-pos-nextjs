@@ -322,6 +322,11 @@ const EmployeeShiftSchema = z.object({
   start: hhmm.optional(),
   end:   hhmm.optional(),
 });
+const AttendanceClockSchema = z.object({
+  employee_id: uuid,
+  at:          hhmm.optional(),
+  date:        isoDate,
+});
 
 // ── Settings ──────────────────────────────────────────────────────────────────
 const SettingsSchema = z.object({
@@ -634,7 +639,7 @@ module.exports = {
   PaymentAccountSchema, AccountTransferSchema, AccountDepositSchema,
   CustomerGroupSchema, UnitSchema, BrandSchema, VariationTemplateSchema, DiscountSchema,
   PriceGroupSchema, InvoiceLayoutSchema, InvoiceSchemeSchema, CommissionSettingsSchema,
-  EmployeeSchema, OrgUnitSchema, HrmSettingsSchema, EmployeeShiftSchema,
+  EmployeeSchema, OrgUnitSchema, HrmSettingsSchema, EmployeeShiftSchema, AttendanceClockSchema,
   PaginationSchema, ProductVariantSchema,
   CouponSchema, ApplyCouponSchema, LoyaltyRuleSchema, PettyCashSchema,
   BundleSchema, ScheduledReportSchema, CustomerSegmentSchema,
