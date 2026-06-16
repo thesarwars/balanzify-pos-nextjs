@@ -130,6 +130,7 @@ try {
     customersRouter, settingsRouter, notificationsRouter,
     expensesRouter, expenseCategoriesRouter, paymentAccountsRouter,
     customerGroupsRouter, unitsRouter, brandsRouter, variationsRouter,
+    discountsRouter,
   } = require('./routes/combined');
 
   // Complete API v1 Routes Checklist with correct rate limiters mapped
@@ -188,6 +189,7 @@ try {
   app.use('/api/v1/units', apiLimiter, unitsRouter);
   app.use('/api/v1/brands', apiLimiter, brandsRouter);
   app.use('/api/v1/variations', apiLimiter, variationsRouter);
+  app.use('/api/v1/discounts', apiLimiter, discountsRouter);
 
 } catch (routeError) {
   console.error("❌ CRITICAL ERROR IMPORTING API ROUTES:");

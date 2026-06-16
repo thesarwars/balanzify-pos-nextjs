@@ -335,6 +335,21 @@ const UnitSchema = z.object({
 
 const BrandSchema = z.object({ name: shortStr(255) });
 
+const DiscountSchema = z.object({
+  name:                  shortStr(255),
+  type:                  z.enum(['percentage', 'fixed']).default('percentage'),
+  value:                 money.default(0),
+  priority:              z.coerce.number().int().min(0).default(1),
+  category:              optStr(100),
+  brand_id:              uuid.optional().nullable(),
+  location_id:           uuid.optional().nullable(),
+  starts_at:             isoDate,
+  ends_at:               isoDate,
+  apply_price_groups:    z.coerce.boolean().default(true),
+  apply_customer_groups: z.coerce.boolean().default(false),
+  is_active:             z.coerce.boolean().default(true),
+});
+
 const VariationTemplateSchema = z.object({
   name:   shortStr(100),
   values: z.array(z.string().trim().min(1).max(100)).default([]),
@@ -552,7 +567,7 @@ module.exports = {
   SettingsSchema, CategorySchema, LocationSchema, CustomerSchema,
   ExpenseSchema, ExpenseCategorySchema,
   PaymentAccountSchema, AccountTransferSchema, AccountDepositSchema,
-  CustomerGroupSchema, UnitSchema, BrandSchema, VariationTemplateSchema,
+  CustomerGroupSchema, UnitSchema, BrandSchema, VariationTemplateSchema, DiscountSchema,
   PaginationSchema, ProductVariantSchema,
   CouponSchema, ApplyCouponSchema, LoyaltyRuleSchema, PettyCashSchema,
   BundleSchema, ScheduledReportSchema, CustomerSegmentSchema,

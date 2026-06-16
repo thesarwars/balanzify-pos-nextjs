@@ -306,6 +306,7 @@ model Business {
   units              Unit[]
   brands             Brand[]
   variationTemplates VariationTemplate[]
+  discounts          Discount[]
 
   // ── Module licensing: which products this business has enabled ──
   // Each module is sellable as a separate product (pos, inventory, hotel,
@@ -373,11 +374,37 @@ model Brand {
   name       String    @db.VarChar(255)
   createdAt  DateTime  @default(now()) @map("created_at")
 
-  business Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  products Product[]
+  business  Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  products  Product[]
+  discounts Discount[]
 
   @@unique([businessId, name])
   @@map("brands")
+}
+
+model Discount {
+  id                  String    @id @default(uuid()) @db.Uuid
+  businessId          String    @map("business_id") @db.Uuid
+  name                String    @db.VarChar(255)
+  type                String    @default("percentage") @db.VarChar(20)
+  value               Decimal   @default(0) @db.Decimal(12, 2)
+  priority            Int       @default(1)
+  category            String?   @db.VarChar(100)
+  brandId             String?   @map("brand_id") @db.Uuid
+  locationId          String?   @map("location_id") @db.Uuid
+  startsAt            DateTime? @map("starts_at") @db.Date
+  endsAt              DateTime? @map("ends_at") @db.Date
+  applyPriceGroups    Boolean   @default(true) @map("apply_price_groups")
+  applyCustomerGroups Boolean   @default(false) @map("apply_customer_groups")
+  isActive            Boolean   @default(true) @map("is_active")
+  createdAt           DateTime  @default(now()) @map("created_at")
+
+  business Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  brand    Brand?    @relation(fields: [brandId], references: [id], onDelete: SetNull)
+  location Location? @relation(fields: [locationId], references: [id], onDelete: SetNull)
+
+  @@index([businessId])
+  @@map("discounts")
 }
 
 model VariationTemplate {
@@ -550,6 +577,7 @@ model Location {
   sales              Sale[]
   reorderSuggestions ReorderSuggestion[]
   expenses           Expense[]
+  discounts          Discount[]
   serialNumbers      SerialNumber[]
   costLayers         CostLayer[]
   pettyCash          PettyCash[]

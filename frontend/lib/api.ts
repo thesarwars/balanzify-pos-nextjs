@@ -2138,6 +2138,41 @@ function toRealExpenseBody(f: any): any {
   };
 }
 
+// ── Discounts (/api/v1/discounts) ─────────────────────────────────────────────
+function adaptRealDiscount(d: any): any {
+  if (!d) return d;
+  return {
+    id: d.id, name: d.name, type: d.type || 'percentage',
+    value: Number(d.value || 0), priority: d.priority || 1,
+    category: d.category || '',
+    category_name: (CATEGORIES.find((c: any) => c.id === d.category) || {}).name || d.category || '',
+    brand_id: d.brandId || '', brand_name: (d.brand && d.brand.name) || '',
+    location_id: d.locationId || '', location_name: (d.location && d.location.name) || 'All locations',
+    starts_at: d.startsAt ? String(d.startsAt).slice(0, 10) : '',
+    ends_at: d.endsAt ? String(d.endsAt).slice(0, 10) : '',
+    apply_price_groups: d.applyPriceGroups !== false,
+    apply_customer_groups: !!d.applyCustomerGroups,
+    is_active: d.isActive !== false,
+    _real: d,
+  };
+}
+function toRealDiscountBody(f: any): any {
+  const b: any = {};
+  if (f.name !== undefined) b.name = f.name;
+  if (f.type !== undefined) b.type = f.type;
+  if (f.value !== undefined) b.value = Number(f.value || 0);
+  if (f.priority !== undefined) b.priority = Number(f.priority || 1);
+  if (f.category !== undefined) b.category = f.category || null;
+  if (f.brand_id !== undefined) b.brand_id = isUuid(f.brand_id) ? f.brand_id : null;
+  if (f.location_id !== undefined) b.location_id = isUuid(f.location_id) ? f.location_id : null;
+  if (f.starts_at !== undefined) b.starts_at = f.starts_at || null;
+  if (f.ends_at !== undefined) b.ends_at = f.ends_at || null;
+  if (f.apply_price_groups !== undefined) b.apply_price_groups = f.apply_price_groups;
+  if (f.apply_customer_groups !== undefined) b.apply_customer_groups = f.apply_customer_groups;
+  if (f.is_active !== undefined) b.is_active = f.is_active;
+  return b;
+}
+
 // ── Payment accounts (/api/v1/payment-accounts) ───────────────────────────────
 function adaptRealPaymentAccount(a: any): any {
   if (!a) return a;
@@ -2713,10 +2748,25 @@ const API: any = {
   },
   paymentMethod: { async list() { return (await transport('GET', '/connector/api/payment-method')).data; } },
   discount: {
-    async list() { return (await transport('GET', '/connector/api/discount')).data; },
-    async create(body: any) { return (await transport('POST', '/connector/api/discount', { body })).data; },
-    async update(id: any, body: any) { return (await transport('PUT', '/connector/api/discount/' + id, { body })).data; },
-    async remove(id: any) { return (await transport('DELETE', '/connector/api/discount/' + id)).data; },
+    async list() {
+      if (REAL_MODE) {
+        const res = await realReq('GET', '/discounts');
+        return ((res && (res.discounts || res.data)) || []).map(adaptRealDiscount);
+      }
+      return (await transport('GET', '/connector/api/discount')).data;
+    },
+    async create(body: any) {
+      if (REAL_MODE) return adaptRealDiscount(await realReq('POST', '/discounts', { body: toRealDiscountBody(body) }));
+      return (await transport('POST', '/connector/api/discount', { body })).data;
+    },
+    async update(id: any, body: any) {
+      if (REAL_MODE) return adaptRealDiscount(await realReq('PUT', '/discounts/' + id, { body: toRealDiscountBody(body) }));
+      return (await transport('PUT', '/connector/api/discount/' + id, { body })).data;
+    },
+    async remove(id: any) {
+      if (REAL_MODE) return await realReq('DELETE', '/discounts/' + id);
+      return (await transport('DELETE', '/connector/api/discount/' + id)).data;
+    },
   },
   serviceType: {
     async list() { return (await transport('GET', '/connector/api/types-of-service')).data; },
