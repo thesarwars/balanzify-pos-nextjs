@@ -125,11 +125,15 @@ stockRouter.get('/adjustments', auth, async (req, res, next) => {
       where: {
         businessId: req.user.business_id,
       },
+      include: {
+        location: { select: { name: true } },
+        product: { select: { name: true, costPrice: true } },
+      },
       orderBy: {
         createdAt: 'desc', // Optional: Brings newest adjustments to the top
       },
     });
-    
+
     res.status(200).json(adjustments);
   } catch (error) { 
     next(error); 

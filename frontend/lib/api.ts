@@ -2102,6 +2102,30 @@ function toRealLocationBody(f: any): any {
   return body;
 }
 
+// ── Stock adjustments (/api/v1/stock/adjustments) ─────────────────────────────
+// The backend stores one row per product; the screen models a multi-line
+// adjustment. We surface each backend row as a single-line adjustment and split
+// the screen's lines into N create calls. Backend types map to normal/abnormal.
+const ABNORMAL_ADJ_TYPES = new Set(['theft', 'damage', 'write_off']);
+function adaptRealAdjustment(a: any): any {
+  if (!a) return a;
+  const q = Math.abs(Number(a.quantity || 0));
+  const cost = Number((a.product && a.product.costPrice) || 0);
+  return {
+    id: a.id,
+    ref: 'ADJ-' + String(a.id || '').replace(/-/g, '').slice(0, 6).toUpperCase(),
+    location_id: a.locationId, location_name: (a.location && a.location.name) || '—',
+    type: ABNORMAL_ADJ_TYPES.has(a.type) ? 'abnormal' : 'normal',
+    reason: a.reason || '',
+    item_count: q,
+    total_value: Number(a.totalValue || 0) || q * cost,
+    date: a.createdAt ? String(a.createdAt).slice(0, 10) : '',
+    status: a.status,
+    lines: [{ product_id: a.productId, product_name: (a.product && a.product.name) || '', qty: q }],
+    _real: a,
+  };
+}
+
 // ── Dashboard (/api/v1/reports/dashboard) → the DASH-shaped view-model ─────────
 function adaptRealDashboard(d: any): any {
   if (!d) return d;
@@ -2261,9 +2285,39 @@ const API: any = {
     async removeGroup(id: any) { return (await transport('DELETE', '/connector/api/tax-group/' + id)).data; },
   },
   stockAdjustment: {
-    async list() { return (await transport('GET', '/connector/api/stock-adjustment')).data; },
-    async create(body: any) { return (await transport('POST', '/connector/api/stock-adjustment', { body })).data; },
-    async remove(id: any) { return (await transport('DELETE', '/connector/api/stock-adjustment/' + id)).data; },
+    async list() {
+      if (REAL_MODE) {
+        const res = await realReq('GET', '/stock/adjustments');
+        return (Array.isArray(res) ? res : (res.adjustments || res.data || [])).map(adaptRealAdjustment);
+      }
+      return (await transport('GET', '/connector/api/stock-adjustment')).data;
+    },
+    async create(body: any) {
+      if (REAL_MODE) {
+        // One backend row per line; quantity is negative (stock reduction). Approve
+        // immediately so stock updates (matches the mock) — skipped silently if the
+        // user lacks the owner/manager role the approve step requires.
+        const beType = body.type === 'abnormal' ? 'damage' : 'loss';
+        let created = 0;
+        for (const l of (body.lines || [])) {
+          const adj = await realReq('POST', '/stock/adjustments', { body: {
+            product_id: l.product_id,
+            location_id: isUuid(body.location_id) ? body.location_id : undefined,
+            type: beType,
+            quantity: -Math.abs(Number(l.qty || 0)),
+            reason: body.reason || undefined,
+          }});
+          if (adj && adj.id) { try { await realReq('POST', '/stock/adjustments/' + adj.id + '/approve'); } catch (e) {} }
+          created++;
+        }
+        return { created };
+      }
+      return (await transport('POST', '/connector/api/stock-adjustment', { body })).data;
+    },
+    async remove(id: any) {
+      if (REAL_MODE) throw new ApiError(501, 'Adjustments can’t be deleted (audit trail).');
+      return (await transport('DELETE', '/connector/api/stock-adjustment/' + id)).data;
+    },
   },
 
   // /connector/api/sell
