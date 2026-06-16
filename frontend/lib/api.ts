@@ -1922,11 +1922,35 @@ function adaptRealTaxRate(t: any): any {
   };
 }
 
-// ── Modules: overlay the backend's enabled flags onto the local catalog so the
-//   modules screen keeps its icons/group/price while reflecting real state. ─────
+// ── Modules: drive the Plan & Modules screen off the backend catalog (source of
+//   truth for enabled/base/add-on), enriched with cosmetic icon/group/price. ────
+const MOD_COSMETIC: Record<string, any> = {
+  core:         { icon: '◆', group: 'Core' },
+  pos:          { icon: '⊞', group: 'Core' },
+  inventory:    { icon: '◫', group: 'Core' },
+  operations:   { icon: '◳', group: 'Operations' },
+  pharmacy:     { icon: '✚', group: 'Vertical', price: 15 },
+  hotel:        { icon: '⌂', group: 'Vertical', price: 25 },
+  restaurant:   { icon: '♨', group: 'Vertical', price: 19 },
+  wholesale:    { icon: '⊟', group: 'Vertical', price: 14 },
+  construction: { icon: '◭', group: 'Vertical', price: 22 },
+  credit:       { icon: '₵', group: 'Add-on', price: 9 },
+  insights:     { icon: '✦', group: 'Add-on', price: 12 },
+  hrm:          { icon: '⚇', group: 'Operations', price: 18 },
+  superadmin:   { icon: '⚿', group: 'Platform', price: 39 },
+};
 function adaptRealModules(catalog: any[]): any[] {
-  const on = new Set((catalog || []).filter((m: any) => m.enabled).map((m: any) => m.key));
-  return MODULES.map((m: any) => ({ ...m, enabled: on.has(m.key) }));
+  return (catalog || []).map((m: any) => {
+    const c = MOD_COSMETIC[m.key] || {};
+    return {
+      key: m.key, name: m.name, description: m.description || '',
+      enabled: !!m.enabled,
+      core: !!m.alwaysOn,            // always-on base (not toggleable)
+      addon: m.addon === true,       // opt-in add-on / vertical
+      requires: m.requires || [],
+      icon: c.icon || '▣', group: c.group || 'Add-on', price: c.price || 0,
+    };
+  });
 }
 
 // ── Purchase orders (/api/v1/purchase-orders) → UI view-model ──────────────────
