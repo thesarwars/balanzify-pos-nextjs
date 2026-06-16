@@ -2077,6 +2077,31 @@ function toRealUpdateUserBody(f: any): any {
   };
 }
 
+// ── Locations (/api/v1/locations) ──────────────────────────────────────────────
+// The backend stores only name/type(enum)/address/isActive; the screen's richer
+// fields (manager, city, payment methods, invoice scheme…) have no columns yet.
+const UI_TO_LOC_TYPE: Record<string, string> = { Retail: 'store', Kiosk: 'store', Warehouse: 'warehouse', Headquarters: 'branch', store: 'store', warehouse: 'warehouse', branch: 'branch' };
+const LOC_TYPE_TO_UI: Record<string, string> = { warehouse: 'Warehouse', store: 'Retail', branch: 'Headquarters' };
+function adaptRealLocation(l: any): any {
+  if (!l) return l;
+  return {
+    id: l.id, name: l.name,
+    type: LOC_TYPE_TO_UI[l.type] || l.type || 'Retail',
+    status: l.isActive === false ? 'inactive' : 'active',
+    landmark: l.address || '',
+    _real: l,
+  };
+}
+function toRealLocationBody(f: any): any {
+  const body: any = {
+    name: f.name,
+    type: UI_TO_LOC_TYPE[f.type] || 'store',
+    address: f.landmark || f.address || undefined,
+  };
+  if (f.is_active !== undefined) body.is_active = f.is_active;
+  return body;
+}
+
 // ═══════════════════════════════════════════════════════════════════
 //  PUBLIC API  —  what every screen imports.
 //  One method per endpoint; the name says which URL it hits.
@@ -2418,17 +2443,35 @@ const API: any = {
   },
   permissions: { async list() { if (REAL_MODE) return []; return (await transport('GET', '/connector/api/permission-list')).data; } },
   location: {
-    async list() {
+    async list(opts: any = {}) {
       if (REAL_MODE) {
-        const res = await realReq('GET', '/locations');
-        return (res.locations || res.data || []).map((l: any) => ({ id: l.id, name: l.name, type: l.type, status: l.isActive ? 'active' : 'inactive', ...l }));
+        // Management screen passes { all: true } to also see disabled locations;
+        // POS dropdowns omit it and get active-only.
+        const res = await realReq('GET', '/locations', { query: opts.all ? { all: 1 } : undefined });
+        return ((res && (res.locations || res.data)) || []).map(adaptRealLocation);
       }
       return (await transport('GET', '/connector/api/business-location')).data;
     },
-    async get(id: any) { return (await transport('GET', '/connector/api/business-location/' + id)).data[0]; },
-    async create(body: any) { return (await transport('POST', '/connector/api/business-location', { body })).data; },
-    async update(id: any, body: any) { return (await transport('PUT', '/connector/api/business-location/' + id, { body })).data; },
-    async setStatus(id: any, status: any) { return (await transport('PUT', '/connector/api/business-location/' + id + '/status', { body: { status } })).data; },
+    async get(id: any) {
+      if (REAL_MODE) {
+        const res = await realReq('GET', '/locations', { query: { all: 1 } });
+        const l = ((res && (res.locations || res.data)) || []).find((x: any) => x.id === id);
+        return l ? adaptRealLocation(l) : null;
+      }
+      return (await transport('GET', '/connector/api/business-location/' + id)).data[0];
+    },
+    async create(body: any) {
+      if (REAL_MODE) return adaptRealLocation(await realReq('POST', '/locations', { body: toRealLocationBody(body) }));
+      return (await transport('POST', '/connector/api/business-location', { body })).data;
+    },
+    async update(id: any, body: any) {
+      if (REAL_MODE) return adaptRealLocation(await realReq('PUT', '/locations/' + id, { body: toRealLocationBody(body) }));
+      return (await transport('PUT', '/connector/api/business-location/' + id, { body })).data;
+    },
+    async setStatus(id: any, status: any) {
+      if (REAL_MODE) return adaptRealLocation(await realReq('PUT', '/locations/' + id, { body: { is_active: status === 'active' } }));
+      return (await transport('PUT', '/connector/api/business-location/' + id + '/status', { body: { status } })).data;
+    },
   },
   invoiceScheme: {
     async list() { return (await transport('GET', '/connector/api/invoice-scheme')).data; },

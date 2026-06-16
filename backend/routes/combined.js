@@ -826,7 +826,12 @@ const locationsRouter = express.Router();
 
 locationsRouter.get('/', auth, async (req, res, next) => {
   try {
-    const locations = await prisma.location.findMany({ where: { businessId: req.user.business_id, isActive: true }, orderBy: { name: 'asc' } });
+    // `?all=1` includes disabled locations (management screen); default = active only.
+    const includeInactive = ['1', 'true'].includes(String(req.query.all));
+    const locations = await prisma.location.findMany({
+      where: { businessId: req.user.business_id, ...(includeInactive ? {} : { isActive: true }) },
+      orderBy: { name: 'asc' },
+    });
     res.json({ locations });
   } catch (err) { next(err); }
 });
@@ -835,6 +840,24 @@ locationsRouter.post('/', auth, requireRole('owner', 'manager'), validate(Locati
   try {
     const loc = await prisma.location.create({ data: { businessId: req.user.business_id, name: req.body.name, type: req.body.type || 'warehouse', address: req.body.address, isActive: req.body.is_active ?? true } });
     res.status(201).json(loc);
+  } catch (err) { next(err); }
+});
+
+locationsRouter.put('/:id', auth, requireRole('owner', 'manager'), validate(LocationSchema.partial()), async (req, res, next) => {
+  try {
+    const existing = await prisma.location.findFirst({ where: { id: req.params.id, businessId: req.user.business_id } });
+    if (!existing) return res.status(404).json({ title: 'Not found', status: 404 });
+    const { name, type, address, is_active } = req.body;
+    const loc = await prisma.location.update({
+      where: { id: req.params.id },
+      data: {
+        ...(name    !== undefined && { name }),
+        ...(type    !== undefined && { type }),
+        ...(address !== undefined && { address }),
+        ...(is_active !== undefined && { isActive: is_active }),
+      },
+    });
+    res.json(loc);
   } catch (err) { next(err); }
 });
 

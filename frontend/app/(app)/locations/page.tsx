@@ -43,7 +43,7 @@ function Locations({ T }: { T: any }) {
 
   const reload = React.useCallback(() => {
     setLoading(true);
-    API.location.list().then(setRows).catch(() => setRows([])).finally(() => setLoading(false));
+    API.location.list({ all: true }).then(setRows).catch(() => setRows([])).finally(() => setLoading(false));
   }, []);
   const loadRefs = React.useCallback(() => {
     Promise.all([API.invoiceScheme.list(), API.invoiceLayout.list(), API.priceGroup.list(), API.paymentMethod.list()])
