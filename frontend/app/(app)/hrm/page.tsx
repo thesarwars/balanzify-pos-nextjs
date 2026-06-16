@@ -514,6 +514,8 @@ function EmployeeModal({ T, meta, locs, onClose, onSaved }: { T: any; meta: any;
   const [f, setF] = useStateHr<any>({ name: '', email: '', department: meta.departments[0] || '', designation: meta.designations[0] || '', location_id: (locs[0] || {}).id || 1, salary: '', joined: new Date().toISOString().slice(0, 10) });
   const [busy, setBusy] = useStateHr(false); const [err, setErr] = useStateHr<any>(null);
   const set = (k: string, v: any) => setF((s: any) => ({ ...s, [k]: v }));
+  // Keep numeric ids numeric (mock) but pass uuid ids through unchanged (real backend).
+  const idv = (v: any) => /^\d+$/.test(String(v)) ? Number(v) : v;
   return (
     <Modal T={T} title="Add employee" width={600} onClose={onClose}
       footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Cancel</Btn><Btn T={T} kind="accent" onClick={async () => { if (!f.name.trim()) { setErr('Name is required.'); return; } setBusy(true); try { await API.hrm.addEmployee(f); onSaved(); } catch (e: any) { setErr(e.message); } finally { setBusy(false); } }} disabled={busy}>{busy ? 'Saving…' : 'Add employee'}</Btn></>}>
@@ -522,7 +524,7 @@ function EmployeeModal({ T, meta, locs, onClose, onSaved }: { T: any; meta: any;
         <Field T={T} label="Email" full><TextField T={T} type="email" value={f.email} onChange={v => set('email', v)} placeholder="name@business.so" /></Field>
         <Field T={T} label="Department"><SelectField T={T} value={f.department} options={meta.departments} onChange={v => set('department', v)} /></Field>
         <Field T={T} label="Designation"><SelectField T={T} value={f.designation} options={meta.designations} onChange={v => set('designation', v)} /></Field>
-        <Field T={T} label="Location"><SelectField T={T} value={String(f.location_id)} options={locs.map(l => String(l.id))} onChange={v => set('location_id', Number(v))} render={v => (locs.find(l => String(l.id) === v) || {}).name} /></Field>
+        <Field T={T} label="Location"><SelectField T={T} value={String(f.location_id)} options={locs.map(l => String(l.id))} onChange={v => set('location_id', idv(v))} render={v => (locs.find(l => String(l.id) === v) || {}).name} /></Field>
         <Field T={T} label="Monthly salary"><TextField T={T} type="number" value={f.salary} onChange={v => set('salary', v)} placeholder="0.00" /></Field>
         <Field T={T} label="Joined"><TextField T={T} type="date" value={f.joined} onChange={v => set('joined', v)} /></Field>
       </FormGrid>

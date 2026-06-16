@@ -310,6 +310,9 @@ model Business {
   priceGroups        PriceGroup[]
   invoiceLayouts     InvoiceLayout[]
   invoiceSchemes     InvoiceScheme[]
+  employees          Employee[]
+  orgUnits           OrgUnit[]
+  hrmSettings        HrmSettings?
 
   // ── Module licensing: which products this business has enabled ──
   // Each module is sellable as a separate product (pos, inventory, hotel,
@@ -439,6 +442,80 @@ model CustomerGroup {
   @@map("customer_groups")
 }
 
+// ── HRM ───────────────────────────────────────────────────────────────────────
+model Employee {
+  id                String    @id @default(uuid()) @db.Uuid
+  businessId        String    @map("business_id") @db.Uuid
+  name              String    @db.VarChar(255)
+  email             String?   @db.VarChar(255)
+  department        String?   @db.VarChar(100)
+  designation       String?   @db.VarChar(100)
+  locationId        String?   @map("location_id") @db.Uuid
+  salary            Decimal   @default(0) @db.Decimal(12, 2)
+  joinedAt          DateTime? @map("joined_at") @db.Date
+  status            String    @default("active") @db.VarChar(20)
+  userId            String?   @map("user_id") @db.Uuid
+  commissionPercent Decimal   @default(0) @map("commission_percent") @db.Decimal(6, 2)
+  createdAt         DateTime  @default(now()) @map("created_at")
+
+  business Business       @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  location Location?      @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  user     User?          @relation(fields: [userId], references: [id], onDelete: SetNull)
+  shift    EmployeeShift?
+
+  @@index([businessId])
+  @@map("employees")
+}
+
+model OrgUnit {
+  id         String   @id @default(uuid()) @db.Uuid
+  businessId String   @map("business_id") @db.Uuid
+  kind       String   @db.VarChar(20)
+  name       String   @db.VarChar(100)
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, kind, name])
+  @@map("org_units")
+}
+
+model HrmSettings {
+  id                     String  @id @default(uuid()) @db.Uuid
+  businessId             String  @unique @map("business_id") @db.Uuid
+  workStart              String  @default("08:00") @map("work_start") @db.VarChar(5)
+  graceMinutes           Int     @default(10) @map("grace_minutes")
+  standardHours          Decimal @default(8) @map("standard_hours") @db.Decimal(5, 2)
+  halfDayHours           Decimal @default(4) @map("half_day_hours") @db.Decimal(5, 2)
+  overtimeRate           Decimal @default(1.5) @map("overtime_rate") @db.Decimal(4, 2)
+  workingDays            Int     @default(26) @map("working_days")
+  lateDeduction          Decimal @default(2) @map("late_deduction") @db.Decimal(10, 2)
+  absentDeduction        String  @default("day") @map("absent_deduction") @db.VarChar(20)
+  showAttendance         Boolean @default(true)  @map("show_attendance")
+  showOvertime           Boolean @default(true)  @map("show_overtime")
+  showLeave              Boolean @default(true)  @map("show_leave")
+  showAdvance            Boolean @default(true)  @map("show_advance")
+  showBonus              Boolean @default(true)  @map("show_bonus")
+  showIncentive          Boolean @default(true)  @map("show_incentive")
+  showDeductionBreakdown Boolean @default(true)  @map("show_deduction_breakdown")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@map("hrm_settings")
+}
+
+model EmployeeShift {
+  id         String @id @default(uuid()) @db.Uuid
+  employeeId String @unique @map("employee_id") @db.Uuid
+  type       String @default("fixed") @db.VarChar(20)
+  start      String @default("08:00") @db.VarChar(5)
+  end        String @default("16:00") @db.VarChar(5)
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@map("employee_shifts")
+}
+
 model InvoiceLayout {
   id               String   @id @default(uuid()) @db.Uuid
   businessId       String   @map("business_id") @db.Uuid
@@ -546,6 +623,7 @@ model User {
   salesCashier             Sale[]
   refunds                  Refund[]
   expenses                 Expense[]
+  employeeRecords          Employee[]
   projectsOwned            Project[]               @relation("project_owner")
   projectsCreated          Project[]               @relation("project_creator")
   milestones               Milestone[]
@@ -635,6 +713,7 @@ model Location {
   reorderSuggestions ReorderSuggestion[]
   expenses           Expense[]
   discounts          Discount[]
+  employees          Employee[]
   serialNumbers      SerialNumber[]
   costLayers         CostLayer[]
   pettyCash          PettyCash[]

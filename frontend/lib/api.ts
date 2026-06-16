@@ -2932,54 +2932,98 @@ const API: any = {
     async setKitchen(id: any, status: any) { return (await transport('PUT', '/connector/api/restaurant/kitchen/' + id, { body: { status } })).data; },
   },
   hrm: {
-    async summary() { return (await transport('GET', '/connector/api/hrm/summary')).data; },
-    async employees() { return (await transport('GET', '/connector/api/hrm/employee')).data; },
-    async employee(id: any) { return (await transport('GET', '/connector/api/hrm/employee/' + id)).data; },
-    async meta() { return (await transport('GET', '/connector/api/hrm/meta')).data; },
-    async org() { return (await transport('GET', '/connector/api/hrm/org')).data; },
-    async addOrg(kind: any, name: any) { return (await transport('POST', '/connector/api/hrm/org', { body: { kind, name } })).data; },
-    async removeOrg(kind: any, name: any) { return (await transport('DELETE', '/connector/api/hrm/org', { query: { kind, name } })).data; },
-    async addEmployee(body: any) { return (await transport('POST', '/connector/api/hrm/employee', { body })).data; },
-    async removeEmployee(id: any) { return (await transport('DELETE', '/connector/api/hrm/employee/' + id)).data; },
-    async attendance() { return (await transport('GET', '/connector/api/hrm/attendance')).data; },
-    async clock(employee_id: any) { return (await transport('POST', '/connector/api/hrm/attendance/clock', { body: { employee_id } })).data; },
-    async breakToggle(employee_id: any) { return (await transport('POST', '/connector/api/hrm/attendance/break', { body: { employee_id } })).data; },
-    async autoAbsent() { return (await transport('POST', '/connector/api/hrm/attendance/auto-absent', { body: {} })).data; },
-    async settings() { return (await transport('GET', '/connector/api/hrm/settings')).data; },
-    async saveSettings(body: any) { return (await transport('PUT', '/connector/api/hrm/settings', { body })).data; },
-    async setEmpShift(id: any, body: any) { return (await transport('PUT', '/connector/api/hrm/employee/' + id + '/shift', { body })).data; },
-    async leaves() { return (await transport('GET', '/connector/api/hrm/leave')).data; },
-    async addLeave(body: any) { return (await transport('POST', '/connector/api/hrm/leave', { body })).data; },
-    async setLeave(id: any, status: any) { return (await transport('PUT', '/connector/api/hrm/leave/' + id, { body: { status } })).data; },
-    async leaveBalances() { return (await transport('GET', '/connector/api/hrm/leave-balance')).data; },
-    async empLeaveBalance(id: any) { return (await transport('GET', '/connector/api/hrm/leave-balance/' + id)).data; },
-    async leaveTypes() { return (await transport('GET', '/connector/api/hrm/leave-type')).data; },
-    async addLeaveType(body: any) { return (await transport('POST', '/connector/api/hrm/leave-type', { body })).data; },
-    async updateLeaveType(id: any, body: any) { return (await transport('PUT', '/connector/api/hrm/leave-type/' + id, { body })).data; },
-    async removeLeaveType(id: any) { return (await transport('DELETE', '/connector/api/hrm/leave-type/' + id)).data; },
-    async leaveOverride(empId: any) { return (await transport('GET', '/connector/api/hrm/leave-override/' + empId)).data; },
-    async setLeaveOverride(empId: any, overrides: any) { return (await transport('PUT', '/connector/api/hrm/leave-override/' + empId, { body: { overrides } })).data; },
-    async payroll() { return (await transport('GET', '/connector/api/hrm/payroll')).data; },
-    async attendanceSummary(month: any) { return (await transport('GET', '/connector/api/hrm/attendance-summary', { query: { month } })).data; },
-    async empSummary(id: any, month: any) { return (await transport('GET', '/connector/api/hrm/attendance-summary/' + id, { query: { month } })).data; },
-    async addPayroll(body: any) { return (await transport('POST', '/connector/api/hrm/payroll', { body })).data; },
-    async payslip(id: any) { return (await transport('GET', '/connector/api/hrm/payslip/' + id)).data; },
-    async payslipSettings() { return (await transport('GET', '/connector/api/hrm/payslip-settings')).data; },
-    async savePayslipSettings(body: any) { return (await transport('PUT', '/connector/api/hrm/payslip-settings', { body })).data; },
-    async todos() { return (await transport('GET', '/connector/api/hrm/todo')).data; },
-    async addTodo(body: any) { return (await transport('POST', '/connector/api/hrm/todo', { body })).data; },
-    async setTodo(id: any, status: any) { return (await transport('PUT', '/connector/api/hrm/todo/' + id, { body: { status } })).data; },
-    async shifts() { return (await transport('GET', '/connector/api/hrm/shift')).data; },
-    async addShift(body: any) { return (await transport('POST', '/connector/api/hrm/shift', { body })).data; },
-    async removeShift(id: any) { return (await transport('DELETE', '/connector/api/hrm/shift/' + id)).data; },
-    async shiftSwaps() { return (await transport('GET', '/connector/api/hrm/shift-swap')).data; },
-    async addSwap(body: any) { return (await transport('POST', '/connector/api/hrm/shift-swap', { body })).data; },
-    async setSwap(id: any, status: any) { return (await transport('PUT', '/connector/api/hrm/shift-swap/' + id, { body: { status } })).data; },
-    async removeSwap(id: any) { return (await transport('DELETE', '/connector/api/hrm/shift-swap/' + id)).data; },
-    async advances() { return (await transport('GET', '/connector/api/hrm/advance')).data; },
-    async outstandingAdvance(empId: any) { return (await transport('GET', '/connector/api/hrm/advance/outstanding/' + empId)).data.outstanding; },
-    async addAdvance(body: any) { return (await transport('POST', '/connector/api/hrm/advance', { body })).data; },
-    async removeAdvance(id: any) { return (await transport('DELETE', '/connector/api/hrm/advance/' + id)).data; },
+    // ── Phase 1: employees, org, settings, summary (wired to /api/v1/hrm) ──
+    async summary() {
+      if (REAL_MODE) return await realReq('GET', '/hrm/summary');
+      return (await transport('GET', '/connector/api/hrm/summary')).data;
+    },
+    async employees() {
+      if (REAL_MODE) return await realReq('GET', '/hrm/employee');
+      return (await transport('GET', '/connector/api/hrm/employee')).data;
+    },
+    async employee(id: any) {
+      if (REAL_MODE) return await realReq('GET', '/hrm/employee/' + id);
+      return (await transport('GET', '/connector/api/hrm/employee/' + id)).data;
+    },
+    async meta() {
+      if (REAL_MODE) return await realReq('GET', '/hrm/meta');
+      return (await transport('GET', '/connector/api/hrm/meta')).data;
+    },
+    async org() {
+      if (REAL_MODE) return await realReq('GET', '/hrm/org');
+      return (await transport('GET', '/connector/api/hrm/org')).data;
+    },
+    async addOrg(kind: any, name: any) {
+      if (REAL_MODE) return await realReq('POST', '/hrm/org', { body: { kind, name } });
+      return (await transport('POST', '/connector/api/hrm/org', { body: { kind, name } })).data;
+    },
+    async removeOrg(kind: any, name: any) {
+      if (REAL_MODE) return await realReq('DELETE', '/hrm/org', { query: { kind, name } });
+      return (await transport('DELETE', '/connector/api/hrm/org', { query: { kind, name } })).data;
+    },
+    async addEmployee(body: any) {
+      if (REAL_MODE) return await realReq('POST', '/hrm/employee', { body: {
+        name: body.name, email: body.email || undefined,
+        department: body.department || undefined, designation: body.designation || undefined,
+        location_id: isUuid(body.location_id) ? body.location_id : undefined,
+        salary: Number(body.salary || 0), joined: body.joined || undefined,
+      }});
+      return (await transport('POST', '/connector/api/hrm/employee', { body })).data;
+    },
+    async removeEmployee(id: any) {
+      if (REAL_MODE) return await realReq('DELETE', '/hrm/employee/' + id);
+      return (await transport('DELETE', '/connector/api/hrm/employee/' + id)).data;
+    },
+    async settings() {
+      if (REAL_MODE) return await realReq('GET', '/hrm/settings');
+      return (await transport('GET', '/connector/api/hrm/settings')).data;
+    },
+    async saveSettings(body: any) {
+      if (REAL_MODE) return await realReq('PUT', '/hrm/settings', { body });
+      return (await transport('PUT', '/connector/api/hrm/settings', { body })).data;
+    },
+    async setEmpShift(id: any, body: any) {
+      if (REAL_MODE) return await realReq('PUT', '/hrm/employee/' + id + '/shift', { body });
+      return (await transport('PUT', '/connector/api/hrm/employee/' + id + '/shift', { body })).data;
+    },
+    // ── Phases 2–5 (attendance, leave, payroll, shifts, advances, todos):
+    //    not wired yet — return empty in real mode so the tabs render cleanly. ──
+    async attendance() { if (REAL_MODE) return []; return (await transport('GET', '/connector/api/hrm/attendance')).data; },
+    async clock(employee_id: any) { if (REAL_MODE) throw new ApiError(501, 'Attendance is coming soon.'); return (await transport('POST', '/connector/api/hrm/attendance/clock', { body: { employee_id } })).data; },
+    async breakToggle(employee_id: any) { if (REAL_MODE) throw new ApiError(501, 'Attendance is coming soon.'); return (await transport('POST', '/connector/api/hrm/attendance/break', { body: { employee_id } })).data; },
+    async autoAbsent() { if (REAL_MODE) return { added: 0 }; return (await transport('POST', '/connector/api/hrm/attendance/auto-absent', { body: {} })).data; },
+    async leaves() { if (REAL_MODE) return []; return (await transport('GET', '/connector/api/hrm/leave')).data; },
+    async addLeave(body: any) { if (REAL_MODE) throw new ApiError(501, 'Leave is coming soon.'); return (await transport('POST', '/connector/api/hrm/leave', { body })).data; },
+    async setLeave(id: any, status: any) { if (REAL_MODE) throw new ApiError(501, 'Leave is coming soon.'); return (await transport('PUT', '/connector/api/hrm/leave/' + id, { body: { status } })).data; },
+    async leaveBalances() { if (REAL_MODE) return []; return (await transport('GET', '/connector/api/hrm/leave-balance')).data; },
+    async empLeaveBalance(id: any) { if (REAL_MODE) return []; return (await transport('GET', '/connector/api/hrm/leave-balance/' + id)).data; },
+    async leaveTypes() { if (REAL_MODE) return []; return (await transport('GET', '/connector/api/hrm/leave-type')).data; },
+    async addLeaveType(body: any) { if (REAL_MODE) throw new ApiError(501, 'Leave is coming soon.'); return (await transport('POST', '/connector/api/hrm/leave-type', { body })).data; },
+    async updateLeaveType(id: any, body: any) { if (REAL_MODE) throw new ApiError(501, 'Leave is coming soon.'); return (await transport('PUT', '/connector/api/hrm/leave-type/' + id, { body })).data; },
+    async removeLeaveType(id: any) { if (REAL_MODE) throw new ApiError(501, 'Leave is coming soon.'); return (await transport('DELETE', '/connector/api/hrm/leave-type/' + id)).data; },
+    async leaveOverride(empId: any) { if (REAL_MODE) return {}; return (await transport('GET', '/connector/api/hrm/leave-override/' + empId)).data; },
+    async setLeaveOverride(empId: any, overrides: any) { if (REAL_MODE) throw new ApiError(501, 'Leave is coming soon.'); return (await transport('PUT', '/connector/api/hrm/leave-override/' + empId, { body: { overrides } })).data; },
+    async payroll() { if (REAL_MODE) return []; return (await transport('GET', '/connector/api/hrm/payroll')).data; },
+    async attendanceSummary(month: any) { if (REAL_MODE) return []; return (await transport('GET', '/connector/api/hrm/attendance-summary', { query: { month } })).data; },
+    async empSummary(id: any, month: any) { if (REAL_MODE) return {}; return (await transport('GET', '/connector/api/hrm/attendance-summary/' + id, { query: { month } })).data; },
+    async addPayroll(body: any) { if (REAL_MODE) throw new ApiError(501, 'Payroll is coming soon.'); return (await transport('POST', '/connector/api/hrm/payroll', { body })).data; },
+    async payslip(id: any) { if (REAL_MODE) return {}; return (await transport('GET', '/connector/api/hrm/payslip/' + id)).data; },
+    async payslipSettings() { if (REAL_MODE) return {}; return (await transport('GET', '/connector/api/hrm/payslip-settings')).data; },
+    async savePayslipSettings(body: any) { if (REAL_MODE) throw new ApiError(501, 'Payroll is coming soon.'); return (await transport('PUT', '/connector/api/hrm/payslip-settings', { body })).data; },
+    async todos() { if (REAL_MODE) return []; return (await transport('GET', '/connector/api/hrm/todo')).data; },
+    async addTodo(body: any) { if (REAL_MODE) throw new ApiError(501, 'Tasks are coming soon.'); return (await transport('POST', '/connector/api/hrm/todo', { body })).data; },
+    async setTodo(id: any, status: any) { if (REAL_MODE) throw new ApiError(501, 'Tasks are coming soon.'); return (await transport('PUT', '/connector/api/hrm/todo/' + id, { body: { status } })).data; },
+    async shifts() { if (REAL_MODE) return []; return (await transport('GET', '/connector/api/hrm/shift')).data; },
+    async addShift(body: any) { if (REAL_MODE) throw new ApiError(501, 'Shifts are coming soon.'); return (await transport('POST', '/connector/api/hrm/shift', { body })).data; },
+    async removeShift(id: any) { if (REAL_MODE) throw new ApiError(501, 'Shifts are coming soon.'); return (await transport('DELETE', '/connector/api/hrm/shift/' + id)).data; },
+    async shiftSwaps() { if (REAL_MODE) return []; return (await transport('GET', '/connector/api/hrm/shift-swap')).data; },
+    async addSwap(body: any) { if (REAL_MODE) throw new ApiError(501, 'Shifts are coming soon.'); return (await transport('POST', '/connector/api/hrm/shift-swap', { body })).data; },
+    async setSwap(id: any, status: any) { if (REAL_MODE) throw new ApiError(501, 'Shifts are coming soon.'); return (await transport('PUT', '/connector/api/hrm/shift-swap/' + id, { body: { status } })).data; },
+    async removeSwap(id: any) { if (REAL_MODE) throw new ApiError(501, 'Shifts are coming soon.'); return (await transport('DELETE', '/connector/api/hrm/shift-swap/' + id)).data; },
+    async advances() { if (REAL_MODE) return []; return (await transport('GET', '/connector/api/hrm/advance')).data; },
+    async outstandingAdvance(empId: any) { if (REAL_MODE) return 0; return (await transport('GET', '/connector/api/hrm/advance/outstanding/' + empId)).data.outstanding; },
+    async addAdvance(body: any) { if (REAL_MODE) throw new ApiError(501, 'Advances are coming soon.'); return (await transport('POST', '/connector/api/hrm/advance', { body })).data; },
+    async removeAdvance(id: any) { if (REAL_MODE) throw new ApiError(501, 'Advances are coming soon.'); return (await transport('DELETE', '/connector/api/hrm/advance/' + id)).data; },
   },
   superadmin: {
     async stats() { return (await transport('GET', '/connector/api/superadmin/stats')).data; },

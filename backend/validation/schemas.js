@@ -294,6 +294,35 @@ const CommissionSettingsSchema = z.object({
   agent_type:       z.enum(['logged_in_user', 'select_from_users', 'select_from_agents']).optional(),
 });
 
+// ── HRM ─────────────────────────────────────────────────────────────────────
+const hhmm = z.string().regex(/^\d{2}:\d{2}$/, 'Use HH:MM');
+const EmployeeSchema = z.object({
+  name:               shortStr(255),
+  email:              optStr(255),
+  department:         optStr(100),
+  designation:        optStr(100),
+  location_id:        uuid.optional().nullable(),
+  salary:             money.default(0),
+  joined:             isoDate,
+  user_id:            uuid.optional().nullable(),
+  commission_percent: z.coerce.number().min(0).max(100).optional(),
+});
+const OrgUnitSchema = z.object({
+  kind: z.enum(['department', 'designation']),
+  name: shortStr(100),
+});
+const HrmSettingsSchema = z.object({
+  work_start:     hhmm.optional(),
+  grace_minutes:  z.coerce.number().int().min(0).max(120).optional(),
+  standard_hours: z.coerce.number().min(0).max(24).optional(),
+  half_day_hours: z.coerce.number().min(0).max(24).optional(),
+});
+const EmployeeShiftSchema = z.object({
+  type:  z.enum(['fixed', 'flexible']).default('fixed'),
+  start: hhmm.optional(),
+  end:   hhmm.optional(),
+});
+
 // ── Settings ──────────────────────────────────────────────────────────────────
 const SettingsSchema = z.object({
   name: shortStr(200),
@@ -605,6 +634,7 @@ module.exports = {
   PaymentAccountSchema, AccountTransferSchema, AccountDepositSchema,
   CustomerGroupSchema, UnitSchema, BrandSchema, VariationTemplateSchema, DiscountSchema,
   PriceGroupSchema, InvoiceLayoutSchema, InvoiceSchemeSchema, CommissionSettingsSchema,
+  EmployeeSchema, OrgUnitSchema, HrmSettingsSchema, EmployeeShiftSchema,
   PaginationSchema, ProductVariantSchema,
   CouponSchema, ApplyCouponSchema, LoyaltyRuleSchema, PettyCashSchema,
   BundleSchema, ScheduledReportSchema, CustomerSegmentSchema,
