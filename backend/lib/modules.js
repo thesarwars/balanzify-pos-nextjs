@@ -4,7 +4,8 @@
  * Each module is defined as a SEPARATELY SELLABLE PRODUCT with its own
  * identity, route prefixes, and dependency graph. A business licenses the
  * modules it needs (Business.enabledModules). An empty enabledModules array
- * means ALL modules are enabled (legacy / full-suite customers).
+ * means the base plan is on (core + pos + inventory + operations); add-on and
+ * vertical modules (default: false) stay off until explicitly enabled.
  *
  * This is the foundation for selling, e.g.:
  *   - "Balanzify POS"        (pos + inventory-lite)   to a small shop
@@ -47,6 +48,7 @@ const MODULES = {
 
   pharmacy: {
     key: 'pharmacy',
+    default: false,
     name: 'Balanzify Pharmacy',
     description: 'Pharmacy retail: drug catalog (generic name, strength, formulation), partial-pack/unit dispensing, expiry-loss prevention dashboard, fast-moving drug reorder.',
     standalone: true,                       // sold as its own product (bundles pos+inventory)
@@ -56,6 +58,7 @@ const MODULES = {
 
   hotel: {
     key: 'hotel',
+    default: false,
     name: 'Balanzify Hotel',
     description: 'Property management: rooms, reservations, group bookings, folios, night audit, housekeeping, occupancy & RevPAR reporting.',
     standalone: true,
@@ -65,6 +68,7 @@ const MODULES = {
 
   restaurant: {
     key: 'restaurant',
+    default: false,
     name: 'Balanzify Restaurant',
     description: 'Restaurant & café: tables, orders, kitchen display with station routing, modifiers, split bills, table reservations.',
     standalone: true,
@@ -74,6 +78,7 @@ const MODULES = {
 
   credit: {
     key: 'credit',
+    default: false,
     name: 'Balanzify Credit',
     description: 'Customer credit ledger, installment payment plans, WhatsApp statements & reminders, diaspora payment links.',
     standalone: false,                      // add-on: requires a selling module
@@ -83,6 +88,7 @@ const MODULES = {
 
   insights: {
     key: 'insights',
+    default: false,
     name: 'Balanzify Insights',
     description: 'AI business advisor: ask questions about your business in your own language, daily briefings.',
     standalone: false,
@@ -92,6 +98,7 @@ const MODULES = {
 
   wholesale: {
     key: 'wholesale',
+    default: false,
     name: 'Balanzify Wholesale',
     description: 'Distribution: B2B orders at wholesale prices, pick lists, driver dispatch, delivery tracking, collect-on-credit with outstanding balances per shop.',
     standalone: true,
@@ -101,6 +108,7 @@ const MODULES = {
 
   construction: {
     key: 'construction',
+    default: false,
     name: 'Balanzify Construction',
     description: 'Construction project management: job costing by category, daily labor log, site diary with photos for remote owners, milestone billing with retention, live budget-vs-actual.',
     standalone: true,
@@ -119,6 +127,7 @@ const MODULES = {
 
   hrm: {
     key: 'hrm',
+    default: false,
     name: 'HRM / Essentials',
     description: 'Staff management: employees, attendance, leave, shifts, advances, payroll & payslips.',
     standalone: false,
@@ -137,8 +146,8 @@ const MODULES = {
   },
 };
 
-/** Resolve the full set of enabled module keys for a business,
- *  expanding dependencies. Empty/null enabledModules = everything. */
+/** Resolve the full set of enabled module keys for a business, expanding
+ *  dependencies. Empty/null enabledModules = the base plan (default modules). */
 function resolveEnabled(enabledModules) {
   if (!enabledModules || enabledModules.length === 0) {
     // legacy: full suite — but opt-in modules (default: false) stay off
