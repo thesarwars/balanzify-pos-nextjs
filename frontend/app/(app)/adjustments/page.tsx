@@ -10,7 +10,6 @@ import { money, money0 } from '@/lib/theme';
 import { Btn, Badge, Panel, Modal, Field, TextField, SelectField, FormGrid, useToast } from '@/components/kit';
 import { Topbar, useTheme } from '@/components/shell';
 import { API } from '@/lib/api';
-import { PRODUCTS } from '@/lib/data';
 
 const { useState: useStateAj, useEffect: useEffectAj } = React;
 
@@ -87,7 +86,10 @@ function AdjustmentEditor({ T, locs, onClose, onSaved }: { T: Theme; locs: any[]
   const [lines, setLines] = useStateAj<any[]>([{ product_id: '', qty: '' }]);
   const [busy, setBusy] = useStateAj(false);
   const [err, setErr] = useStateAj<string | null>(null);
-  const products = PRODUCTS.filter((p: any) => p.type !== 'combo' && p.enable_stock !== false);
+  // Load the real catalog (works in mock + real mode) so adjustments carry valid product ids.
+  const [allProducts, setAllProducts] = useStateAj<any[]>([]);
+  useEffectAj(() => { API.product.list().then((r: any) => setAllProducts(r.items || r || [])).catch(() => {}); }, []);
+  const products = allProducts.filter((p: any) => p.type !== 'combo' && p.enable_stock !== false);
   const setLine = (i: number, k: string, v: any) => setLines((ls: any[]) => ls.map((l, j) => j === i ? { ...l, [k]: v } : l));
 
   async function save() {
