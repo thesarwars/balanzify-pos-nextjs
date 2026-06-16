@@ -1846,6 +1846,7 @@ function adaptRealProduct(p: any): any {
     name: p.name,
     sku: p.sku || '',
     cat: catName || (p.categoryId || ''),       // grouping key = category name (matches category.list ids)
+    brand_id: p.brandId || '',
     price: Number(p.sellingPrice ?? p.selling_price ?? 0),
     cost: Number(p.costPrice ?? p.cost_price ?? 0),
     stock: p.total_stock ?? (Array.isArray(p.stockLevels) ? p.stockLevels.reduce((s: number, sl: any) => s + (sl.quantity || 0), 0) : 0),
@@ -1866,6 +1867,7 @@ function toRealProductBody(vm: any): any {
     sku: vm.sku || undefined,
     barcode: vm.barcode || undefined,
     category_id: (vm.cat && REAL_CAT_BY_NAME[vm.cat]) || vm.category_id || undefined,
+    brand_id: isUuid(vm.brand_id) ? vm.brand_id : undefined,
     unit_of_measure: vm.unit || 'unit',
     cost_price: Number(vm.cost || 0),
     selling_price: Number(vm.price || 0),
@@ -2327,20 +2329,59 @@ const API: any = {
 
   // Catalog reference data
   unit: {
-    async list() { return (await transport('GET', '/connector/api/unit')).data; },
-    async create(body: any) { return (await transport('POST', '/connector/api/unit', { body })).data; },
-    async update(id: any, body: any) { return (await transport('PUT', '/connector/api/unit/' + id, { body })).data; },
-    async remove(id: any) { return (await transport('DELETE', '/connector/api/unit/' + id)).data; },
+    async list() {
+      if (REAL_MODE) {
+        const res = await realReq('GET', '/units');
+        return ((res && (res.units || res.data)) || []).map((u: any) => ({ id: u.id, actual_name: u.actualName, short_name: u.shortName, allow_decimal: u.allowDecimal ? 1 : 0 }));
+      }
+      return (await transport('GET', '/connector/api/unit')).data;
+    },
+    async create(body: any) {
+      if (REAL_MODE) return await realReq('POST', '/units', { body: { actual_name: body.actual_name, short_name: body.short_name, allow_decimal: !!body.allow_decimal } });
+      return (await transport('POST', '/connector/api/unit', { body })).data;
+    },
+    async update(id: any, body: any) {
+      if (REAL_MODE) return await realReq('PUT', '/units/' + id, { body: { actual_name: body.actual_name, short_name: body.short_name, allow_decimal: body.allow_decimal } });
+      return (await transport('PUT', '/connector/api/unit/' + id, { body })).data;
+    },
+    async remove(id: any) {
+      if (REAL_MODE) return await realReq('DELETE', '/units/' + id);
+      return (await transport('DELETE', '/connector/api/unit/' + id)).data;
+    },
   },
   brand: {
-    async list() { return (await transport('GET', '/connector/api/brand')).data; },
-    async create(body: any) { return (await transport('POST', '/connector/api/brand', { body })).data; },
-    async remove(id: any) { return (await transport('DELETE', '/connector/api/brand/' + id)).data; },
+    async list() {
+      if (REAL_MODE) {
+        const res = await realReq('GET', '/brands');
+        return ((res && (res.brands || res.data)) || []).map((b: any) => ({ id: b.id, name: b.name }));
+      }
+      return (await transport('GET', '/connector/api/brand')).data;
+    },
+    async create(body: any) {
+      if (REAL_MODE) return await realReq('POST', '/brands', { body: { name: body.name } });
+      return (await transport('POST', '/connector/api/brand', { body })).data;
+    },
+    async remove(id: any) {
+      if (REAL_MODE) return await realReq('DELETE', '/brands/' + id);
+      return (await transport('DELETE', '/connector/api/brand/' + id)).data;
+    },
   },
   variation: {
-    async list() { return (await transport('GET', '/connector/api/variation')).data; },
-    async create(body: any) { return (await transport('POST', '/connector/api/variation', { body })).data; },
-    async remove(id: any) { return (await transport('DELETE', '/connector/api/variation/' + id)).data; },
+    async list() {
+      if (REAL_MODE) {
+        const res = await realReq('GET', '/variations');
+        return ((res && (res.variations || res.data)) || []).map((v: any) => ({ id: v.id, name: v.name, values: (v.values || []).map((name: any, i: number) => ({ id: i + 1, name })) }));
+      }
+      return (await transport('GET', '/connector/api/variation')).data;
+    },
+    async create(body: any) {
+      if (REAL_MODE) return await realReq('POST', '/variations', { body: { name: body.name, values: body.values || [] } });
+      return (await transport('POST', '/connector/api/variation', { body })).data;
+    },
+    async remove(id: any) {
+      if (REAL_MODE) return await realReq('DELETE', '/variations/' + id);
+      return (await transport('DELETE', '/connector/api/variation/' + id)).data;
+    },
   },
   taxRate: {
     async list() {

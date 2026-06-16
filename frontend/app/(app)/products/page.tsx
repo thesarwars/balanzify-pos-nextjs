@@ -134,7 +134,7 @@ function Products({ T }: { T: any }) {
     const payload = {
       type: form.type, name: form.name.trim(), sku: form.sku.trim(), sku_prefix: form.sku_prefix,
       cat: form.cat, unit: form.unit, sw: form.sw, img: form.img,
-      brand_id: form.brand_id ? Number(form.brand_id) : null, tax_id: Number(form.tax_id) || 0,
+      brand_id: form.brand_id ? (/^\d+$/.test(String(form.brand_id)) ? Number(form.brand_id) : form.brand_id) : null, tax_id: Number(form.tax_id) || 0,
       alert_quantity: Number(form.alert_quantity || 0),
       enable_stock: form.type === 'combo' ? true : form.enable_stock, not_for_selling: form.not_for_selling,
       price: parseFloat(form.price || 0), cost: parseFloat(form.cost || 0), stock: parseInt(form.stock || 0),

@@ -101,6 +101,7 @@ router.post('/', auth, requireRole('owner', 'manager'), validate(ProductSchema),
           barcode: data.barcode || null,
           description: data.description || null,
           categoryId: data.category_id || null,
+          brandId: data.brand_id || null,
           unitOfMeasure: data.unit_of_measure || 'unit',
           costPrice: data.cost_price || 0,
           sellingPrice: data.selling_price || 0,
@@ -170,10 +171,10 @@ router.put('/:id', auth, requireRole('owner', 'manager'), validate(ProductSchema
       return res.status(404).json({ title: 'Not found', status: 404 });
     }
 
-    const { 
-      opening_stock, location_id, category_id, unit_of_measure, cost_price, selling_price,
+    const {
+      opening_stock, location_id, category_id, brand_id, unit_of_measure, cost_price, selling_price,
       wholesale_price, min_stock_level, max_stock_level, reorder_point, track_expiry,
-      allow_price_override, is_active, ...rest 
+      allow_price_override, is_active, ...rest
     } = req.body;
 
     const updated = await prisma.product.update({
@@ -181,6 +182,7 @@ router.put('/:id', auth, requireRole('owner', 'manager'), validate(ProductSchema
       data: {
         ...rest,
         ...(category_id !== undefined && { categoryId: category_id }),
+        ...(brand_id !== undefined && { brandId: brand_id }),
         ...(unit_of_measure && { unitOfMeasure: unit_of_measure }),
         ...(cost_price !== undefined && { costPrice: cost_price }),
         ...(selling_price !== undefined && { sellingPrice: selling_price }),
