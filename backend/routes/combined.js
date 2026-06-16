@@ -12,7 +12,7 @@ const {
   ExpenseSchema, ExpenseCategorySchema,
   PaymentAccountSchema, AccountTransferSchema, AccountDepositSchema,
   CustomerGroupSchema, UnitSchema, BrandSchema, VariationTemplateSchema, DiscountSchema,
-  PriceGroupSchema, InvoiceLayoutSchema, InvoiceSchemeSchema,
+  PriceGroupSchema, InvoiceLayoutSchema, InvoiceSchemeSchema, CommissionSettingsSchema,
 } = require('../validation/schemas');
 const { trackLogin } = require('../lib/metrics');
 
@@ -762,6 +762,99 @@ reportsRouter.get('/low-stock', auth, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// ── Commission report settings (calc method + agent source) ──
+reportsRouter.get('/commission/settings', auth, async (req, res, next) => {
+  try {
+    const biz = await prisma.business.findUnique({ where: { id: req.user.business_id }, select: { commissionCalc: true, commissionAgentType: true } });
+    res.json({ calculation_type: biz?.commissionCalc || 'invoice_value', agent_type: biz?.commissionAgentType || 'logged_in_user' });
+  } catch (err) { next(err); }
+});
+reportsRouter.put('/commission/settings', auth, requireRole('owner', 'manager'), validate(CommissionSettingsSchema), async (req, res, next) => {
+  try {
+    const { calculation_type, agent_type } = req.body;
+    const biz = await prisma.business.update({
+      where: { id: req.user.business_id },
+      data: { ...(calculation_type && { commissionCalc: calculation_type }), ...(agent_type && { commissionAgentType: agent_type }) },
+      select: { commissionCalc: true, commissionAgentType: true },
+    });
+    res.json({ calculation_type: biz.commissionCalc, agent_type: biz.commissionAgentType });
+  } catch (err) { next(err); }
+});
+
+// Per-rep sales + commission. `calc` = invoice_value | payment_received.
+reportsRouter.get('/commission/reps', auth, requireRole('owner', 'manager'), async (req, res, next) => {
+  try {
+    const payCalc = req.query.calc === 'payment_received';
+    const [users, agg] = await Promise.all([
+      prisma.user.findMany({ where: { businessId: req.user.business_id }, select: { id: true, name: true, role: true, commissionPercent: true } }),
+      prisma.sale.groupBy({
+        by: ['cashierId'],
+        where: { businessId: req.user.business_id, status: 'completed' },
+        _sum: { totalAmount: true, cashAmount: true, zaadAmount: true, cardAmount: true },
+        _count: { id: true },
+      }),
+    ]);
+    const byUser = Object.fromEntries(agg.map(a => [a.cashierId, a]));
+    const reps = users.map(u => {
+      const a = byUser[u.id];
+      const totalSale = parseFloat(a?._sum.totalAmount || 0);
+      const totalReceived = parseFloat(a?._sum.cashAmount || 0) + parseFloat(a?._sum.zaadAmount || 0) + parseFloat(a?._sum.cardAmount || 0);
+      const pct = parseFloat(u.commissionPercent || 0);
+      const base = payCalc ? totalReceived : totalSale;
+      return {
+        user_id: u.id, name: u.name, role_name: u.role.charAt(0).toUpperCase() + u.role.slice(1),
+        commission_percent: pct, total_sale: totalSale, total_received: totalReceived,
+        tx_count: a?._count.id || 0, commission: +(base * pct / 100).toFixed(2),
+      };
+    }).sort((x, y) => y.commission - x.commission);
+    res.json(reps);
+  } catch (err) { next(err); }
+});
+
+reportsRouter.get('/commission/reps/:id', auth, requireRole('owner', 'manager'), async (req, res, next) => {
+  try {
+    const user = await prisma.user.findFirst({ where: { id: req.params.id, businessId: req.user.business_id }, select: { name: true, commissionPercent: true } });
+    if (!user) return res.status(404).json({ title: 'Not found', status: 404 });
+    const sales = await prisma.sale.findMany({
+      where: { businessId: req.user.business_id, cashierId: req.params.id },
+      orderBy: { createdAt: 'desc' }, take: 100,
+      select: { id: true, saleNumber: true, status: true, totalAmount: true, cashAmount: true, zaadAmount: true, cardAmount: true },
+    });
+    res.json({
+      name: user.name, commission_percent: parseFloat(user.commissionPercent || 0),
+      transactions: sales.map(s => ({
+        id: s.saleNumber || s.id, status: s.status,
+        total: parseFloat(s.totalAmount || 0),
+        received: parseFloat(s.cashAmount || 0) + parseFloat(s.zaadAmount || 0) + parseFloat(s.cardAmount || 0),
+      })),
+    });
+  } catch (err) { next(err); }
+});
+
+// Cash-register sessions (shifts) report.
+reportsRouter.get('/registers', auth, requireRole('owner', 'manager'), async (req, res, next) => {
+  try {
+    const shifts = await prisma.shift.findMany({
+      where: { businessId: req.user.business_id },
+      include: { cashier: { select: { name: true } }, location: { select: { name: true } } },
+      orderBy: { openedAt: 'desc' }, take: 100,
+    });
+    res.json(shifts.map(s => ({
+      id: s.id,
+      user_name: s.cashier?.name || '—',
+      location_name: s.location?.name || '—',
+      opened_at: s.openedAt ? s.openedAt.toISOString().slice(0, 16).replace('T', ' ') : '',
+      closed_at: s.closedAt ? s.closedAt.toISOString().slice(0, 16).replace('T', ' ') : '',
+      opening_cash: parseFloat(s.openingFloat || 0),
+      total_sales: parseFloat(s.totalSales || 0),
+      expected_cash: parseFloat(s.expectedCash != null ? s.expectedCash : (parseFloat(s.openingFloat || 0) + parseFloat(s.totalCash || 0))),
+      refunds: 0,
+      status: s.status,
+      totals: { cash: parseFloat(s.totalCash || 0), zaad: parseFloat(s.totalZaad || 0), evc: 0, card: parseFloat(s.totalCard || 0), bank: 0 },
+    })));
+  } catch (err) { next(err); }
+});
+
 // ── USERS ─────────────────────────────────────────────────────────────────────
 const usersRouter = express.Router();
 
@@ -769,7 +862,7 @@ usersRouter.get('/', auth, requireRole('owner', 'manager'), async (req, res, nex
   try {
     const users = await prisma.user.findMany({
       where: { businessId: req.user.business_id },
-      select: { id: true, name: true, email: true, role: true, isActive: true, lastLogin: true, createdAt: true },
+      select: { id: true, name: true, email: true, role: true, isActive: true, lastLogin: true, createdAt: true, commissionPercent: true },
       orderBy: { name: 'asc' },
     });
     res.json({ users });
@@ -778,13 +871,13 @@ usersRouter.get('/', auth, requireRole('owner', 'manager'), async (req, res, nex
 
 usersRouter.post('/', auth, requireRole('owner'), validate(CreateUserSchema), async (req, res, next) => {
   try {
-    const { name, email, password, role, pin } = req.body;
+    const { name, email, password, role, pin, commission_percent } = req.body;
     const exists = await prisma.user.findUnique({ where: { email } });
     if (exists) return res.status(409).json({ title: 'Email already in use', status: 409 });
     const hashed = await bcrypt.hash(password, 12);
     const user = await prisma.user.create({
-      data: { businessId: req.user.business_id, name, email, password: hashed, role, pin: pin || null },
-      select: { id: true, name: true, email: true, role: true, isActive: true },
+      data: { businessId: req.user.business_id, name, email, password: hashed, role, pin: pin || null, commissionPercent: commission_percent ?? 0 },
+      select: { id: true, name: true, email: true, role: true, isActive: true, commissionPercent: true },
     });
     res.status(201).json(user);
   } catch (err) { next(err); }
@@ -794,8 +887,8 @@ usersRouter.put('/:id', auth, requireRole('owner'), validate(UpdateUserSchema), 
   try {
     const user = await prisma.user.update({
       where: { id: req.params.id },
-      data: { name: req.body.name, role: req.body.role, isActive: req.body.is_active, pin: req.body.pin || null },
-      select: { id: true, name: true, email: true, role: true, isActive: true },
+      data: { name: req.body.name, role: req.body.role, isActive: req.body.is_active, pin: req.body.pin || null, ...(req.body.commission_percent !== undefined && { commissionPercent: req.body.commission_percent }) },
+      select: { id: true, name: true, email: true, role: true, isActive: true, commissionPercent: true },
     });
     res.json(user);
   } catch (err) { next(err); }

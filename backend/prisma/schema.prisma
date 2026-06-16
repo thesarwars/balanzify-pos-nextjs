@@ -317,6 +317,9 @@ model Business {
   enabledModules String[] @default([]) @map("enabled_modules")
   // ── Market profile: drives currency, language, rails, compliance ──
   market         String   @default("somaliland") @db.VarChar(30)
+  // ── Commission report settings ──
+  commissionCalc      String @default("invoice_value") @map("commission_calc") @db.VarChar(30)
+  commissionAgentType String @default("logged_in_user") @map("commission_agent_type") @db.VarChar(30)
 
   @@map("businesses")
 }
@@ -509,6 +512,7 @@ model User {
   password          String    @db.VarChar(255)
   role              UserRole  @default(cashier)
   pin               String?   @db.VarChar(10)
+  commissionPercent Decimal   @default(0) @map("commission_percent") @db.Decimal(6, 2)
   isActive          Boolean   @default(true) @map("is_active")
   lastLogin         DateTime? @map("last_login")
   tokenVersion      Int       @default(0) @map("token_version")
