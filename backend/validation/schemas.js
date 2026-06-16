@@ -353,6 +353,33 @@ const LeaveStatusSchema = z.object({
 const LeaveOverrideSchema = z.object({
   overrides: z.record(z.coerce.number().int().min(0).nullable()),
 });
+const RosterShiftSchema = z.object({
+  employee_id: uuid,
+  location_id: uuid.optional().nullable(),
+  date:        isoDate,
+  start:       hhmm,
+  end:         hhmm,
+  role:        optStr(100),
+});
+const RosterSwapSchema = z.object({
+  shift_id: uuid,
+  to_id:    uuid,
+  reason:   optStr(500),
+});
+const HrAdvanceSchema = z.object({
+  employee_id: uuid,
+  amount:      money.refine(v => v > 0, 'Amount must be greater than 0'),
+  date:        isoDate,
+  account_id:  uuid.optional().nullable(),
+  note:        optStr(500),
+});
+const HrTodoSchema = z.object({
+  title:       shortStr(255),
+  assigned_to: uuid.optional().nullable(),
+  priority:    z.enum(['high', 'medium', 'low']).default('medium'),
+  due:         isoDate,
+});
+const StatusSchema = z.object({ status: z.string().trim().min(1).max(20) });
 
 // ── Settings ──────────────────────────────────────────────────────────────────
 const SettingsSchema = z.object({
@@ -667,6 +694,7 @@ module.exports = {
   PriceGroupSchema, InvoiceLayoutSchema, InvoiceSchemeSchema, CommissionSettingsSchema,
   EmployeeSchema, OrgUnitSchema, HrmSettingsSchema, EmployeeShiftSchema, AttendanceClockSchema,
   LeaveTypeSchema, LeaveTypeUpdateSchema, LeaveSchema, LeaveStatusSchema, LeaveOverrideSchema,
+  RosterShiftSchema, RosterSwapSchema, HrAdvanceSchema, HrTodoSchema, StatusSchema,
   PaginationSchema, ProductVariantSchema,
   CouponSchema, ApplyCouponSchema, LoyaltyRuleSchema, PettyCashSchema,
   BundleSchema, ScheduledReportSchema, CustomerSegmentSchema,
