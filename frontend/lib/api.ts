@@ -2126,6 +2126,25 @@ function adaptRealAdjustment(a: any): any {
   };
 }
 
+// ── Sale detail (/api/v1/sales/:id) → expose sell_lines for the returns modal ──
+// Carries sale_item_id + real product uuid so a refund can be posted per line.
+function adaptRealSaleDetail(s: any): any {
+  if (!s) return s;
+  const items = Array.isArray(s.items) ? s.items : [];
+  return {
+    ...s,
+    sell_lines: items.map((it: any) => ({
+      sale_item_id: it.id,
+      product_id_real: it.productId,
+      product_name: (it.product && it.product.name) || '',
+      product_id: 0,                 // numeric id is only meaningful in mock mode
+      quantity: Number(it.quantity || 0),
+      quantity_returned: 0,          // backend doesn't track per-line refunds
+      unit_price: Number(it.unitPrice || 0),
+    })),
+  };
+}
+
 // ── Dashboard (/api/v1/reports/dashboard) → the DASH-shaped view-model ─────────
 function adaptRealDashboard(d: any): any {
   if (!d) return d;
@@ -2333,7 +2352,7 @@ const API: any = {
     async get(id: any) {
       if (REAL_MODE) {
         const res = await realReq('GET', '/sales/' + id);
-        return (res && (res.sale || res.data)) || res;
+        return adaptRealSaleDetail((res && (res.sale || res.data)) || res);
       }
       const res = await transport('GET', '/connector/api/sell/' + numId(id));
       return res.data[0];
@@ -2394,13 +2413,28 @@ const API: any = {
     },
   },
 
-  // /connector/api/sell-return
+  // Sell returns → backend refund (/api/v1/sales/:id/refund)
   sellReturn: {
     async create(payload: any) {
+      if (REAL_MODE) {
+        const items = (payload.products || []).map((p: any) => ({
+          sale_item_id: p.sale_item_id,
+          product_id: p.product_id,
+          quantity: Number(p.quantity || 0),
+          unit_price: Number(p.unit_price || 0),
+          restock: p.restock !== false,
+        }));
+        return await realReq('POST', '/sales/' + payload.transaction_id + '/refund', { body: {
+          items, reason: payload.reason || 'Customer return',
+          refund_method: payload.refund_method || 'cash', restock: true,
+        }});
+      }
       const res = await transport('POST', '/connector/api/sell-return', { body: payload });
       return res.data;
     },
     async list(params: any = {}) {
+      // Refunds are nested under sales on the backend — no standalone list yet.
+      if (REAL_MODE) return { items: [], meta: null };
       const res = await transport('GET', '/connector/api/list-sell-return', { query: params });
       return { items: res.data, meta: res.meta };
     },
