@@ -116,6 +116,9 @@ try {
   const wholesaleRoutes = require('./routes/wholesale');
   const constructionRoutes = require('./routes/construction');
   const { requireModule } = require('./lib/moduleGate');
+  // requireModule needs req.user, so auth must run at the mount (before the
+  // router's own per-route auth) — otherwise the gate sees no user and bypasses.
+  const { auth: gateAuth } = require('./middleware/auth');
   const creditRoutes     = require('./routes/credit');
   const uploadRoutes = require('./routes/uploads');
   const stocktakeRoutes = require('./routes/stocktake');
@@ -144,16 +147,16 @@ try {
   app.use('/api/v1/payments', apiLimiter, paymentRoutes);
   app.use('/api/v1/tax',      apiLimiter, taxRoutes);
   app.use('/api/v1/webhooks', apiLimiter, webhookRoutes);
-  app.use('/api/v1/hotel',      apiLimiter, requireModule('hotel'), hotelRoutes);
-  app.use('/api/v1/hrm',        apiLimiter, requireModule('hrm'), hrmRoutes);
-  app.use('/api/v1/restaurant', apiLimiter, requireModule('restaurant'), restaurantRoutes);
-  app.use('/api/v1/pharmacy',   apiLimiter, requireModule('pharmacy'), pharmacyRoutes);
+  app.use('/api/v1/hotel',      apiLimiter, gateAuth, requireModule('hotel'), hotelRoutes);
+  app.use('/api/v1/hrm',        apiLimiter, gateAuth, requireModule('hrm'), hrmRoutes);
+  app.use('/api/v1/restaurant', apiLimiter, gateAuth, requireModule('restaurant'), restaurantRoutes);
+  app.use('/api/v1/pharmacy',   apiLimiter, gateAuth, requireModule('pharmacy'), pharmacyRoutes);
   app.use('/api/v1/modules',    apiLimiter, modulesRoutes);
-  app.use('/api/v1/wholesale',  apiLimiter, requireModule('wholesale'), wholesaleRoutes);
-  app.use('/api/v1/construction', apiLimiter, requireModule('construction'), constructionRoutes);
+  app.use('/api/v1/wholesale',  apiLimiter, gateAuth, requireModule('wholesale'), wholesaleRoutes);
+  app.use('/api/v1/construction', apiLimiter, gateAuth, requireModule('construction'), constructionRoutes);
   app.use('/api/v1/checkout',   apiLimiter, checkoutRoutes);
-  app.use('/api/v1/insights',   apiLimiter, requireModule('insights'), insightsRoutes);
-  app.use('/api/v1/credit',     apiLimiter, requireModule('credit'), creditRoutes);
+  app.use('/api/v1/insights',   apiLimiter, gateAuth, requireModule('insights'), insightsRoutes);
+  app.use('/api/v1/credit',     apiLimiter, gateAuth, requireModule('credit'), creditRoutes);
   
   // Public diaspora payment pages — no auth, token is unguessable
   app.use('/pay', creditRoutes);
