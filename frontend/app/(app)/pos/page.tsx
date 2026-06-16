@@ -68,7 +68,8 @@ function POS({ T, tweaks }: { T: any; tweaks: any }) {
   const [register, setRegister] = useStateP<any>(null);  // open cash register (or null)
   const [regModal, setRegModal] = useStateP<any>(null);  // 'open' | 'details' | 'close'
   const [priceGroups, setPriceGroups] = useStateP<any[]>([]);
-  const [priceGroupId, setPriceGroupId] = useStateP(0);
+  const [priceGroupId, setPriceGroupId] = useStateP<any>(0);
+  const [discounts, setDiscounts] = useStateP<any[]>([]);
   const [serviceTypes, setServiceTypes] = useStateP<any[]>([]);
   const [serviceTypeId, setServiceTypeId] = useStateP<any>('');
   const [payMode, setPayMode] = useStateP('quick'); // 'quick' | 'split'
@@ -87,6 +88,7 @@ function POS({ T, tweaks }: { T: any; tweaks: any }) {
     API.priceGroup.list().then(setPriceGroups).catch(() => {});
     API.heldSale.list().then(setParked).catch(() => {});
     API.serviceType.list().then(setServiceTypes).catch(() => {});
+    API.discount.list().then(setDiscounts).catch(() => {});
     if (API.config?.isReal?.()) {
       API.product.list().then((r: any) => setProds(r.items || [])).catch(() => {});
       API.category.list().then((cs: any) => setCats([{ id: 'all', name: 'All Items' }, ...(cs || [])])).catch(() => {});
@@ -130,11 +132,30 @@ function POS({ T, tweaks }: { T: any; tweaks: any }) {
 
   const lines = cart.map((c: any) => {
     const p: any = prods.find((p: any) => p.id === c.id) || {};
-    return { key: c.key, id: c.id, varName: c.varName, name: p.name + (c.varName ? ` · ${c.varName}` : ''), sw: p.sw, img: p.img, unit: p.unit, type: p.type, price: priceOf(p, c.varName), stock: stockOf(p, c.varName), qty: c.qty };
+    return { key: c.key, id: c.id, varName: c.varName, name: p.name + (c.varName ? ` · ${c.varName}` : ''), sw: p.sw, img: p.img, unit: p.unit, type: p.type, price: priceOf(p, c.varName), stock: stockOf(p, c.varName), qty: c.qty, brand_id: p.brand_id, cat: p.cat };
   });
   const subtotal = lines.reduce((s: number, l: any) => s + l.price * l.qty, 0);
   const taxRate = 0.05;
   const tax = subtotal * taxRate;
+
+  // ── Auto-apply matching discount rules (by brand / category / location, in
+  //    date window, highest priority wins per line). Zero impact if no rules. ──
+  const locId = (register && register.location_id) || null;
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const ruleMatches = (r: any, l: any) =>
+    r.is_active && (!r.starts_at || r.starts_at <= todayStr) && (!r.ends_at || r.ends_at >= todayStr)
+    && (!r.brand_id || String(r.brand_id) === String(l.brand_id))
+    && (!r.category || String(r.category) === String(l.cat))
+    && (!r.location_id || String(r.location_id) === String(locId));
+  let autoDiscountName: string | null = null;
+  const autoDiscount = +lines.reduce((sum: number, l: any) => {
+    const lineTotal = l.price * l.qty;
+    const best = discounts.filter((r: any) => ruleMatches(r, l)).sort((a: any, b: any) => (b.priority || 0) - (a.priority || 0))[0];
+    if (!best) return sum;
+    if (!autoDiscountName) autoDiscountName = best.name;
+    const d = best.type === 'percentage' ? lineTotal * (Number(best.value) || 0) / 100 : Math.min(Number(best.value) || 0, lineTotal);
+    return sum + d;
+  }, 0).toFixed(2);
 
   // reward points — earn preview + optional redeem against this sale
   const rw = reward && reward.enabled ? reward : null;
@@ -143,7 +164,7 @@ function POS({ T, tweaks }: { T: any; tweaks: any }) {
   const redeemPts = canRedeem && redeem ? Math.min(custPoints, rw.max_redeem_point) : 0;
   const redeemDiscount = Math.min(subtotal, +(redeemPts * (rw ? rw.redeem_amount_per_point : 0)).toFixed(2));
   const pointsEarned = rw && subtotal >= rw.min_order_total_earn ? Math.min(rw.max_points_per_order || Infinity, Math.floor(subtotal / rw.amount_per_unit_point)) : 0;
-  const discount = redeemDiscount;
+  const discount = +(redeemDiscount + autoDiscount).toFixed(2);
   const svcType = serviceTypes.find((s: any) => String(s.id) === String(serviceTypeId)) || null;
   const packing = svcType ? (svcType.packing_charge_type === 'percentage' ? Math.round(subtotal * svcType.packing_charge) / 100 : svcType.packing_charge) : 0;
   const total = subtotal + tax - discount + packing;
@@ -422,6 +443,11 @@ function POS({ T, tweaks }: { T: any; tweaks: any }) {
           <span>Points redeemed ({redeemPts})</span><span style={{ fontFamily: T.fMono }}>−{money(redeemDiscount)}</span>
         </div>
       )}
+      {autoDiscount > 0 && (
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, color: T.green, marginBottom: 6 }}>
+          <span>Discount{autoDiscountName ? ` (${autoDiscountName})` : ''}</span><span style={{ fontFamily: T.fMono }}>−{money(autoDiscount)}</span>
+        </div>
+      )}
       {packing > 0 && (
         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, color: D.sub, marginBottom: 6 }}>
           <span>Packing ({svcType.name})</span><span style={{ fontFamily: T.fMono, color: D.ink }}>{money(packing)}</span>
@@ -469,7 +495,7 @@ function POS({ T, tweaks }: { T: any; tweaks: any }) {
           {!isMobile && <button onClick={() => setParkedOpen(true)} style={{ ...pillBtn(D, T), border: parked.length ? `1px solid ${T.accent.base}` : pillBtn(D, T).border, color: parked.length ? T.accent.text : D.chipText }}>⏸ Parked <b style={{ fontFamily: T.fMono }}>{parked.length}</b></button>}
           <button onClick={() => setCustOpen(true)} style={{ ...pillBtn(D, T), border: customer ? `1px solid ${T.accent.base}` : pillBtn(D, T).border, color: customer ? T.accent.text : pillBtn(D, T).color }}>◉ {customer ? customer.name.split(' ')[0] : 'Walk-in'}{customer ? ' ▾' : ''}</button>
           {priceGroups.length > 1 && (
-            <select value={priceGroupId} onChange={e => setPriceGroupId(Number(e.target.value))} title="Selling price group" style={{ ...pillBtn(D, T), border: priceGroupId ? `1px solid ${T.accent.base}` : pillBtn(D, T).border, color: priceGroupId ? T.accent.text : D.chipText, appearance: 'none', cursor: 'pointer', paddingRight: 12 } as React.CSSProperties}>
+            <select value={priceGroupId} onChange={e => setPriceGroupId(/^\d+$/.test(e.target.value) ? Number(e.target.value) : e.target.value)} title="Selling price group" style={{ ...pillBtn(D, T), border: priceGroupId ? `1px solid ${T.accent.base}` : pillBtn(D, T).border, color: priceGroupId ? T.accent.text : D.chipText, appearance: 'none', cursor: 'pointer', paddingRight: 12 } as React.CSSProperties}>
               {priceGroups.map((g: any) => <option key={g.id} value={g.id}>{g.id === 0 ? '⊞ Default price' : '⊞ ' + g.name + (g.percent ? ` (${g.percent > 0 ? '+' : ''}${g.percent}%)` : '')}</option>)}
             </select>
           )}
