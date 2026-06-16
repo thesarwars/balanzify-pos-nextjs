@@ -3053,7 +3053,10 @@ const API: any = {
       if (REAL_MODE) return await realReq('PUT', '/hrm/leave-override/' + empId, { body: { overrides } });
       return (await transport('PUT', '/connector/api/hrm/leave-override/' + empId, { body: { overrides } })).data;
     },
-    async payroll() { if (REAL_MODE) return []; return (await transport('GET', '/connector/api/hrm/payroll')).data; },
+    async payroll() {
+      if (REAL_MODE) return await realReq('GET', '/hrm/payroll');
+      return (await transport('GET', '/connector/api/hrm/payroll')).data;
+    },
     async attendanceSummary(month: any) {
       if (REAL_MODE) return await realReq('GET', '/hrm/attendance-summary', { query: { month } });
       return (await transport('GET', '/connector/api/hrm/attendance-summary', { query: { month } })).data;
@@ -3062,10 +3065,22 @@ const API: any = {
       if (REAL_MODE) return await realReq('GET', '/hrm/attendance-summary/' + id, { query: { month } });
       return (await transport('GET', '/connector/api/hrm/attendance-summary/' + id, { query: { month } })).data;
     },
-    async addPayroll(body: any) { if (REAL_MODE) throw new ApiError(501, 'Payroll is coming soon.'); return (await transport('POST', '/connector/api/hrm/payroll', { body })).data; },
-    async payslip(id: any) { if (REAL_MODE) return {}; return (await transport('GET', '/connector/api/hrm/payslip/' + id)).data; },
-    async payslipSettings() { if (REAL_MODE) return {}; return (await transport('GET', '/connector/api/hrm/payslip-settings')).data; },
-    async savePayslipSettings(body: any) { if (REAL_MODE) throw new ApiError(501, 'Payroll is coming soon.'); return (await transport('PUT', '/connector/api/hrm/payslip-settings', { body })).data; },
+    async addPayroll(body: any) {
+      if (REAL_MODE) return await realReq('POST', '/hrm/payroll', { body: { employee_id: body.employee_id, month: body.month, basic: Number(body.basic || 0), allowance: Number(body.allowance || 0), overtime: Number(body.overtime || 0), bonus: Number(body.bonus || 0), incentive: Number(body.incentive || 0), deduction: Number(body.deduction || 0) } });
+      return (await transport('POST', '/connector/api/hrm/payroll', { body })).data;
+    },
+    async payslip(id: any) {
+      if (REAL_MODE) return await realReq('GET', '/hrm/payslip/' + id);
+      return (await transport('GET', '/connector/api/hrm/payslip/' + id)).data;
+    },
+    async payslipSettings() {
+      if (REAL_MODE) return await realReq('GET', '/hrm/payslip-settings');
+      return (await transport('GET', '/connector/api/hrm/payslip-settings')).data;
+    },
+    async savePayslipSettings(body: any) {
+      if (REAL_MODE) return await realReq('PUT', '/hrm/payslip-settings', { body });
+      return (await transport('PUT', '/connector/api/hrm/payslip-settings', { body })).data;
+    },
     async todos() {
       if (REAL_MODE) return await realReq('GET', '/hrm/todo');
       return (await transport('GET', '/connector/api/hrm/todo')).data;

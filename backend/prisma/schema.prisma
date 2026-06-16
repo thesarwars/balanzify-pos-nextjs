@@ -321,6 +321,7 @@ model Business {
   rosterSwaps        RosterSwap[]
   hrAdvances         HrAdvance[]
   hrTodos            HrTodo[]
+  payrolls           Payroll[]
 
   // ── Module licensing: which products this business has enabled ──
   // Each module is sellable as a separate product (pos, inventory, hotel,
@@ -478,9 +479,33 @@ model Employee {
   swapsTo         RosterSwap[]            @relation("swap_to")
   advances        HrAdvance[]
   todos           HrTodo[]
+  payrolls        Payroll[]
 
   @@index([businessId])
   @@map("employees")
+}
+
+model Payroll {
+  id               String   @id @default(uuid()) @db.Uuid
+  businessId       String   @map("business_id") @db.Uuid
+  employeeId       String   @map("employee_id") @db.Uuid
+  month            String   @db.VarChar(7)
+  basic            Decimal  @default(0) @db.Decimal(12, 2)
+  allowance        Decimal  @default(0) @db.Decimal(12, 2)
+  overtime         Decimal  @default(0) @db.Decimal(12, 2)
+  bonus            Decimal  @default(0) @db.Decimal(12, 2)
+  incentive        Decimal  @default(0) @db.Decimal(12, 2)
+  deduction        Decimal  @default(0) @db.Decimal(12, 2)
+  advanceRecovered Decimal  @default(0) @map("advance_recovered") @db.Decimal(12, 2)
+  net              Decimal  @default(0) @db.Decimal(12, 2)
+  status           String   @default("paid") @db.VarChar(20)
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
+  @@map("payrolls")
 }
 
 model RosterShift {
