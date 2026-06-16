@@ -6,7 +6,8 @@ const express = require('express');
 const prisma = require('../lib/prisma');
 const { auth, requireRole } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
-const { EmployeeSchema, OrgUnitSchema, HrmSettingsSchema, EmployeeShiftSchema, AttendanceClockSchema } = require('../validation/schemas');
+const { EmployeeSchema, OrgUnitSchema, HrmSettingsSchema, EmployeeShiftSchema, AttendanceClockSchema,
+  LeaveTypeSchema, LeaveTypeUpdateSchema, LeaveSchema, LeaveStatusSchema, LeaveOverrideSchema } = require('../validation/schemas');
 
 const router = express.Router();
 
@@ -52,13 +53,14 @@ async function employeeSales(businessId, userId, pct) {
 router.get('/summary', auth, async (req, res, next) => {
   try {
     const businessId = req.user.business_id;
-    const [employees, onLeave, present] = await Promise.all([
+    const [employees, onLeave, present, pendingLeave] = await Promise.all([
       prisma.employee.count({ where: { businessId } }),
       prisma.employee.count({ where: { businessId, status: 'on_leave' } }),
       prisma.attendance.count({ where: { businessId, date: new Date(serverDate()), clockIn: { not: null } } }),
+      prisma.leave.count({ where: { businessId, status: 'pending' } }),
     ]);
-    // pending_leave / payroll / open_todos arrive in later HRM phases.
-    res.json({ employees, present, on_leave: onLeave, pending_leave: 0, payroll: 0, open_todos: 0 });
+    // payroll / open_todos arrive in later HRM phases.
+    res.json({ employees, present, on_leave: onLeave, pending_leave: pendingLeave, payroll: 0, open_todos: 0 });
   } catch (err) { next(err); }
 });
 
@@ -398,6 +400,196 @@ router.get('/attendance-summary/:empId', auth, async (req, res, next) => {
     const settings = await loadSettings(businessId); settings._month = m;
     const records = await prisma.attendance.findMany({ where: { businessId, employeeId: emp.id, date: { gte: start, lt: end } } });
     res.json(await buildSummary(emp, records, settings));
+  } catch (err) { next(err); }
+});
+
+// ── Leave ───────────────────────────────────────────────────────────────────────
+const DEFAULT_LEAVE_TYPES = [
+  { name: 'Annual', defaultDays: 24, accrues: true,  paid: true },
+  { name: 'Sick',   defaultDays: 12, accrues: false, paid: true },
+  { name: 'Casual', defaultDays: 6,  accrues: false, paid: true },
+  { name: 'Unpaid', defaultDays: 0,  accrues: false, paid: false },
+];
+async function ensureLeaveTypeDefaults(businessId) {
+  const count = await prisma.leaveType.count({ where: { businessId } });
+  if (count > 0) return;
+  await prisma.leaveType.createMany({ data: DEFAULT_LEAVE_TYPES.map(t => ({ businessId, ...t })), skipDuplicates: true });
+}
+
+function monthsWorked(joinedAt) {
+  if (!joinedAt) return 12;
+  const now = new Date(), j = new Date(joinedAt);
+  return Math.max(1, (now.getFullYear() - j.getFullYear()) * 12 + (now.getMonth() - j.getMonth()) + 1);
+}
+// Balances for one employee given the type catalog, their leaves, and overrides.
+function computeBalances(emp, types, leaves, overrideMap) {
+  const mw = monthsWorked(emp.joinedAt);
+  return types.map(t => {
+    const base = overrideMap[t.name] != null ? overrideMap[t.name] : t.defaultDays;
+    const entitled = t.accrues ? Math.min(base, Math.round((base / 12) * mw)) : base;
+    const mine = leaves.filter(l => l.type === t.name);
+    const taken = mine.filter(l => l.status === 'approved').reduce((s, l) => s + l.days, 0);
+    const pending = mine.filter(l => l.status === 'pending').reduce((s, l) => s + l.days, 0);
+    return { type: t.name, paid: t.paid, entitled, taken, pending, balance: entitled - taken };
+  });
+}
+function serializeLeave(l, empName) {
+  return {
+    id: l.id, employee_id: l.employeeId, employee_name: empName,
+    type: l.type, from: l.fromDate.toISOString().slice(0, 10), to: l.toDate.toISOString().slice(0, 10),
+    days: l.days, reason: l.reason || '', status: l.status, approved_by: l.approvedBy || null,
+  };
+}
+
+router.get('/leave-type', auth, async (req, res, next) => {
+  try {
+    await ensureLeaveTypeDefaults(req.user.business_id);
+    const types = await prisma.leaveType.findMany({ where: { businessId: req.user.business_id }, orderBy: { name: 'asc' } });
+    res.json(types.map(t => ({ id: t.id, name: t.name, default_days: t.defaultDays, accrues: t.accrues, paid: t.paid })));
+  } catch (err) { next(err); }
+});
+router.post('/leave-type', auth, requireRole('owner', 'manager'), validate(LeaveTypeSchema), async (req, res, next) => {
+  try {
+    const t = await prisma.leaveType.upsert({
+      where: { businessId_name: { businessId: req.user.business_id, name: req.body.name } },
+      create: { businessId: req.user.business_id, name: req.body.name, defaultDays: req.body.default_days, accrues: req.body.accrues, paid: req.body.paid },
+      update: { defaultDays: req.body.default_days, accrues: req.body.accrues, paid: req.body.paid },
+    });
+    res.status(201).json({ id: t.id, name: t.name, default_days: t.defaultDays, accrues: t.accrues, paid: t.paid });
+  } catch (err) { next(err); }
+});
+router.put('/leave-type/:id', auth, requireRole('owner', 'manager'), validate(LeaveTypeUpdateSchema), async (req, res, next) => {
+  try {
+    const existing = await prisma.leaveType.findFirst({ where: { id: req.params.id, businessId: req.user.business_id } });
+    if (!existing) return res.status(404).json({ title: 'Not found', status: 404 });
+    const { default_days, accrues, paid } = req.body;
+    const t = await prisma.leaveType.update({ where: { id: req.params.id }, data: {
+      ...(default_days !== undefined && { defaultDays: default_days }),
+      ...(accrues !== undefined && { accrues }), ...(paid !== undefined && { paid }),
+    }});
+    res.json({ id: t.id, name: t.name, default_days: t.defaultDays, accrues: t.accrues, paid: t.paid });
+  } catch (err) { next(err); }
+});
+router.delete('/leave-type/:id', auth, requireRole('owner', 'manager'), async (req, res, next) => {
+  try {
+    const t = await prisma.leaveType.findFirst({ where: { id: req.params.id, businessId: req.user.business_id } });
+    if (!t) return res.status(404).json({ title: 'Not found', status: 404 });
+    await prisma.leaveType.delete({ where: { id: req.params.id } });
+    res.json({ deleted: true });
+  } catch (err) { next(err); }
+});
+
+router.get('/leave', auth, async (req, res, next) => {
+  try {
+    const leaves = await prisma.leave.findMany({
+      where: { businessId: req.user.business_id },
+      include: { employee: { select: { name: true } } },
+      orderBy: { createdAt: 'desc' },
+    });
+    res.json(leaves.map(l => serializeLeave(l, l.employee?.name || '—')));
+  } catch (err) { next(err); }
+});
+
+router.post('/leave', auth, validate(LeaveSchema), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const emp = await prisma.employee.findFirst({ where: { id: req.body.employee_id, businessId }, select: { id: true, name: true, joinedAt: true } });
+    if (!emp) return res.status(404).json({ title: 'Employee not found', status: 404 });
+    await ensureLeaveTypeDefaults(businessId);
+    const [types, leaves, overrides] = await Promise.all([
+      prisma.leaveType.findMany({ where: { businessId } }),
+      prisma.leave.findMany({ where: { businessId, employeeId: emp.id } }),
+      prisma.employeeLeaveOverride.findMany({ where: { employeeId: emp.id } }),
+    ]);
+    const overrideMap = Object.fromEntries(overrides.map(o => [o.type, o.days]));
+    const bal = computeBalances(emp, types, leaves, overrideMap).find(b => b.type === req.body.type);
+    if (bal && bal.paid) {
+      const available = bal.entitled - bal.taken - bal.pending;
+      if (req.body.days > available) return res.status(422).json({ title: `Only ${available} ${req.body.type} day(s) available`, status: 422 });
+    }
+    const created = await prisma.leave.create({ data: {
+      businessId, employeeId: emp.id, type: req.body.type,
+      fromDate: req.body.from ? new Date(req.body.from) : new Date(),
+      toDate: req.body.to ? new Date(req.body.to) : new Date(),
+      days: req.body.days, reason: req.body.reason || null,
+    }});
+    res.status(201).json(serializeLeave(created, emp.name));
+  } catch (err) { next(err); }
+});
+
+router.put('/leave/:id', auth, requireRole('owner', 'manager'), validate(LeaveStatusSchema), async (req, res, next) => {
+  try {
+    const leave = await prisma.leave.findFirst({ where: { id: req.params.id, businessId: req.user.business_id }, include: { employee: { select: { name: true } } } });
+    if (!leave) return res.status(404).json({ title: 'Not found', status: 404 });
+    const { status } = req.body;
+    const updated = await prisma.leave.update({
+      where: { id: req.params.id },
+      data: { status, approvedBy: status === 'approved' ? (req.body.approved_by || req.user.name || 'Manager') : null },
+    });
+    // Mirror the mock: approving puts the employee on leave; otherwise back to active.
+    await prisma.employee.update({ where: { id: leave.employeeId }, data: { status: status === 'approved' ? 'on_leave' : 'active' } });
+    res.json(serializeLeave(updated, leave.employee?.name || '—'));
+  } catch (err) { next(err); }
+});
+
+router.get('/leave-balance', auth, async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    await ensureLeaveTypeDefaults(businessId);
+    const [emps, types, leaves, overrides] = await Promise.all([
+      prisma.employee.findMany({ where: { businessId }, select: { id: true, name: true, joinedAt: true } }),
+      prisma.leaveType.findMany({ where: { businessId } }),
+      prisma.leave.findMany({ where: { businessId } }),
+      prisma.employeeLeaveOverride.findMany({ where: { businessId } }),
+    ]);
+    const res2 = emps.map(emp => {
+      const ovMap = Object.fromEntries(overrides.filter(o => o.employeeId === emp.id).map(o => [o.type, o.days]));
+      return { employee_id: emp.id, employee_name: emp.name, balances: computeBalances(emp, types, leaves.filter(l => l.employeeId === emp.id), ovMap) };
+    });
+    res.json(res2);
+  } catch (err) { next(err); }
+});
+
+router.get('/leave-balance/:empId', auth, async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    await ensureLeaveTypeDefaults(businessId);
+    const emp = await prisma.employee.findFirst({ where: { id: req.params.empId, businessId }, select: { id: true, name: true, joinedAt: true } });
+    if (!emp) return res.status(404).json({ title: 'Not found', status: 404 });
+    const [types, leaves, overrides] = await Promise.all([
+      prisma.leaveType.findMany({ where: { businessId } }),
+      prisma.leave.findMany({ where: { businessId, employeeId: emp.id } }),
+      prisma.employeeLeaveOverride.findMany({ where: { employeeId: emp.id } }),
+    ]);
+    const ovMap = Object.fromEntries(overrides.map(o => [o.type, o.days]));
+    res.json(computeBalances(emp, types, leaves, ovMap));
+  } catch (err) { next(err); }
+});
+
+router.get('/leave-override/:empId', auth, async (req, res, next) => {
+  try {
+    const overrides = await prisma.employeeLeaveOverride.findMany({ where: { employeeId: req.params.empId, businessId: req.user.business_id } });
+    res.json(Object.fromEntries(overrides.map(o => [o.type, o.days])));
+  } catch (err) { next(err); }
+});
+
+router.put('/leave-override/:empId', auth, requireRole('owner', 'manager'), validate(LeaveOverrideSchema), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const emp = await prisma.employee.findFirst({ where: { id: req.params.empId, businessId } });
+    if (!emp) return res.status(404).json({ title: 'Not found', status: 404 });
+    for (const [type, days] of Object.entries(req.body.overrides)) {
+      if (days == null) {
+        await prisma.employeeLeaveOverride.deleteMany({ where: { employeeId: emp.id, type } });
+      } else {
+        await prisma.employeeLeaveOverride.upsert({
+          where: { employeeId_type: { employeeId: emp.id, type } },
+          create: { businessId, employeeId: emp.id, type, days },
+          update: { days },
+        });
+      }
+    }
+    res.json({ employee_id: emp.id, overrides: req.body.overrides });
   } catch (err) { next(err); }
 });
 

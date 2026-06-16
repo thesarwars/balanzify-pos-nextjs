@@ -569,7 +569,7 @@ function LeaveTypesManager({ T, emps, onClose, onSaved }: { T: any; emps: any[];
       </div>
       <div style={{ borderTop: `1px solid ${T.line}`, marginTop: 16, paddingTop: 14 }}>
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase', color: T.inkSub, marginBottom: 8 }}>Per-employee override</div>
-        <SelectField T={T} value={String(ovEmp)} options={['', ...emps.map((e: any) => String(e.id))]} onChange={v => setOvEmp(v ? Number(v) : '')} render={v => v ? (emps.find((e: any) => String(e.id) === v) || {}).name : 'Select employee to override…'} />
+        <SelectField T={T} value={String(ovEmp)} options={['', ...emps.map((e: any) => String(e.id))]} onChange={v => setOvEmp(v ? (/^\d+$/.test(String(v)) ? Number(v) : v) : '')} render={v => v ? (emps.find((e: any) => String(e.id) === v) || {}).name : 'Select employee to override…'} />
         {ovEmp ? <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 10, marginTop: 12 }}>
             {types.filter((t: any) => t.paid).map((t: any) => (
@@ -599,7 +599,7 @@ function LeaveModal({ T, emps, leaveTypes, onClose, onSaved }: { T: any; emps: a
     <Modal T={T} title="Apply leave" width={500} onClose={onClose}
       footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Cancel</Btn><Btn T={T} kind="accent" onClick={async () => { setBusy(true); setErr(null); try { await API.hrm.addLeave(f); onSaved(); } catch (e: any) { setErr(e.message); } finally { setBusy(false); } }} disabled={busy}>{busy ? 'Saving…' : 'Apply'}</Btn></>}>
       <FormGrid>
-        <Field T={T} label="Employee" full><SelectField T={T} value={String(f.employee_id)} options={emps.map((e: any) => String(e.id))} onChange={v => set('employee_id', Number(v))} render={v => (emps.find((e: any) => String(e.id) === v) || {}).name} /></Field>
+        <Field T={T} label="Employee" full><SelectField T={T} value={String(f.employee_id)} options={emps.map((e: any) => String(e.id))} onChange={v => set('employee_id', /^\d+$/.test(String(v)) ? Number(v) : v)} render={v => (emps.find((e: any) => String(e.id) === v) || {}).name} /></Field>
         <Field T={T} label="Type"><SelectField T={T} value={f.type} options={types} onChange={v => set('type', v)} /></Field>
         <Field T={T} label="Days"><TextField T={T} type="number" value={f.days} onChange={v => set('days', v)} /></Field>
         <Field T={T} label="From"><TextField T={T} type="date" value={f.from} onChange={v => set('from', v)} /></Field>

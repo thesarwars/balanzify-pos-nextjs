@@ -327,6 +327,32 @@ const AttendanceClockSchema = z.object({
   at:          hhmm.optional(),
   date:        isoDate,
 });
+const LeaveTypeSchema = z.object({
+  name:         shortStr(100),
+  default_days: z.coerce.number().int().min(0).default(0),
+  accrues:      z.coerce.boolean().default(false),
+  paid:         z.coerce.boolean().default(true),
+});
+const LeaveTypeUpdateSchema = z.object({
+  default_days: z.coerce.number().int().min(0).optional(),
+  accrues:      z.coerce.boolean().optional(),
+  paid:         z.coerce.boolean().optional(),
+});
+const LeaveSchema = z.object({
+  employee_id: uuid,
+  type:        shortStr(100),
+  from:        isoDate,
+  to:          isoDate,
+  days:        z.coerce.number().int().positive().default(1),
+  reason:      optStr(500),
+});
+const LeaveStatusSchema = z.object({
+  status:      z.enum(['pending', 'approved', 'rejected']),
+  approved_by: optStr(255),
+});
+const LeaveOverrideSchema = z.object({
+  overrides: z.record(z.coerce.number().int().min(0).nullable()),
+});
 
 // ── Settings ──────────────────────────────────────────────────────────────────
 const SettingsSchema = z.object({
@@ -640,6 +666,7 @@ module.exports = {
   CustomerGroupSchema, UnitSchema, BrandSchema, VariationTemplateSchema, DiscountSchema,
   PriceGroupSchema, InvoiceLayoutSchema, InvoiceSchemeSchema, CommissionSettingsSchema,
   EmployeeSchema, OrgUnitSchema, HrmSettingsSchema, EmployeeShiftSchema, AttendanceClockSchema,
+  LeaveTypeSchema, LeaveTypeUpdateSchema, LeaveSchema, LeaveStatusSchema, LeaveOverrideSchema,
   PaginationSchema, ProductVariantSchema,
   CouponSchema, ApplyCouponSchema, LoyaltyRuleSchema, PettyCashSchema,
   BundleSchema, ScheduledReportSchema, CustomerSegmentSchema,
