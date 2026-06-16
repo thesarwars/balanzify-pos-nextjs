@@ -116,6 +116,15 @@ const MODULES = {
     requires: ['core'],
     routes: ['/api/v1/reports', '/api/v1/export', '/api/v1/scheduled-reports', '/api/v1/petty-cash', '/api/v1/projects', '/api/v1/tasks', '/api/v1/webhooks', '/api/v1/currency', '/api/v1/customer-segments', '/api/v1/whatsapp'],
   },
+
+  hrm: {
+    key: 'hrm',
+    name: 'HRM / Essentials',
+    description: 'Staff management: employees, attendance, leave, shifts, advances, payroll & payslips.',
+    standalone: false,
+    requires: ['core'],
+    routes: ['/api/v1/hrm'],
+  },
 };
 
 /** Resolve the full set of enabled module keys for a business,

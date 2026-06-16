@@ -107,6 +107,7 @@ try {
   const taxRoutes      = require('./routes/tax');
   const webhookRoutes  = require('./routes/webhooks');
   const hotelRoutes      = require('./routes/hotel');
+  const hrmRoutes        = require('./routes/hrm');
   const restaurantRoutes = require('./routes/restaurant');
   const checkoutRoutes   = require('./routes/checkout');
   const insightsRoutes   = require('./routes/insights');
@@ -144,6 +145,7 @@ try {
   app.use('/api/v1/tax',      apiLimiter, taxRoutes);
   app.use('/api/v1/webhooks', apiLimiter, webhookRoutes);
   app.use('/api/v1/hotel',      apiLimiter, requireModule('hotel'), hotelRoutes);
+  app.use('/api/v1/hrm',        apiLimiter, requireModule('hrm'), hrmRoutes);
   app.use('/api/v1/restaurant', apiLimiter, requireModule('restaurant'), restaurantRoutes);
   app.use('/api/v1/pharmacy',   apiLimiter, requireModule('pharmacy'), pharmacyRoutes);
   app.use('/api/v1/modules',    apiLimiter, modulesRoutes);
