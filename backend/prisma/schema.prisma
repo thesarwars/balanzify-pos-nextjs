@@ -301,6 +301,7 @@ model Business {
   wholesaleOrders    WholesaleOrder[]
   expenses           Expense[]
   expenseCategories  ExpenseCategory[]
+  paymentAccounts    PaymentAccount[]
 
   // ── Module licensing: which products this business has enabled ──
   // Each module is sellable as a separate product (pos, inventory, hotel,
@@ -347,6 +348,21 @@ model Expense {
 
   @@index([businessId, expenseDate])
   @@map("expenses")
+}
+
+model PaymentAccount {
+  id            String   @id @default(uuid()) @db.Uuid
+  businessId    String   @map("business_id") @db.Uuid
+  name          String   @db.VarChar(255)
+  type          String   @default("Cash") @db.VarChar(30)
+  accountNumber String?  @map("account_number") @db.VarChar(100)
+  balance       Decimal  @default(0) @db.Decimal(14, 2)
+  isActive      Boolean  @default(true) @map("is_active")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@map("payment_accounts")
 }
 
 model User {

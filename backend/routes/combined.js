@@ -10,6 +10,7 @@ const {
   CreateUserSchema, UpdateUserSchema,
   SettingsSchema, CategorySchema, LocationSchema, CustomerSchema,
   ExpenseSchema, ExpenseCategorySchema,
+  PaymentAccountSchema, AccountTransferSchema, AccountDepositSchema,
 } = require('../validation/schemas');
 const { trackLogin } = require('../lib/metrics');
 
@@ -1019,9 +1020,67 @@ expenseCategoriesRouter.post('/', auth, requireRole('owner', 'manager'), validat
   } catch (err) { next(err); }
 });
 
+// ── PAYMENT ACCOUNTS ──────────────────────────────────────────────────────────
+const paymentAccountsRouter = express.Router();
+
+paymentAccountsRouter.get('/', auth, async (req, res, next) => {
+  try {
+    const accounts = await prisma.paymentAccount.findMany({
+      where: { businessId: req.user.business_id, isActive: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    res.json({ accounts });
+  } catch (err) { next(err); }
+});
+
+paymentAccountsRouter.post('/', auth, requireRole('owner', 'manager'), validate(PaymentAccountSchema), async (req, res, next) => {
+  try {
+    const { name, type, account_number, balance } = req.body;
+    const account = await prisma.paymentAccount.create({
+      data: { businessId: req.user.business_id, name, type: type || 'Cash', accountNumber: account_number || null, balance: balance || 0 },
+    });
+    res.status(201).json(account);
+  } catch (err) { next(err); }
+});
+
+paymentAccountsRouter.post('/transfer', auth, requireRole('owner', 'manager'), validate(AccountTransferSchema), async (req, res, next) => {
+  try {
+    const { from_id, to_id, amount } = req.body;
+    const [from, to] = await Promise.all([
+      prisma.paymentAccount.findFirst({ where: { id: from_id, businessId: req.user.business_id } }),
+      prisma.paymentAccount.findFirst({ where: { id: to_id, businessId: req.user.business_id } }),
+    ]);
+    if (!from || !to) return res.status(404).json({ title: 'Account not found', status: 404 });
+    if (parseFloat(from.balance) < amount) return res.status(400).json({ title: 'Insufficient balance', status: 400 });
+    await prisma.$transaction([
+      prisma.paymentAccount.update({ where: { id: from_id }, data: { balance: { decrement: amount } } }),
+      prisma.paymentAccount.update({ where: { id: to_id }, data: { balance: { increment: amount } } }),
+    ]);
+    res.json({ message: 'Transfer complete.' });
+  } catch (err) { next(err); }
+});
+
+paymentAccountsRouter.post('/:id/deposit', auth, requireRole('owner', 'manager'), validate(AccountDepositSchema), async (req, res, next) => {
+  try {
+    const acc = await prisma.paymentAccount.findFirst({ where: { id: req.params.id, businessId: req.user.business_id } });
+    if (!acc) return res.status(404).json({ title: 'Not found', status: 404 });
+    const updated = await prisma.paymentAccount.update({ where: { id: req.params.id }, data: { balance: { increment: req.body.amount } } });
+    res.json(updated);
+  } catch (err) { next(err); }
+});
+
+paymentAccountsRouter.delete('/:id', auth, requireRole('owner', 'manager'), async (req, res, next) => {
+  try {
+    const acc = await prisma.paymentAccount.findFirst({ where: { id: req.params.id, businessId: req.user.business_id } });
+    if (!acc) return res.status(404).json({ title: 'Not found', status: 404 });
+    await prisma.paymentAccount.update({ where: { id: req.params.id }, data: { isActive: false } });
+    res.json({ message: 'Account removed.' });
+  } catch (err) { next(err); }
+});
+
 module.exports = {
   suppliersRouter, stockRouter, tasksRouter, projectsRouter,
   reportsRouter, usersRouter, categoriesRouter, locationsRouter,
   customersRouter, settingsRouter, notificationsRouter,
-  expensesRouter, expenseCategoriesRouter,
+  expensesRouter, expenseCategoriesRouter, paymentAccountsRouter,
 };

@@ -188,13 +188,15 @@ function TransferModal({ T, accounts, onClose, onSaved }: { T: Theme; accounts: 
   const [from, setFrom] = useStateFn<any>((accounts[0] || {}).id || '');
   const [to, setTo] = useStateFn<any>((accounts[1] || {}).id || '');
   const [amount, setAmount] = useStateFn(''); const [busy, setBusy] = useStateFn(false); const [err, setErr] = useStateFn<any>(null);
+  // Keep numeric ids numeric (mock) but pass uuid ids through unchanged (real backend).
+  const idv = (v: any) => /^\d+$/.test(String(v)) ? Number(v) : v;
   async function save() { setBusy(true); setErr(null); try { await API.paymentAccount.transfer({ from_id: from, to_id: to, amount: Number(amount) }); onSaved(); } catch (ex: any) { setErr(ex.message); } finally { setBusy(false); } }
   return (
     <Modal T={T} title="Transfer funds" subtitle="Move money between accounts" width={460} onClose={onClose}
       footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Cancel</Btn><Btn T={T} kind="accent" onClick={save} disabled={busy}>{busy ? 'Transferring…' : 'Transfer'}</Btn></>}>
       <FormGrid>
-        <Field T={T} label="From"><SelectField T={T} value={String(from)} options={accounts.map((a: any) => String(a.id))} onChange={(v: any) => setFrom(Number(v))} render={(v: any) => { const a: any = accounts.find((x: any) => String(x.id) === v) || {}; return a.name + ' · ' + money(a.balance); }} /></Field>
-        <Field T={T} label="To"><SelectField T={T} value={String(to)} options={accounts.map((a: any) => String(a.id))} onChange={(v: any) => setTo(Number(v))} render={(v: any) => (accounts.find((x: any) => String(x.id) === v) || {}).name} /></Field>
+        <Field T={T} label="From"><SelectField T={T} value={String(from)} options={accounts.map((a: any) => String(a.id))} onChange={(v: any) => setFrom(idv(v))} render={(v: any) => { const a: any = accounts.find((x: any) => String(x.id) === v) || {}; return a.name + ' · ' + money(a.balance); }} /></Field>
+        <Field T={T} label="To"><SelectField T={T} value={String(to)} options={accounts.map((a: any) => String(a.id))} onChange={(v: any) => setTo(idv(v))} render={(v: any) => (accounts.find((x: any) => String(x.id) === v) || {}).name} /></Field>
         <Field T={T} label="Amount" full><TextField T={T} type="number" value={amount} onChange={setAmount} placeholder="0.00" /></Field>
       </FormGrid>
       {err && <div style={{ marginTop: 14, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}>⚠ {err}</div>}

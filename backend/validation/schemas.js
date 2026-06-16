@@ -332,6 +332,23 @@ const ExpenseSchema = z.object({
 
 const ExpenseCategorySchema = z.object({ name: shortStr(255) });
 
+const PaymentAccountSchema = z.object({
+  name:           shortStr(255),
+  type:           z.enum(['Cash', 'Bank', 'Mobile money', 'Other']).default('Cash'),
+  account_number: optStr(100),
+  balance:        money.default(0),
+});
+
+const AccountTransferSchema = z.object({
+  from_id: uuid,
+  to_id:   uuid,
+  amount:  money.refine(v => v > 0, 'Amount must be greater than 0'),
+}).refine(d => d.from_id !== d.to_id, { message: 'From and to accounts must differ' });
+
+const AccountDepositSchema = z.object({
+  amount: money.refine(v => v > 0, 'Amount must be greater than 0'),
+});
+
 const ProductVariantSchema = z.object({
   sku: optStr(100),
   barcode: optStr(100),
@@ -513,6 +530,7 @@ module.exports = {
   CreateUserSchema, UpdateUserSchema,
   SettingsSchema, CategorySchema, LocationSchema, CustomerSchema,
   ExpenseSchema, ExpenseCategorySchema,
+  PaymentAccountSchema, AccountTransferSchema, AccountDepositSchema,
   PaginationSchema, ProductVariantSchema,
   CouponSchema, ApplyCouponSchema, LoyaltyRuleSchema, PettyCashSchema,
   BundleSchema, ScheduledReportSchema, CustomerSegmentSchema,
