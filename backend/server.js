@@ -136,6 +136,7 @@ try {
     expensesRouter, expenseCategoriesRouter, paymentAccountsRouter,
     customerGroupsRouter, unitsRouter, brandsRouter, variationsRouter,
     discountsRouter, priceGroupsRouter, invoiceLayoutsRouter, invoiceSchemesRouter,
+    serviceTypesRouter,
   } = require('./routes/combined');
 
   // Complete API v1 Routes Checklist with correct rate limiters mapped
@@ -152,6 +153,7 @@ try {
   app.use('/api/v1/hrm',        apiLimiter, gateAuth, requireModule('hrm'), hrmRoutes);
   app.use('/api/v1/superadmin', apiLimiter, gateAuth, requireModule('superadmin'), superadminRoutes);
   app.use('/api/v1/restaurant', apiLimiter, gateAuth, requireModule('restaurant'), restaurantRoutes);
+  app.use('/api/v1/service-types', apiLimiter, gateAuth, requireModule('restaurant'), serviceTypesRouter);
   app.use('/api/v1/pharmacy',   apiLimiter, gateAuth, requireModule('pharmacy'), pharmacyRoutes);
   app.use('/api/v1/modules',    apiLimiter, modulesRoutes);
   app.use('/api/v1/wholesale',  apiLimiter, gateAuth, requireModule('wholesale'), wholesaleRoutes);

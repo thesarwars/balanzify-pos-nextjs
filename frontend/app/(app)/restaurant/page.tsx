@@ -25,16 +25,19 @@ function Restaurant({ T }: { T: Theme }) {
   const [staff, setStaff] = useStateRs<any>([]);
   const [modifiers, setModifiers] = useStateRs<any>([]);
   const [kitchen, setKitchen] = useStateRs<any>([]);
+  const [svcTypes, setSvcTypes] = useStateRs<any>([]);
   const [locs, setLocs] = useStateRs<any>([]);
   const [modal, setModal] = useStateRs<any>(null);
   const [show, node] = useToast();
 
+  const reloadSvc = React.useCallback(() => { API.serviceType.list({ all: true }).then(setSvcTypes).catch(() => {}); }, []);
   const reloadAll = React.useCallback(() => {
     API.restaurant.tables().then(setTables).catch(() => {});
     API.restaurant.staff().then(setStaff).catch(() => {});
     API.restaurant.modifiers().then(setModifiers).catch(() => {});
     API.restaurant.kitchen().then(setKitchen).catch(() => {});
-  }, []);
+    reloadSvc();
+  }, [reloadSvc]);
   useEffectRs(() => {
     API.module.list().then((ms: any) => { const on = (ms.find((m: any) => m.key === 'restaurant') || {}).enabled; setEnabled(!!on); }).catch(() => setEnabled(false));
     API.location.list().then(setLocs).catch(() => {});
@@ -61,14 +64,15 @@ function Restaurant({ T }: { T: Theme }) {
   }
   if (enabled === null) return <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: T.paperAlt, fontFamily: T.fMono, fontSize: 12.5, color: T.inkSub }}>Loading…</div>;
 
-  const tabs = [['tables', 'Tables', tables.length], ['staff', 'Service Staff', staff.length], ['modifiers', 'Modifiers', modifiers.length], ['kitchen', 'Kitchen', kitchen.filter((k: any) => k.status !== 'served').length]];
+  const tabs = [['tables', 'Tables', tables.length], ['staff', 'Service Staff', staff.length], ['modifiers', 'Modifiers', modifiers.length], ['kitchen', 'Kitchen', kitchen.filter((k: any) => k.status !== 'served').length], ['servicetypes', 'Service Types', svcTypes.length]];
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: T.paperAlt }}>
       <Topbar T={T} title="Restaurant" subtitle="Tables · staff · modifiers · kitchen"
         right={tab === 'tables' ? <Btn T={T} kind="accent" onClick={() => setModal('table')}>+ Add Table</Btn>
           : tab === 'staff' ? <Btn T={T} kind="accent" onClick={() => setModal('staff')}>+ Add Staff</Btn>
-          : tab === 'modifiers' ? <Btn T={T} kind="accent" onClick={() => setModal('modifier')}>+ Add Modifier Set</Btn> : null} />
+          : tab === 'modifiers' ? <Btn T={T} kind="accent" onClick={() => setModal('modifier')}>+ Add Modifier Set</Btn>
+          : tab === 'servicetypes' ? <Btn T={T} kind="accent" onClick={() => setModal('servicetype')}>+ Add Service Type</Btn> : null} />
       <div style={{ flex: 1, overflowY: 'auto', padding: 28 }}>
         <div style={{ maxWidth: 1200, margin: '0 auto' }}>
           <div style={{ display: 'flex', gap: 4, marginBottom: 20, background: T.paper, padding: 4, borderRadius: 10, width: 'fit-content', border: `1px solid ${T.line}`, flexWrap: 'wrap' }}>
@@ -154,9 +158,30 @@ function Restaurant({ T }: { T: Theme }) {
               })}
             </div>
           )}
+
+          {/* SERVICE TYPES */}
+          {tab === 'servicetypes' && (
+            <Panel T={T} pad={false}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead><tr>{[['Service type', 'l'], ['Packing charge', 'l'], ['Status', 'l'], ['', 'r']].map(([h, a]: any, i: any) => <th key={i} style={{ textAlign: a === 'r' ? 'right' : 'left', padding: '11px 18px', fontSize: 10, fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', color: T.inkSub, background: T.paperAlt, borderBottom: `1px solid ${T.line}` }}>{h}</th>)}</tr></thead>
+                <tbody>
+                  {svcTypes.map((s: any) => (
+                    <tr key={s.id}>
+                      <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 13, fontWeight: 600, color: T.ink }}>{s.name}</td>
+                      <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 12.5, color: T.inkSub, fontFamily: T.fMono }}>{s.packing_charge ? (s.packing_charge_type === 'percentage' ? s.packing_charge + '%' : money(s.packing_charge)) : '—'}</td>
+                      <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}` }}><button onClick={() => API.serviceType.update(s.id, { enabled: !s.enabled }).then(reloadSvc)} style={{ cursor: 'pointer', border: 'none', background: 'none', fontSize: 12.5, fontWeight: 600, color: s.enabled ? T.greenText : T.inkMute }}>{s.enabled ? '● Enabled' : '○ Disabled'}</button></td>
+                      <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right' }}><button onClick={() => API.serviceType.remove(s.id).then(reloadSvc)} style={rsMini(T, true)}>Remove</button></td>
+                    </tr>
+                  ))}
+                  {svcTypes.length === 0 && <tr><td colSpan={4} style={{ padding: 40, textAlign: 'center', color: T.inkMute, fontSize: 13 }}>No service types.</td></tr>}
+                </tbody>
+              </table>
+            </Panel>
+          )}
         </div>
       </div>
 
+      {modal === 'servicetype' && <RsAdd T={T} title="Add service type" fields={[['name', 'Name', 'text'], ['packing_charge', 'Packing charge', 'number']]} onClose={() => setModal(null)} onSave={async (f: any) => { await API.serviceType.create({ name: f.name, packing_charge: f.packing_charge, packing_charge_type: 'fixed' }); setModal(null); show('Service type added'); reloadSvc(); }} />}
       {modal === 'table' && <RsAdd T={T} title="Add table" fields={[['name', 'Table name', 'text'], ['seats', 'Seats', 'number']]} extra={{ loc: locs }} onClose={() => setModal(null)} onSave={async (f: any) => { await API.restaurant.addTable({ name: f.name, seats: f.seats, location_id: f.location_id }); setModal(null); show('Table added'); API.restaurant.tables().then(setTables); }} />}
       {modal === 'staff' && <RsAdd T={T} title="Add service staff" fields={[['name', 'Name', 'text'], ['pin', 'PIN (4 digits)', 'text']]} extra={{ loc: locs }} onClose={() => setModal(null)} onSave={async (f: any) => { await API.restaurant.addStaff({ name: f.name, pin: f.pin, location_id: f.location_id }); setModal(null); show('Staff added'); API.restaurant.staff().then(setStaff); }} />}
       {modal === 'modifier' && <ModifierAdd T={T} onClose={() => setModal(null)} onSave={async (body: any) => { await API.restaurant.addModifier(body); setModal(null); show('Modifier set added'); API.restaurant.modifiers().then(setModifiers); }} />}
@@ -165,7 +190,7 @@ function Restaurant({ T }: { T: Theme }) {
   );
 }
 
-function RsAdd({ T, title, fields, extra, onClose, onSave }: { T: Theme; title: string; fields: any; extra: any; onClose: () => void; onSave: (f: any) => any }) {
+function RsAdd({ T, title, fields, extra, onClose, onSave }: { T: Theme; title: string; fields: any; extra?: any; onClose: () => void; onSave: (f: any) => any }) {
   const [f, setF] = useStateRs<any>({ location_id: (extra && extra.loc && extra.loc[0] || {}).id || 1 });
   const [busy, setBusy] = useStateRs(false);
   return (
