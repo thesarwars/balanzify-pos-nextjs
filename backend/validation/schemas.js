@@ -390,6 +390,15 @@ const PayrollSchema = z.object({
   incentive:   money.default(0),
   deduction:   money.default(0),
 });
+const PackageSchema = z.object({
+  name:      shortStr(100),
+  price:     money.default(0),
+  interval:  z.enum(['monthly', 'yearly']).default('monthly'),
+  locations: z.coerce.number().int().min(0).default(1),
+  users:     z.coerce.number().int().min(0).default(1),
+  products:  z.coerce.number().int().min(0).default(100),
+  featured:  z.coerce.boolean().default(false),
+});
 const PayslipSettingsSchema = z.object({
   show_attendance:          z.coerce.boolean().optional(),
   show_overtime:            z.coerce.boolean().optional(),
@@ -714,7 +723,7 @@ module.exports = {
   EmployeeSchema, OrgUnitSchema, HrmSettingsSchema, EmployeeShiftSchema, AttendanceClockSchema,
   LeaveTypeSchema, LeaveTypeUpdateSchema, LeaveSchema, LeaveStatusSchema, LeaveOverrideSchema,
   RosterShiftSchema, RosterSwapSchema, HrAdvanceSchema, HrTodoSchema, StatusSchema,
-  PayrollSchema, PayslipSettingsSchema,
+  PayrollSchema, PayslipSettingsSchema, PackageSchema,
   PaginationSchema, ProductVariantSchema,
   CouponSchema, ApplyCouponSchema, LoyaltyRuleSchema, PettyCashSchema,
   BundleSchema, ScheduledReportSchema, CustomerSegmentSchema,
