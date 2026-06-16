@@ -3009,17 +3009,50 @@ const API: any = {
       if (REAL_MODE) return await realReq('POST', '/hrm/attendance/auto-absent', { body: { date: hrStamp().date } });
       return (await transport('POST', '/connector/api/hrm/attendance/auto-absent', { body: {} })).data;
     },
-    async leaves() { if (REAL_MODE) return []; return (await transport('GET', '/connector/api/hrm/leave')).data; },
-    async addLeave(body: any) { if (REAL_MODE) throw new ApiError(501, 'Leave is coming soon.'); return (await transport('POST', '/connector/api/hrm/leave', { body })).data; },
-    async setLeave(id: any, status: any) { if (REAL_MODE) throw new ApiError(501, 'Leave is coming soon.'); return (await transport('PUT', '/connector/api/hrm/leave/' + id, { body: { status } })).data; },
-    async leaveBalances() { if (REAL_MODE) return []; return (await transport('GET', '/connector/api/hrm/leave-balance')).data; },
-    async empLeaveBalance(id: any) { if (REAL_MODE) return []; return (await transport('GET', '/connector/api/hrm/leave-balance/' + id)).data; },
-    async leaveTypes() { if (REAL_MODE) return []; return (await transport('GET', '/connector/api/hrm/leave-type')).data; },
-    async addLeaveType(body: any) { if (REAL_MODE) throw new ApiError(501, 'Leave is coming soon.'); return (await transport('POST', '/connector/api/hrm/leave-type', { body })).data; },
-    async updateLeaveType(id: any, body: any) { if (REAL_MODE) throw new ApiError(501, 'Leave is coming soon.'); return (await transport('PUT', '/connector/api/hrm/leave-type/' + id, { body })).data; },
-    async removeLeaveType(id: any) { if (REAL_MODE) throw new ApiError(501, 'Leave is coming soon.'); return (await transport('DELETE', '/connector/api/hrm/leave-type/' + id)).data; },
-    async leaveOverride(empId: any) { if (REAL_MODE) return {}; return (await transport('GET', '/connector/api/hrm/leave-override/' + empId)).data; },
-    async setLeaveOverride(empId: any, overrides: any) { if (REAL_MODE) throw new ApiError(501, 'Leave is coming soon.'); return (await transport('PUT', '/connector/api/hrm/leave-override/' + empId, { body: { overrides } })).data; },
+    async leaves() {
+      if (REAL_MODE) return await realReq('GET', '/hrm/leave');
+      return (await transport('GET', '/connector/api/hrm/leave')).data;
+    },
+    async addLeave(body: any) {
+      if (REAL_MODE) return await realReq('POST', '/hrm/leave', { body: { employee_id: body.employee_id, type: body.type, from: body.from || undefined, to: body.to || undefined, days: Number(body.days || 1), reason: body.reason || undefined } });
+      return (await transport('POST', '/connector/api/hrm/leave', { body })).data;
+    },
+    async setLeave(id: any, status: any) {
+      if (REAL_MODE) return await realReq('PUT', '/hrm/leave/' + id, { body: { status } });
+      return (await transport('PUT', '/connector/api/hrm/leave/' + id, { body: { status } })).data;
+    },
+    async leaveBalances() {
+      if (REAL_MODE) return await realReq('GET', '/hrm/leave-balance');
+      return (await transport('GET', '/connector/api/hrm/leave-balance')).data;
+    },
+    async empLeaveBalance(id: any) {
+      if (REAL_MODE) return await realReq('GET', '/hrm/leave-balance/' + id);
+      return (await transport('GET', '/connector/api/hrm/leave-balance/' + id)).data;
+    },
+    async leaveTypes() {
+      if (REAL_MODE) return await realReq('GET', '/hrm/leave-type');
+      return (await transport('GET', '/connector/api/hrm/leave-type')).data;
+    },
+    async addLeaveType(body: any) {
+      if (REAL_MODE) return await realReq('POST', '/hrm/leave-type', { body });
+      return (await transport('POST', '/connector/api/hrm/leave-type', { body })).data;
+    },
+    async updateLeaveType(id: any, body: any) {
+      if (REAL_MODE) return await realReq('PUT', '/hrm/leave-type/' + id, { body });
+      return (await transport('PUT', '/connector/api/hrm/leave-type/' + id, { body })).data;
+    },
+    async removeLeaveType(id: any) {
+      if (REAL_MODE) return await realReq('DELETE', '/hrm/leave-type/' + id);
+      return (await transport('DELETE', '/connector/api/hrm/leave-type/' + id)).data;
+    },
+    async leaveOverride(empId: any) {
+      if (REAL_MODE) return await realReq('GET', '/hrm/leave-override/' + empId);
+      return (await transport('GET', '/connector/api/hrm/leave-override/' + empId)).data;
+    },
+    async setLeaveOverride(empId: any, overrides: any) {
+      if (REAL_MODE) return await realReq('PUT', '/hrm/leave-override/' + empId, { body: { overrides } });
+      return (await transport('PUT', '/connector/api/hrm/leave-override/' + empId, { body: { overrides } })).data;
+    },
     async payroll() { if (REAL_MODE) return []; return (await transport('GET', '/connector/api/hrm/payroll')).data; },
     async attendanceSummary(month: any) {
       if (REAL_MODE) return await realReq('GET', '/hrm/attendance-summary', { query: { month } });
