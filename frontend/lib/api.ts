@@ -2742,9 +2742,21 @@ const API: any = {
     async remove(id: any) { return (await transport('DELETE', '/connector/api/invoice-layout/' + id)).data; },
   },
   priceGroup: {
-    async list() { return (await transport('GET', '/connector/api/selling-price-group')).data; },
-    async create(body: any) { return (await transport('POST', '/connector/api/selling-price-group', { body })).data; },
-    async remove(id: any) { return (await transport('DELETE', '/connector/api/selling-price-group/' + id)).data; },
+    async list() {
+      if (REAL_MODE) {
+        const res = await realReq('GET', '/price-groups');
+        return ((res && (res.priceGroups || res.groups || res.data)) || []).map((g: any) => ({ id: g.id, name: g.name, percent: Number(g.percent || 0), is_default: !!g.isDefault }));
+      }
+      return (await transport('GET', '/connector/api/selling-price-group')).data;
+    },
+    async create(body: any) {
+      if (REAL_MODE) return await realReq('POST', '/price-groups', { body: { name: body.name, percent: Number(body.percent || 0) } });
+      return (await transport('POST', '/connector/api/selling-price-group', { body })).data;
+    },
+    async remove(id: any) {
+      if (REAL_MODE) return await realReq('DELETE', '/price-groups/' + id);
+      return (await transport('DELETE', '/connector/api/selling-price-group/' + id)).data;
+    },
   },
   paymentMethod: { async list() { return (await transport('GET', '/connector/api/payment-method')).data; } },
   discount: {
@@ -2769,9 +2781,11 @@ const API: any = {
     },
   },
   serviceType: {
-    async list() { return (await transport('GET', '/connector/api/types-of-service')).data; },
-    async create(body: any) { return (await transport('POST', '/connector/api/types-of-service', { body })).data; },
-    async remove(id: any) { return (await transport('DELETE', '/connector/api/types-of-service/' + id)).data; },
+    // No /api/v1 backend or admin UI yet — return none in real mode so the POS
+    // service-type selector simply hides instead of hitting a dead endpoint.
+    async list() { if (REAL_MODE) return []; return (await transport('GET', '/connector/api/types-of-service')).data; },
+    async create(body: any) { if (REAL_MODE) throw new ApiError(501, 'Service types aren’t configurable yet.'); return (await transport('POST', '/connector/api/types-of-service', { body })).data; },
+    async remove(id: any) { if (REAL_MODE) throw new ApiError(501, 'Service types aren’t configurable yet.'); return (await transport('DELETE', '/connector/api/types-of-service/' + id)).data; },
   },
   module: {
     async list() {

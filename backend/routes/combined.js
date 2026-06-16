@@ -12,6 +12,7 @@ const {
   ExpenseSchema, ExpenseCategorySchema,
   PaymentAccountSchema, AccountTransferSchema, AccountDepositSchema,
   CustomerGroupSchema, UnitSchema, BrandSchema, VariationTemplateSchema, DiscountSchema,
+  PriceGroupSchema,
 } = require('../validation/schemas');
 const { trackLogin } = require('../lib/metrics');
 
@@ -1255,11 +1256,43 @@ discountsRouter.delete('/:id', auth, requireRole('owner', 'manager'), async (req
   } catch (err) { next(err); }
 });
 
+// ── PRICE GROUPS ──────────────────────────────────────────────────────────────
+const priceGroupsRouter = express.Router();
+
+priceGroupsRouter.get('/', auth, async (req, res, next) => {
+  try {
+    const priceGroups = await prisma.priceGroup.findMany({
+      where: { businessId: req.user.business_id },
+      orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
+    });
+    res.json({ priceGroups });
+  } catch (err) { next(err); }
+});
+priceGroupsRouter.post('/', auth, requireRole('owner', 'manager'), validate(PriceGroupSchema), async (req, res, next) => {
+  try {
+    const group = await prisma.priceGroup.upsert({
+      where: { businessId_name: { businessId: req.user.business_id, name: req.body.name } },
+      create: { businessId: req.user.business_id, name: req.body.name, percent: req.body.percent || 0 },
+      update: { percent: req.body.percent || 0 },
+    });
+    res.status(201).json(group);
+  } catch (err) { next(err); }
+});
+priceGroupsRouter.delete('/:id', auth, requireRole('owner', 'manager'), async (req, res, next) => {
+  try {
+    const g = await prisma.priceGroup.findFirst({ where: { id: req.params.id, businessId: req.user.business_id } });
+    if (!g) return res.status(404).json({ title: 'Not found', status: 404 });
+    if (g.isDefault) return res.status(422).json({ title: 'The default price group cannot be deleted.', status: 422 });
+    await prisma.priceGroup.delete({ where: { id: req.params.id } });
+    res.json({ message: 'Price group removed.' });
+  } catch (err) { next(err); }
+});
+
 module.exports = {
   suppliersRouter, stockRouter, tasksRouter, projectsRouter,
   reportsRouter, usersRouter, categoriesRouter, locationsRouter,
   customersRouter, settingsRouter, notificationsRouter,
   expensesRouter, expenseCategoriesRouter, paymentAccountsRouter,
   customerGroupsRouter, unitsRouter, brandsRouter, variationsRouter,
-  discountsRouter,
+  discountsRouter, priceGroupsRouter,
 };

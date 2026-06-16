@@ -335,6 +335,11 @@ const UnitSchema = z.object({
 
 const BrandSchema = z.object({ name: shortStr(255) });
 
+const PriceGroupSchema = z.object({
+  name:    shortStr(255),
+  percent: z.coerce.number().min(-100).max(1000).default(0),
+});
+
 const DiscountSchema = z.object({
   name:                  shortStr(255),
   type:                  z.enum(['percentage', 'fixed']).default('percentage'),
@@ -568,6 +573,7 @@ module.exports = {
   ExpenseSchema, ExpenseCategorySchema,
   PaymentAccountSchema, AccountTransferSchema, AccountDepositSchema,
   CustomerGroupSchema, UnitSchema, BrandSchema, VariationTemplateSchema, DiscountSchema,
+  PriceGroupSchema,
   PaginationSchema, ProductVariantSchema,
   CouponSchema, ApplyCouponSchema, LoyaltyRuleSchema, PettyCashSchema,
   BundleSchema, ScheduledReportSchema, CustomerSegmentSchema,
