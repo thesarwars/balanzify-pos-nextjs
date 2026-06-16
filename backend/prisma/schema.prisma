@@ -302,6 +302,7 @@ model Business {
   expenses           Expense[]
   expenseCategories  ExpenseCategory[]
   paymentAccounts    PaymentAccount[]
+  customerGroups     CustomerGroup[]
 
   // ── Module licensing: which products this business has enabled ──
   // Each module is sellable as a separate product (pos, inventory, hotel,
@@ -348,6 +349,20 @@ model Expense {
 
   @@index([businessId, expenseDate])
   @@map("expenses")
+}
+
+model CustomerGroup {
+  id          String     @id @default(uuid()) @db.Uuid
+  businessId  String     @map("business_id") @db.Uuid
+  name        String     @db.VarChar(255)
+  discountPct Decimal    @default(0) @map("discount_pct") @db.Decimal(6, 2)
+  createdAt   DateTime   @default(now()) @map("created_at")
+
+  business    Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customers   Customer[]
+
+  @@unique([businessId, name])
+  @@map("customer_groups")
 }
 
 model PaymentAccount {
@@ -980,6 +995,7 @@ model Customer {
   totalPurchases     Decimal  @default(0) @map("total_purchases") @db.Decimal(12, 2)
   loyaltyPoints      Int      @default(0) @map("loyalty_points")
   segment            String?  @db.VarChar(50)
+  customerGroupId    String?  @map("customer_group_id") @db.Uuid
   whatsappOptedIn    Boolean  @default(true) @map("whatsapp_opted_in")
   diasporaCurrency   String   @default("USD") @map("diaspora_currency") @db.VarChar(3)
   notes              String?
@@ -988,6 +1004,7 @@ model Customer {
   updatedAt          DateTime @default(now()) @updatedAt @map("updated_at")
 
   business         Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customerGroup    CustomerGroup?    @relation(fields: [customerGroupId], references: [id])
   sales            Sale[]
   loyaltyLedger    LoyaltyLedger[]
   reservations     Reservation[]

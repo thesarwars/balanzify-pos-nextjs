@@ -83,7 +83,7 @@ export function Contacts({ T, kind }: { T: Theme; kind: 'customer' | 'supplier' 
                           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
                             <b style={{ color: T.ink, fontSize: 13 }}>{c.name}</b>
                             {c.type === 'both' && <Badge T={T} tone="violet">Both</Badge>}
-                            {isCust && c.customer_group_id > 1 && <Badge T={T} tone="blue">{c.group_name}</Badge>}
+                            {isCust && c.group_name && c.group_name !== 'Retail' && <Badge T={T} tone="blue">{c.group_name}</Badge>}
                           </span>
                         </div>
                       </td>
