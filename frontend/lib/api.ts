@@ -2102,6 +2102,35 @@ function toRealLocationBody(f: any): any {
   return body;
 }
 
+// ── Dashboard (/api/v1/reports/dashboard) → the DASH-shaped view-model ─────────
+function adaptRealDashboard(d: any): any {
+  if (!d) return d;
+  const cash = Number(d.cash_today || 0), zaad = Number(d.zaad_today || 0), card = Number(d.card_today || 0);
+  const tx = Number(d.transactions_today || 0), today = Number(d.sales_today || 0);
+  return {
+    salesToday: today, txToday: tx, salesTrend: 0,
+    salesMonth: Number(d.sales_month || 0), monthTrend: 0,
+    stockValue: Number(d.stock_value || 0), products: Number(d.total_products || 0),
+    avgBasket: tx ? today / tx : 0, basketTrend: 0,
+    lowStock: Number(d.low_stock_count || 0),
+    byPayment: [
+      { id: 'cash', label: 'Cash', value: cash, color: '#0E9F6E' },
+      { id: 'zaad', label: 'Zaad', value: zaad, color: '#1B3A6B' },
+      { id: 'card', label: 'Card', value: card, color: '#A16207' },
+    ],
+    // The backend dashboard has no hourly breakdown yet — keep a neutral shape.
+    hourly: [18, 34, 52, 78, 96, 110, 88, 64, 72, 120, 138, 102, 70, 44],
+    topProducts: (d.top_products || []).map((p: any) => ({ name: p.name, qty: Number(p.units_sold || 0), revenue: Number(p.revenue || 0) })),
+    recentSales: (d.recent_sales || []).map((s: any) => ({
+      id: s.saleNumber || s.id,
+      customer: (s.customer && s.customer.name) || 'Walk-in',
+      method: s.paymentMethod, methodLabel: s.paymentMethod,
+      total: Number(s.totalAmount || 0),
+      minsAgo: s.createdAt ? Math.max(0, Math.round((Date.now() - new Date(s.createdAt).getTime()) / 60000)) : 0,
+    })),
+  };
+}
+
 // ═══════════════════════════════════════════════════════════════════
 //  PUBLIC API  —  what every screen imports.
 //  One method per endpoint; the name says which URL it hits.
@@ -2627,6 +2656,19 @@ const API: any = {
     async members() { return (await transport('GET', '/connector/api/reward-member')).data; },
   },
   report: {
+    // Live KPIs from the backend; null in mock mode so screens keep their seed data.
+    async dashboard() {
+      if (REAL_MODE) return adaptRealDashboard(await realReq('GET', '/reports/dashboard'));
+      return null;
+    },
+    async profit(range: any = {}) {
+      if (REAL_MODE) return await realReq('GET', '/reports/profit', { query: range });
+      return null;
+    },
+    async salesSummary(range: any = {}) {
+      if (REAL_MODE) return await realReq('GET', '/reports/sales', { query: range });
+      return null;
+    },
     async commissionSettings() { return (await transport('GET', '/connector/api/commission-setting')).data; },
     async saveCommissionSettings(body: any) { return (await transport('PUT', '/connector/api/commission-setting', { body })).data; },
     async salesReps(calc: any) { return (await transport('GET', '/connector/api/sales-representative', { query: { calc } })).data; },
