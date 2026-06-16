@@ -319,6 +319,19 @@ const CustomerSchema = z.object({
   notes: optStr(2000),
 });
 
+const ExpenseSchema = z.object({
+  category_id:    uuid.optional().nullable(),
+  location_id:    uuid.optional().nullable(),
+  amount:         money.refine(v => v > 0, 'Amount must be greater than 0'),
+  date:           isoDate,
+  payment_status: z.enum(['paid', 'due']).default('paid'),
+  expense_for:    optStr(255),
+  note:           optStr(1000),
+  is_refund:      z.boolean().default(false),
+});
+
+const ExpenseCategorySchema = z.object({ name: shortStr(255) });
+
 const ProductVariantSchema = z.object({
   sku: optStr(100),
   barcode: optStr(100),
@@ -499,6 +512,7 @@ module.exports = {
   TaskSchema, CommentSchema, ProjectSchema, MilestoneSchema,
   CreateUserSchema, UpdateUserSchema,
   SettingsSchema, CategorySchema, LocationSchema, CustomerSchema,
+  ExpenseSchema, ExpenseCategorySchema,
   PaginationSchema, ProductVariantSchema,
   CouponSchema, ApplyCouponSchema, LoyaltyRuleSchema, PettyCashSchema,
   BundleSchema, ScheduledReportSchema, CustomerSegmentSchema,

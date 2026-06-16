@@ -132,6 +132,8 @@ function ExpenseModal({ T, cats, locs, accounts, onClose, onSaved, onAddCat }: {
   const [err, setErr] = useStateFn<any>(null);
   const [newCat, setNewCat] = useStateFn('');
   const set = (k: string, v: any) => setF((s: any) => ({ ...s, [k]: v }));
+  // Keep numeric ids numeric (mock) but pass uuid ids through unchanged (real backend).
+  const idv = (v: any) => /^\d+$/.test(String(v)) ? Number(v) : v;
   async function save() {
     if (!(Number(f.amount) > 0)) { setErr('Enter an amount.'); return; }
     setBusy(true); setErr(null);
@@ -143,9 +145,9 @@ function ExpenseModal({ T, cats, locs, accounts, onClose, onSaved, onAddCat }: {
       <FormGrid>
         <Field T={T} label="Date"><TextField T={T} type="date" value={f.date} onChange={(v: any) => set('date', v)} /></Field>
         <Field T={T} label="Amount"><TextField T={T} type="number" value={f.amount} onChange={(v: any) => set('amount', v)} placeholder="0.00" /></Field>
-        <Field T={T} label="Category"><SelectField T={T} value={String(f.category_id)} options={cats.map((c: any) => String(c.id))} onChange={(v: any) => set('category_id', Number(v))} render={(v: any) => (cats.find((c: any) => String(c.id) === v) || {}).name} /></Field>
-        <Field T={T} label="Location"><SelectField T={T} value={String(f.location_id)} options={locs.map((l: any) => String(l.id))} onChange={(v: any) => set('location_id', Number(v))} render={(v: any) => (locs.find((l: any) => String(l.id) === v) || {}).name} /></Field>
-        <Field T={T} label="Pay from account"><SelectField T={T} value={String(f.account_id)} options={['', ...accounts.map((a: any) => String(a.id))]} onChange={(v: any) => set('account_id', v ? Number(v) : '')} render={(v: any) => v ? (accounts.find((a: any) => String(a.id) === v) || {}).name : 'None'} /></Field>
+        <Field T={T} label="Category"><SelectField T={T} value={String(f.category_id)} options={cats.map((c: any) => String(c.id))} onChange={(v: any) => set('category_id', idv(v))} render={(v: any) => (cats.find((c: any) => String(c.id) === v) || {}).name} /></Field>
+        <Field T={T} label="Location"><SelectField T={T} value={String(f.location_id)} options={locs.map((l: any) => String(l.id))} onChange={(v: any) => set('location_id', idv(v))} render={(v: any) => (locs.find((l: any) => String(l.id) === v) || {}).name} /></Field>
+        <Field T={T} label="Pay from account"><SelectField T={T} value={String(f.account_id)} options={['', ...accounts.map((a: any) => String(a.id))]} onChange={(v: any) => set('account_id', v ? idv(v) : '')} render={(v: any) => v ? (accounts.find((a: any) => String(a.id) === v) || {}).name : 'None'} /></Field>
         <Field T={T} label="Payment status"><SelectField T={T} value={f.payment_status} options={['paid', 'due']} onChange={(v: any) => set('payment_status', v)} render={(v: any) => v === 'paid' ? 'Paid' : 'Due'} /></Field>
         <Field T={T} label="Expense for (optional)" full><TextField T={T} value={f.expense_for} onChange={(v: any) => set('expense_for', v)} placeholder="Employee / customer / supplier name" /></Field>
         <Field T={T} label="Note" full><TextField T={T} value={f.note} onChange={(v: any) => set('note', v)} placeholder="Description" /></Field>
