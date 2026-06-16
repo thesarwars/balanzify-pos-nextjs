@@ -125,13 +125,24 @@ const MODULES = {
     requires: ['core'],
     routes: ['/api/v1/hrm'],
   },
+
+  superadmin: {
+    key: 'superadmin',
+    name: 'Superadmin (SaaS)',
+    description: 'Platform console: subscription packages, all businesses, payments, gateways.',
+    standalone: true,
+    default: false, // opt-in only — NOT part of the legacy full-suite default
+    requires: ['core'],
+    routes: ['/api/v1/superadmin'],
+  },
 };
 
 /** Resolve the full set of enabled module keys for a business,
  *  expanding dependencies. Empty/null enabledModules = everything. */
 function resolveEnabled(enabledModules) {
   if (!enabledModules || enabledModules.length === 0) {
-    return new Set(Object.keys(MODULES)); // legacy: full suite
+    // legacy: full suite — but opt-in modules (default: false) stay off
+    return new Set(Object.keys(MODULES).filter(k => MODULES[k].default !== false));
   }
   const resolved = new Set(['core']);
   const add = (key) => {

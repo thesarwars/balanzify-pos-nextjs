@@ -3139,16 +3139,46 @@ const API: any = {
     },
   },
   superadmin: {
-    async stats() { return (await transport('GET', '/connector/api/superadmin/stats')).data; },
-    async businesses() { return (await transport('GET', '/connector/api/superadmin/business')).data; },
-    async setBusiness(id: any, body: any) { return (await transport('PUT', '/connector/api/superadmin/business/' + id, { body })).data; },
-    async packages() { return (await transport('GET', '/connector/api/superadmin/package')).data; },
-    async addPackage(body: any) { return (await transport('POST', '/connector/api/superadmin/package', { body })).data; },
-    async removePackage(id: any) { return (await transport('DELETE', '/connector/api/superadmin/package/' + id)).data; },
-    async payments() { return (await transport('GET', '/connector/api/superadmin/payment')).data; },
-    async setPayment(id: any, status: any) { return (await transport('PUT', '/connector/api/superadmin/payment/' + id, { body: { status } })).data; },
-    async gateways() { return (await transport('GET', '/connector/api/superadmin/gateway')).data; },
-    async setGateways(body: any) { return (await transport('PUT', '/connector/api/superadmin/gateway', { body })).data; },
+    async stats() {
+      if (REAL_MODE) return await realReq('GET', '/superadmin/stats');
+      return (await transport('GET', '/connector/api/superadmin/stats')).data;
+    },
+    async businesses() {
+      if (REAL_MODE) return await realReq('GET', '/superadmin/business');
+      return (await transport('GET', '/connector/api/superadmin/business')).data;
+    },
+    async setBusiness(id: any, body: any) {
+      if (REAL_MODE) return await realReq('PUT', '/superadmin/business/' + id, { body });
+      return (await transport('PUT', '/connector/api/superadmin/business/' + id, { body })).data;
+    },
+    async packages() {
+      if (REAL_MODE) return await realReq('GET', '/superadmin/package');
+      return (await transport('GET', '/connector/api/superadmin/package')).data;
+    },
+    async addPackage(body: any) {
+      if (REAL_MODE) return await realReq('POST', '/superadmin/package', { body });
+      return (await transport('POST', '/connector/api/superadmin/package', { body })).data;
+    },
+    async removePackage(id: any) {
+      if (REAL_MODE) return await realReq('DELETE', '/superadmin/package/' + id);
+      return (await transport('DELETE', '/connector/api/superadmin/package/' + id)).data;
+    },
+    async payments() {
+      if (REAL_MODE) return await realReq('GET', '/superadmin/payment');
+      return (await transport('GET', '/connector/api/superadmin/payment')).data;
+    },
+    async setPayment(id: any, status: any) {
+      if (REAL_MODE) return await realReq('PUT', '/superadmin/payment/' + id, { body: { status } });
+      return (await transport('PUT', '/connector/api/superadmin/payment/' + id, { body: { status } })).data;
+    },
+    async gateways() {
+      if (REAL_MODE) return await realReq('GET', '/superadmin/gateway');
+      return (await transport('GET', '/connector/api/superadmin/gateway')).data;
+    },
+    async setGateways(body: any) {
+      if (REAL_MODE) return await realReq('PUT', '/superadmin/gateway', { body });
+      return (await transport('PUT', '/connector/api/superadmin/gateway', { body })).data;
+    },
   },
   purchase: {
     async list() { return (await transport('GET', '/connector/api/purchase')).data; },
