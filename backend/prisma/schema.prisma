@@ -313,6 +313,7 @@ model Business {
   employees          Employee[]
   orgUnits           OrgUnit[]
   hrmSettings        HrmSettings?
+  serviceTypes       ServiceType[]
   subscription         Subscription?
   subscriptionPayments SubscriptionPayment[]
   attendance         Attendance[]
@@ -451,6 +452,20 @@ model CustomerGroup {
 
   @@unique([businessId, name])
   @@map("customer_groups")
+}
+
+model ServiceType {
+  id                String   @id @default(uuid()) @db.Uuid
+  businessId        String   @map("business_id") @db.Uuid
+  name              String   @db.VarChar(100)
+  packingCharge     Decimal  @default(0) @map("packing_charge") @db.Decimal(10, 2)
+  packingChargeType String   @default("fixed") @map("packing_charge_type") @db.VarChar(20)
+  enabled           Boolean  @default(true)
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@map("service_types")
 }
 
 // ── SaaS / Superadmin (platform-level) ────────────────────────────────────────

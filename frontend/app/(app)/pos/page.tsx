@@ -70,7 +70,7 @@ function POS({ T, tweaks }: { T: any; tweaks: any }) {
   const [priceGroups, setPriceGroups] = useStateP<any[]>([]);
   const [priceGroupId, setPriceGroupId] = useStateP(0);
   const [serviceTypes, setServiceTypes] = useStateP<any[]>([]);
-  const [serviceTypeId, setServiceTypeId] = useStateP(0);
+  const [serviceTypeId, setServiceTypeId] = useStateP<any>('');
   const [payMode, setPayMode] = useStateP('quick'); // 'quick' | 'split'
   const [tenders, setTenders] = useStateP<any[]>([]);      // split-payment lines [{method, amount}]
   const [changeDue, setChangeDue] = useStateP(0);
@@ -144,7 +144,7 @@ function POS({ T, tweaks }: { T: any; tweaks: any }) {
   const redeemDiscount = Math.min(subtotal, +(redeemPts * (rw ? rw.redeem_amount_per_point : 0)).toFixed(2));
   const pointsEarned = rw && subtotal >= rw.min_order_total_earn ? Math.min(rw.max_points_per_order || Infinity, Math.floor(subtotal / rw.amount_per_unit_point)) : 0;
   const discount = redeemDiscount;
-  const svcType = serviceTypes.find((s: any) => s.id === serviceTypeId) || null;
+  const svcType = serviceTypes.find((s: any) => String(s.id) === String(serviceTypeId)) || null;
   const packing = svcType ? (svcType.packing_charge_type === 'percentage' ? Math.round(subtotal * svcType.packing_charge) / 100 : svcType.packing_charge) : 0;
   const total = subtotal + tax - discount + packing;
   const count = cart.reduce((s: number, c: any) => s + c.qty, 0);
@@ -474,8 +474,8 @@ function POS({ T, tweaks }: { T: any; tweaks: any }) {
             </select>
           )}
           {!isMobile && serviceTypes.length > 0 && (
-            <select value={serviceTypeId} onChange={e => setServiceTypeId(Number(e.target.value))} title="Type of service" style={{ ...pillBtn(D, T), border: serviceTypeId ? `1px solid ${T.accent.base}` : pillBtn(D, T).border, color: serviceTypeId ? T.accent.text : D.chipText, appearance: 'none', cursor: 'pointer', paddingRight: 12 } as React.CSSProperties}>
-              <option value={0}>⍰ Service…</option>
+            <select value={serviceTypeId} onChange={e => setServiceTypeId(e.target.value)} title="Type of service" style={{ ...pillBtn(D, T), border: serviceTypeId ? `1px solid ${T.accent.base}` : pillBtn(D, T).border, color: serviceTypeId ? T.accent.text : D.chipText, appearance: 'none', cursor: 'pointer', paddingRight: 12 } as React.CSSProperties}>
+              <option value="">⍰ Service…</option>
               {serviceTypes.map((s: any) => <option key={s.id} value={s.id}>{s.name}{s.packing_charge ? ` (+${s.packing_charge_type === 'percentage' ? s.packing_charge + '%' : '$' + s.packing_charge})` : ''}</option>)}
             </select>
           )}

@@ -2861,11 +2861,24 @@ const API: any = {
     },
   },
   serviceType: {
-    // No /api/v1 backend or admin UI yet — return none in real mode so the POS
-    // service-type selector simply hides instead of hitting a dead endpoint.
-    async list() { if (REAL_MODE) return []; return (await transport('GET', '/connector/api/types-of-service')).data; },
-    async create(body: any) { if (REAL_MODE) throw new ApiError(501, 'Service types aren’t configurable yet.'); return (await transport('POST', '/connector/api/types-of-service', { body })).data; },
-    async remove(id: any) { if (REAL_MODE) throw new ApiError(501, 'Service types aren’t configurable yet.'); return (await transport('DELETE', '/connector/api/types-of-service/' + id)).data; },
+    // /api/v1/service-types is gated by the restaurant module → 404/403 falls
+    // back to an empty list so the POS selector simply hides when unavailable.
+    async list(opts: any = {}) {
+      if (REAL_MODE) { try { return await realReq('GET', '/service-types', { query: opts.all ? { all: 1 } : undefined }); } catch (e) { return []; } }
+      return (await transport('GET', '/connector/api/types-of-service')).data;
+    },
+    async create(body: any) {
+      if (REAL_MODE) return await realReq('POST', '/service-types', { body: { name: body.name, packing_charge: Number(body.packing_charge || 0), packing_charge_type: body.packing_charge_type || 'fixed' } });
+      return (await transport('POST', '/connector/api/types-of-service', { body })).data;
+    },
+    async update(id: any, body: any) {
+      if (REAL_MODE) return await realReq('PUT', '/service-types/' + id, { body });
+      return (await transport('PUT', '/connector/api/types-of-service/' + id, { body })).data;
+    },
+    async remove(id: any) {
+      if (REAL_MODE) return await realReq('DELETE', '/service-types/' + id);
+      return (await transport('DELETE', '/connector/api/types-of-service/' + id)).data;
+    },
   },
   module: {
     async list() {
