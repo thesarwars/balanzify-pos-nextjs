@@ -307,6 +307,7 @@ model Business {
   brands             Brand[]
   variationTemplates VariationTemplate[]
   discounts          Discount[]
+  priceGroups        PriceGroup[]
 
   // ── Module licensing: which products this business has enabled ──
   // Each module is sellable as a separate product (pos, inventory, hotel,
@@ -431,6 +432,20 @@ model CustomerGroup {
 
   @@unique([businessId, name])
   @@map("customer_groups")
+}
+
+model PriceGroup {
+  id         String   @id @default(uuid()) @db.Uuid
+  businessId String   @map("business_id") @db.Uuid
+  name       String   @db.VarChar(255)
+  percent    Decimal  @default(0) @db.Decimal(6, 2)
+  isDefault  Boolean  @default(false) @map("is_default")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, name])
+  @@map("price_groups")
 }
 
 model PaymentAccount {
