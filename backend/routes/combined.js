@@ -9,6 +9,7 @@ const {
   TaskSchema, CommentSchema, ProjectSchema, MilestoneSchema,
   CreateUserSchema, UpdateUserSchema,
   SettingsSchema, CategorySchema, LocationSchema, CustomerSchema,
+  ExpenseSchema, ExpenseCategorySchema,
 } = require('../validation/schemas');
 const { trackLogin } = require('../lib/metrics');
 
@@ -950,8 +951,77 @@ notificationsRouter.put('/read-all', auth, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// ── EXPENSES ──────────────────────────────────────────────────────────────────
+const expensesRouter = express.Router();
+
+expensesRouter.get('/', auth, async (req, res, next) => {
+  try {
+    const expenses = await prisma.expense.findMany({
+      where: { businessId: req.user.business_id },
+      include: { category: { select: { name: true } }, location: { select: { name: true } } },
+      orderBy: { expenseDate: 'desc' },
+    });
+    res.json({ expenses });
+  } catch (err) { next(err); }
+});
+
+expensesRouter.post('/', auth, validate(ExpenseSchema), async (req, res, next) => {
+  try {
+    const { category_id, location_id, amount, date, payment_status, expense_for, note, is_refund } = req.body;
+    const expense = await prisma.expense.create({
+      data: {
+        businessId: req.user.business_id,
+        categoryId: category_id || null,
+        locationId: location_id || null,
+        expenseNumber: `EXP-${Date.now()}`,
+        amount,
+        paymentStatus: payment_status || 'paid',
+        expenseFor: expense_for || null,
+        note: note || null,
+        isRefund: is_refund || false,
+        expenseDate: date ? new Date(date) : new Date(),
+        createdById: req.user.id,
+      },
+      include: { category: { select: { name: true } }, location: { select: { name: true } } },
+    });
+    res.status(201).json(expense);
+  } catch (err) { next(err); }
+});
+
+expensesRouter.delete('/:id', auth, requireRole('owner', 'manager'), async (req, res, next) => {
+  try {
+    const exp = await prisma.expense.findFirst({ where: { id: req.params.id, businessId: req.user.business_id } });
+    if (!exp) return res.status(404).json({ title: 'Not found', status: 404 });
+    await prisma.expense.delete({ where: { id: req.params.id } });
+    res.json({ message: 'Expense deleted.' });
+  } catch (err) { next(err); }
+});
+
+const expenseCategoriesRouter = express.Router();
+
+expenseCategoriesRouter.get('/', auth, async (req, res, next) => {
+  try {
+    const categories = await prisma.expenseCategory.findMany({
+      where: { businessId: req.user.business_id }, orderBy: { name: 'asc' },
+    });
+    res.json({ categories });
+  } catch (err) { next(err); }
+});
+
+expenseCategoriesRouter.post('/', auth, requireRole('owner', 'manager'), validate(ExpenseCategorySchema), async (req, res, next) => {
+  try {
+    const category = await prisma.expenseCategory.upsert({
+      where: { businessId_name: { businessId: req.user.business_id, name: req.body.name } },
+      create: { businessId: req.user.business_id, name: req.body.name },
+      update: {},
+    });
+    res.status(201).json(category);
+  } catch (err) { next(err); }
+});
+
 module.exports = {
   suppliersRouter, stockRouter, tasksRouter, projectsRouter,
   reportsRouter, usersRouter, categoriesRouter, locationsRouter,
   customersRouter, settingsRouter, notificationsRouter,
+  expensesRouter, expenseCategoriesRouter,
 };

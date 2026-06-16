@@ -2102,6 +2102,37 @@ function toRealLocationBody(f: any): any {
   return body;
 }
 
+// ── Expenses (/api/v1/expenses, /api/v1/expense-categories) ───────────────────
+function adaptRealExpense(e: any): any {
+  if (!e) return e;
+  return {
+    id: e.id,
+    ref: e.expenseNumber || ('EXP-' + String(e.id || '').replace(/-/g, '').slice(0, 6).toUpperCase()),
+    category_id: e.categoryId, category_name: (e.category && e.category.name) || '—',
+    location_id: e.locationId, location_name: (e.location && e.location.name) || '—',
+    account_name: '—',
+    expense_for: e.expenseFor || '',
+    amount: Number(e.amount || 0),
+    payment_status: e.paymentStatus || 'paid',
+    is_refund: !!e.isRefund,
+    note: e.note || '',
+    date: e.expenseDate ? String(e.expenseDate).slice(0, 10) : '',
+    _real: e,
+  };
+}
+function toRealExpenseBody(f: any): any {
+  return {
+    category_id: isUuid(f.category_id) ? f.category_id : undefined,
+    location_id: isUuid(f.location_id) ? f.location_id : undefined,
+    amount: Number(f.amount || 0),
+    date: (typeof f.date === 'string' && f.date) || undefined,
+    payment_status: f.payment_status === 'due' ? 'due' : 'paid',
+    expense_for: f.expense_for || undefined,
+    note: f.note || undefined,
+    is_refund: !!f.is_refund,
+  };
+}
+
 // ── Stock adjustments (/api/v1/stock/adjustments) ─────────────────────────────
 // The backend stores one row per product; the screen models a multi-line
 // adjustment. We surface each backend row as a single-line adjustment and split
@@ -2640,11 +2671,32 @@ const API: any = {
     },
   },
   expense: {
-    async list() { return (await transport('GET', '/connector/api/expense')).data; },
-    async categories() { return (await transport('GET', '/connector/api/expense-category')).data; },
-    async addCategory(body: any) { return (await transport('POST', '/connector/api/expense-category', { body })).data; },
-    async create(body: any) { return (await transport('POST', '/connector/api/expense', { body })).data; },
-    async remove(id: any) { return (await transport('DELETE', '/connector/api/expense/' + id)).data; },
+    async list() {
+      if (REAL_MODE) {
+        const res = await realReq('GET', '/expenses');
+        return ((res && (res.expenses || res.data)) || []).map(adaptRealExpense);
+      }
+      return (await transport('GET', '/connector/api/expense')).data;
+    },
+    async categories() {
+      if (REAL_MODE) {
+        const res = await realReq('GET', '/expense-categories');
+        return ((res && (res.categories || res.data)) || []).map((c: any) => ({ id: c.id, name: c.name }));
+      }
+      return (await transport('GET', '/connector/api/expense-category')).data;
+    },
+    async addCategory(body: any) {
+      if (REAL_MODE) return await realReq('POST', '/expense-categories', { body: { name: body.name } });
+      return (await transport('POST', '/connector/api/expense-category', { body })).data;
+    },
+    async create(body: any) {
+      if (REAL_MODE) return adaptRealExpense(await realReq('POST', '/expenses', { body: toRealExpenseBody(body) }));
+      return (await transport('POST', '/connector/api/expense', { body })).data;
+    },
+    async remove(id: any) {
+      if (REAL_MODE) return await realReq('DELETE', '/expenses/' + id);
+      return (await transport('DELETE', '/connector/api/expense/' + id)).data;
+    },
   },
   paymentAccount: {
     async list() { return (await transport('GET', '/connector/api/payment-account')).data; },
