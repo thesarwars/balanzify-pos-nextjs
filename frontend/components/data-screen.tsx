@@ -273,6 +273,19 @@ export function Reports({ T }: { T: Theme }) {
   // Deterministic per-category value (not Math.random) to avoid SSR/client hydration mismatch.
   const byCat = React.useMemo(() => CATEGORIES.filter((c: any) => c.id !== 'all').map((c: any, i: number) => ({ name: c.name, val: Math.round(200 + (((i * 2654435761) % 100) / 100) * 1400) })), []);
   const max = Math.max(...byCat.map((c: any) => c.val));
+  // Live month-to-date KPIs in real mode; seed values are the fallback.
+  const [ov, setOv] = useStateD<any>(null);
+  React.useEffect(() => {
+    const now = new Date();
+    const from = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
+    Promise.all([API.report.profit({ from }), API.report.dashboard()])
+      .then(([p, d]: any[]) => setOv({ summary: p && p.summary, top: d && d.topProducts }))
+      .catch(() => {});
+  }, []);
+  const ovStats: any[] = ov && ov.summary
+    ? [['Revenue', money0(ov.summary.revenue)], ['Gross profit', money0(ov.summary.gross_profit)], ['Transactions', String(ov.summary.transactions)], ['Avg. margin', Math.round(ov.summary.gross_margin_pct || 0) + '%']]
+    : [['Revenue', money0(DASH.salesMonth)], ['Gross profit', money0(DASH.salesMonth * 0.34)], ['Transactions', '2,140'], ['Avg. margin', '34%']];
+  const ovTop: any[] = (ov && Array.isArray(ov.top) && ov.top.length) ? ov.top : DASH.topProducts;
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: T.paperAlt }}>
       <Topbar T={T} title="Reports" subtitle="Performance overview · This month"
@@ -287,7 +300,7 @@ export function Reports({ T }: { T: Theme }) {
 
           {tab === 'overview' && (
             <>
-              <StatStrip T={T} stats={[['Revenue', money0(DASH.salesMonth)], ['Gross profit', money0(DASH.salesMonth * 0.34)], ['Transactions', '2,140'], ['Avg. margin', '34%']]} />
+              <StatStrip T={T} stats={ovStats} />
               <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: 16 }}>
                 <Panel T={T} title="Revenue by Category">
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -306,7 +319,7 @@ export function Reports({ T }: { T: Theme }) {
                 </Panel>
                 <Panel T={T} title="Top Products" pad={false}>
                   <div style={{ padding: '6px 0' }}>
-                    {DASH.topProducts.map((p: any, i: number) => (
+                    {ovTop.map((p: any, i: number) => (
                       <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 20px' }}>
                         <span style={{ width: 22, height: 22, borderRadius: 6, background: i === 0 ? T.accent.soft : T.paperSink, color: i === 0 ? T.accent.text : T.inkSub, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 800, fontFamily: T.fMono }}>{i + 1}</span>
                         <span style={{ flex: 1, fontSize: 13, color: T.ink }}>{p.name}</span>
