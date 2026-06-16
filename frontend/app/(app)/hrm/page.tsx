@@ -616,7 +616,7 @@ function PayrollModal({ T, emps, onClose, onSaved }: { T: any; emps: any[]; onCl
   const [f, setF] = useStateHr<any>({ employee_id: (emps[0] || {}).id || '', month: new Date().toISOString().slice(0, 7), basic: '', allowance: '', overtime: '', bonus: '', incentive: '', deduction: '' });
   const [busy, setBusy] = useStateHr(false);
   const set = (k: string, v: any) => setF((s: any) => ({ ...s, [k]: v }));
-  const emp = emps.find((e: any) => e.id === Number(f.employee_id));
+  const emp = emps.find((e: any) => String(e.id) === String(f.employee_id));
   const [advance, setAdvance] = useStateHr<any>(0);
   const [summary, setSummary] = useStateHr<any>(null);
   React.useEffect(() => { if (emp && !f.basic) set('basic', String(emp.salary)); }, [f.employee_id]);
@@ -627,7 +627,7 @@ function PayrollModal({ T, emps, onClose, onSaved }: { T: any; emps: any[]; onCl
     <Modal T={T} title="Run payroll" width={500} onClose={onClose}
       footer={<><div style={{ flex: 1, fontSize: 13, color: T.inkSub }}>Net <b style={{ color: T.ink, fontFamily: T.fMono, marginLeft: 6 }}>{money(net)}</b></div><Btn T={T} kind="ghost" onClick={onClose}>Cancel</Btn><Btn T={T} kind="accent" onClick={async () => { setBusy(true); try { await API.hrm.addPayroll(f); onSaved(); } finally { setBusy(false); } }} disabled={busy}>{busy ? 'Saving…' : 'Pay'}</Btn></>}>
       <FormGrid>
-        <Field T={T} label="Employee" full><SelectField T={T} value={String(f.employee_id)} options={emps.map((e: any) => String(e.id))} onChange={v => set('employee_id', Number(v))} render={v => (emps.find((e: any) => String(e.id) === v) || {}).name} /></Field>
+        <Field T={T} label="Employee" full><SelectField T={T} value={String(f.employee_id)} options={emps.map((e: any) => String(e.id))} onChange={v => set('employee_id', /^\d+$/.test(String(v)) ? Number(v) : v)} render={v => (emps.find((e: any) => String(e.id) === v) || {}).name} /></Field>
         <Field T={T} label="Month"><TextField T={T} value={f.month} onChange={v => set('month', v)} placeholder="2024-11" /></Field>
         <Field T={T} label="Basic"><TextField T={T} type="number" value={f.basic} onChange={v => set('basic', v)} /></Field>
         <Field T={T} label="Allowance"><TextField T={T} type="number" value={f.allowance} onChange={v => set('allowance', v)} placeholder="0" /></Field>

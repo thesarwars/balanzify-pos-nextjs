@@ -380,6 +380,25 @@ const HrTodoSchema = z.object({
   due:         isoDate,
 });
 const StatusSchema = z.object({ status: z.string().trim().min(1).max(20) });
+const PayrollSchema = z.object({
+  employee_id: uuid,
+  month:       z.string().regex(/^\d{4}-\d{2}$/, 'Use YYYY-MM'),
+  basic:       money.default(0),
+  allowance:   money.default(0),
+  overtime:    money.default(0),
+  bonus:       money.default(0),
+  incentive:   money.default(0),
+  deduction:   money.default(0),
+});
+const PayslipSettingsSchema = z.object({
+  show_attendance:          z.coerce.boolean().optional(),
+  show_overtime:            z.coerce.boolean().optional(),
+  show_leave:               z.coerce.boolean().optional(),
+  show_advance:             z.coerce.boolean().optional(),
+  show_bonus:               z.coerce.boolean().optional(),
+  show_incentive:           z.coerce.boolean().optional(),
+  show_deduction_breakdown: z.coerce.boolean().optional(),
+});
 
 // ── Settings ──────────────────────────────────────────────────────────────────
 const SettingsSchema = z.object({
@@ -695,6 +714,7 @@ module.exports = {
   EmployeeSchema, OrgUnitSchema, HrmSettingsSchema, EmployeeShiftSchema, AttendanceClockSchema,
   LeaveTypeSchema, LeaveTypeUpdateSchema, LeaveSchema, LeaveStatusSchema, LeaveOverrideSchema,
   RosterShiftSchema, RosterSwapSchema, HrAdvanceSchema, HrTodoSchema, StatusSchema,
+  PayrollSchema, PayslipSettingsSchema,
   PaginationSchema, ProductVariantSchema,
   CouponSchema, ApplyCouponSchema, LoyaltyRuleSchema, PettyCashSchema,
   BundleSchema, ScheduledReportSchema, CustomerSegmentSchema,

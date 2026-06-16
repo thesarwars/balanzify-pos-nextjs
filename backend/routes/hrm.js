@@ -8,7 +8,8 @@ const { auth, requireRole } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { EmployeeSchema, OrgUnitSchema, HrmSettingsSchema, EmployeeShiftSchema, AttendanceClockSchema,
   LeaveTypeSchema, LeaveTypeUpdateSchema, LeaveSchema, LeaveStatusSchema, LeaveOverrideSchema,
-  RosterShiftSchema, RosterSwapSchema, HrAdvanceSchema, HrTodoSchema, StatusSchema } = require('../validation/schemas');
+  RosterShiftSchema, RosterSwapSchema, HrAdvanceSchema, HrTodoSchema, StatusSchema,
+  PayrollSchema, PayslipSettingsSchema } = require('../validation/schemas');
 
 const router = express.Router();
 
@@ -54,15 +55,15 @@ async function employeeSales(businessId, userId, pct) {
 router.get('/summary', auth, async (req, res, next) => {
   try {
     const businessId = req.user.business_id;
-    const [employees, onLeave, present, pendingLeave, openTodos] = await Promise.all([
+    const [employees, onLeave, present, pendingLeave, openTodos, payroll] = await Promise.all([
       prisma.employee.count({ where: { businessId } }),
       prisma.employee.count({ where: { businessId, status: 'on_leave' } }),
       prisma.attendance.count({ where: { businessId, date: new Date(serverDate()), clockIn: { not: null } } }),
       prisma.leave.count({ where: { businessId, status: 'pending' } }),
       prisma.hrTodo.count({ where: { businessId, status: 'pending' } }),
+      prisma.payroll.aggregate({ where: { businessId, status: 'paid' }, _sum: { net: true } }),
     ]);
-    // payroll total arrives in HRM phase 5.
-    res.json({ employees, present, on_leave: onLeave, pending_leave: pendingLeave, payroll: 0, open_todos: openTodos });
+    res.json({ employees, present, on_leave: onLeave, pending_leave: pendingLeave, payroll: parseFloat(payroll._sum.net || 0), open_todos: openTodos });
   } catch (err) { next(err); }
 });
 
@@ -763,6 +764,123 @@ router.put('/todo/:id', auth, validate(StatusSchema), async (req, res, next) => 
     if (!t) return res.status(404).json({ title: 'Not found', status: 404 });
     const updated = await prisma.hrTodo.update({ where: { id: req.params.id }, data: { status: req.body.status }, include: { assignee: { select: { name: true } } } });
     res.json(serializeTodo(updated));
+  } catch (err) { next(err); }
+});
+
+// ── Payroll & payslip ────────────────────────────────────────────────────────────
+function serializePayroll(p) {
+  return {
+    id: p.id, employee_id: p.employeeId, employee_name: p.employee?.name || '—', month: p.month,
+    basic: parseFloat(p.basic || 0), allowance: parseFloat(p.allowance || 0), overtime: parseFloat(p.overtime || 0),
+    bonus: parseFloat(p.bonus || 0), incentive: parseFloat(p.incentive || 0), deduction: parseFloat(p.deduction || 0),
+    advance_recovered: parseFloat(p.advanceRecovered || 0), net: parseFloat(p.net || 0), status: p.status,
+  };
+}
+
+router.get('/payroll', auth, async (req, res, next) => {
+  try {
+    const rows = await prisma.payroll.findMany({ where: { businessId: req.user.business_id }, include: { employee: { select: { name: true } } }, orderBy: { createdAt: 'desc' } });
+    res.json(rows.map(serializePayroll));
+  } catch (err) { next(err); }
+});
+
+router.post('/payroll', auth, requireRole('owner', 'manager'), validate(PayrollSchema), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id, b = req.body;
+    const emp = await prisma.employee.findFirst({ where: { id: b.employee_id, businessId }, select: { id: true, name: true } });
+    if (!emp) return res.status(404).json({ title: 'Employee not found', status: 404 });
+    const net = b.basic + b.allowance + b.overtime + b.bonus + b.incentive - b.deduction;
+
+    const payroll = await prisma.$transaction(async (tx) => {
+      // Recover outstanding advances from the deduction (oldest first).
+      let remaining = b.deduction, recovered = 0;
+      if (remaining > 0) {
+        const advances = await tx.hrAdvance.findMany({ where: { businessId, employeeId: emp.id, status: 'outstanding' }, orderBy: { createdAt: 'asc' } });
+        for (const adv of advances) {
+          if (remaining <= 0) break;
+          const out = parseFloat(adv.outstanding);
+          const take = Math.min(out, remaining);
+          const newOut = +(out - take).toFixed(2);
+          await tx.hrAdvance.update({ where: { id: adv.id }, data: { outstanding: newOut, status: newOut <= 0.001 ? 'settled' : 'outstanding' } });
+          remaining = +(remaining - take).toFixed(2);
+          recovered += take;
+        }
+      }
+      return tx.payroll.create({
+        data: { businessId, employeeId: emp.id, month: b.month, basic: b.basic, allowance: b.allowance, overtime: b.overtime, bonus: b.bonus, incentive: b.incentive, deduction: b.deduction, advanceRecovered: +recovered.toFixed(2), net, status: 'paid' },
+        include: { employee: { select: { name: true } } },
+      });
+    });
+    res.status(201).json(serializePayroll(payroll));
+  } catch (err) { next(err); }
+});
+
+router.get('/payslip/:id', auth, async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const p = await prisma.payroll.findFirst({
+      where: { id: req.params.id, businessId },
+      include: { employee: { include: { location: { select: { name: true } } } } },
+    });
+    if (!p) return res.status(404).json({ title: 'Not found', status: 404 });
+    const emp = p.employee;
+    const settings = await loadSettings(businessId);
+    const { m, start, end } = monthRange(p.month);
+    settings._month = m;
+    const [records, leaves] = await Promise.all([
+      prisma.attendance.findMany({ where: { businessId, employeeId: emp.id, date: { gte: start, lt: end } } }),
+      prisma.leave.findMany({ where: { businessId, employeeId: emp.id, status: 'approved' } }),
+    ]);
+    const att = await buildSummary({ id: emp.id, name: emp.name, salary: emp.salary }, records, settings);
+    res.json({
+      employee: { name: emp.name, designation: emp.designation || '', department: emp.department || '', location: emp.location?.name || '' },
+      month: p.month,
+      earnings: { basic: parseFloat(p.basic), allowance: parseFloat(p.allowance), overtime: parseFloat(p.overtime), bonus: parseFloat(p.bonus), incentive: parseFloat(p.incentive) },
+      deductions: { total: parseFloat(p.deduction), late: att.late_deduction, absent: att.absent_deduction, advance_recovered: parseFloat(p.advanceRecovered) },
+      attendance: { days_worked: att.days_worked, total_hours: att.total_hours, overtime_hours: att.overtime_hours, present: att.present, late: att.late, absent: att.absent },
+      leave: leaves.map(l => ({ type: l.type, days: l.days, from: l.fromDate.toISOString().slice(0, 10), to: l.toDate.toISOString().slice(0, 10) })),
+      net: parseFloat(p.net), status: p.status,
+      settings: {
+        show_attendance: settings.showAttendance, show_overtime: settings.showOvertime, show_leave: settings.showLeave,
+        show_advance: settings.showAdvance, show_bonus: settings.showBonus, show_incentive: settings.showIncentive,
+        show_deduction_breakdown: settings.showDeductionBreakdown,
+      },
+    });
+  } catch (err) { next(err); }
+});
+
+router.get('/payslip-settings', auth, async (req, res, next) => {
+  try {
+    const s = await loadSettings(req.user.business_id);
+    res.json({
+      show_attendance: s.showAttendance, show_overtime: s.showOvertime, show_leave: s.showLeave,
+      show_advance: s.showAdvance, show_bonus: s.showBonus, show_incentive: s.showIncentive,
+      show_deduction_breakdown: s.showDeductionBreakdown,
+    });
+  } catch (err) { next(err); }
+});
+
+router.put('/payslip-settings', auth, requireRole('owner', 'manager'), validate(PayslipSettingsSchema), async (req, res, next) => {
+  try {
+    await loadSettings(req.user.business_id);
+    const b = req.body;
+    const s = await prisma.hrmSettings.update({
+      where: { businessId: req.user.business_id },
+      data: {
+        ...(b.show_attendance !== undefined && { showAttendance: b.show_attendance }),
+        ...(b.show_overtime !== undefined && { showOvertime: b.show_overtime }),
+        ...(b.show_leave !== undefined && { showLeave: b.show_leave }),
+        ...(b.show_advance !== undefined && { showAdvance: b.show_advance }),
+        ...(b.show_bonus !== undefined && { showBonus: b.show_bonus }),
+        ...(b.show_incentive !== undefined && { showIncentive: b.show_incentive }),
+        ...(b.show_deduction_breakdown !== undefined && { showDeductionBreakdown: b.show_deduction_breakdown }),
+      },
+    });
+    res.json({
+      show_attendance: s.showAttendance, show_overtime: s.showOvertime, show_leave: s.showLeave,
+      show_advance: s.showAdvance, show_bonus: s.showBonus, show_incentive: s.showIncentive,
+      show_deduction_breakdown: s.showDeductionBreakdown,
+    });
   } catch (err) { next(err); }
 });
 
