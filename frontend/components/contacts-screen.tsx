@@ -47,7 +47,7 @@ export function Contacts({ T, kind }: { T: Theme; kind: 'customer' | 'supplier' 
     : [['Suppliers', rows.length], ['With balance due', withDue], ['Total payable', money(totalDue)]];
 
   async function doDelete(c: any) {
-    try { await API.contact.remove(c.id); setConfirmDel(null); if (sel && sel.id === c.id) setSel(null); toast(noun + ' deleted'); reload(); }
+    try { await API.contact.remove(c.id, c); setConfirmDel(null); if (sel && sel.id === c.id) setSel(null); toast(noun + ' deleted'); reload(); }
     catch (ex: any) { setConfirmDel(null); toast(ex.message || 'Delete failed'); }
   }
 

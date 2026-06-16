@@ -1903,6 +1903,180 @@ function realRegister(s: any): any {
   };
 }
 
+// ── Tax rates (/api/v1/tax/rates) → UI {id, name, amount} ──────────────────────
+// Backend stores rate as a 0–1 fraction (0.16); screens show whole percent (16).
+function adaptRealTaxRate(t: any): any {
+  return {
+    id: t.id, name: t.name,
+    amount: Number(t.rate || 0) * 100,
+    is_default: !!t.isDefault, is_inclusive: !!t.isInclusive,
+    product_count: (t._count && t._count.products) || 0,
+    _real: t,
+  };
+}
+
+// ── Modules: overlay the backend's enabled flags onto the local catalog so the
+//   modules screen keeps its icons/group/price while reflecting real state. ─────
+function adaptRealModules(catalog: any[]): any[] {
+  const on = new Set((catalog || []).filter((m: any) => m.enabled).map((m: any) => m.key));
+  return MODULES.map((m: any) => ({ ...m, enabled: on.has(m.key) }));
+}
+
+// ── Purchase orders (/api/v1/purchase-orders) → UI view-model ──────────────────
+function adaptRealPO(o: any): any {
+  if (!o) return o;
+  const lines = Array.isArray(o.items) ? o.items.map((it: any) => ({
+    product_id: it.productId, product_name: (it.product && it.product.name) || '',
+    qty: Number(it.orderedQty || 0), unit_cost: Number(it.unitPrice || 0),
+  })) : [];
+  return {
+    id: o.id, ref: o.poNumber,
+    supplier_id: o.supplierId, party_name: (o.supplier && o.supplier.name) || '—',
+    location_id: o.locationId, location_name: (o.location && o.location.name) || '—',
+    date: o.createdAt ? String(o.createdAt).slice(0, 10) : '',
+    status: o.status,
+    item_count: (o._count && o._count.items) != null ? o._count.items : lines.length,
+    total: Number(o.totalAmount || 0),
+    lines,
+    _real: o,
+  };
+}
+function toRealPOBody(b: any): any {
+  return {
+    supplier_id: b.supplier_id,
+    location_id: isUuid(b.location_id) ? b.location_id : undefined,
+    expected_delivery: (typeof b.expected_delivery === 'string' && b.expected_delivery) || (typeof b.date === 'string' && b.date) || undefined,
+    notes: b.notes || undefined,
+    items: (b.lines || []).map((l: any) => ({
+      product_id: l.product_id,
+      ordered_qty: Number(l.qty || 1),
+      unit_price: Number(l.unit_cost || 0),
+    })),
+  };
+}
+
+// ── Stock transfers (/api/v1/stock/transfers) → UI view-model ──────────────────
+function adaptRealTransfer(t: any): any {
+  if (!t) return t;
+  const lines = Array.isArray(t.items) ? t.items.map((it: any) => ({
+    product_id: it.productId, product_name: (it.product && it.product.name) || '',
+    qty: Number(it.requestedQty != null ? it.requestedQty : (it.dispatchedQty || 0)),
+    unit_cost: Number((it.product && it.product.costPrice) || 0),
+  })) : [];
+  return {
+    id: t.id, ref: t.transferNumber,
+    from_location_id: t.fromLocationId, from_name: (t.fromLocation && t.fromLocation.name) || '—',
+    to_location_id: t.toLocationId, to_name: (t.toLocation && t.toLocation.name) || '—',
+    date: t.createdAt ? String(t.createdAt).slice(0, 10) : '',
+    status: t.status,
+    item_count: lines.reduce((n: number, l: any) => n + l.qty, 0),
+    total_value: lines.reduce((s: number, l: any) => s + l.qty * l.unit_cost, 0),
+    lines,
+    _real: t,
+  };
+}
+function toRealTransferBody(b: any): any {
+  return {
+    from_location_id: b.from_location_id,
+    to_location_id: b.to_location_id,
+    notes: b.notes || undefined,
+    items: (b.lines || []).map((l: any) => ({ product_id: l.product_id, qty: Number(l.qty || 1) })),
+  };
+}
+
+// ── Contacts: customers (/api/v1/customers) + suppliers (/api/v1/suppliers) ─────
+// The contacts screen is one kind-driven view; `type` routes to the right table.
+function adaptRealCustomer(c: any): any {
+  if (!c) return c;
+  return {
+    id: c.id, name: c.name, type: 'customer',
+    contact_id: 'CUS-' + String(c.id || '').replace(/-/g, '').slice(0, 6).toUpperCase(),
+    mobile: c.phone || '', email: c.email || '', address: c.address || '',
+    loyalty_points: c.loyaltyPoints || 0,
+    credit_limit: Number(c.creditLimit || 0),
+    due: Number(c.outstandingBalance || 0),
+    total_sale: 0, total_purchase: 0, opening_balance: 0, advance_balance: 0,
+    _real: c,
+  };
+}
+function toRealCustomerBody(f: any): any {
+  return {
+    name: f.name,
+    phone: f.mobile || undefined,
+    email: f.email || undefined,
+    address: f.address || undefined,
+    credit_limit: f.credit_limit ? Number(f.credit_limit) : 0,
+  };
+}
+function adaptRealSupplier(s: any): any {
+  if (!s) return s;
+  return {
+    id: s.id, name: s.name, type: 'supplier',
+    contact_id: 'SUP-' + String(s.id || '').replace(/-/g, '').slice(0, 6).toUpperCase(),
+    mobile: s.phone || s.whatsapp || '', email: s.email || '', address: s.address || '',
+    tax_number: '',
+    pay_term_number: s.paymentTerms || '', pay_term_type: 'days',
+    credit_limit: Number(s.creditLimit || 0),
+    due: Number(s.outstandingBalance || 0),
+    total_sale: 0, total_purchase: 0, opening_balance: 0, advance_balance: 0,
+    po_count: (s._count && s._count.purchaseOrders) || 0,
+    _real: s,
+  };
+}
+function toRealSupplierBody(f: any): any {
+  return {
+    name: f.name,
+    phone: f.mobile || undefined,
+    email: f.email || undefined,
+    address: f.address || undefined,
+    payment_terms: f.pay_term_number ? Number(f.pay_term_number) : 0,
+    credit_limit: f.credit_limit ? Number(f.credit_limit) : 0,
+  };
+}
+
+// ── Users & roles (/api/v1/users) ──────────────────────────────────────────────
+// The backend has no roles table — just a fixed `role` enum on each user. We
+// surface those four as synthetic numeric-id "roles" so the users screen's
+// role picker keeps working, and translate role_id ↔ enum on read/write.
+const REAL_ROLES: any[] = [
+  { id: 1, key: 'owner',     name: 'Owner' },
+  { id: 2, key: 'manager',   name: 'Manager' },
+  { id: 3, key: 'cashier',   name: 'Cashier' },
+  { id: 4, key: 'warehouse', name: 'Warehouse' },
+];
+const roleKeyById = (id: any) => (REAL_ROLES.find((r: any) => r.id === Number(id)) || {}).key || 'cashier';
+const roleByKey = (key: any) => REAL_ROLES.find((r: any) => r.key === key) || REAL_ROLES[2];
+function adaptRealUser(u: any): any {
+  if (!u) return u;
+  const r = roleByKey(u.role);
+  return {
+    id: u.id, name: u.name, email: u.email,
+    username: u.email ? String(u.email).split('@')[0] : '',  // backend has no username
+    allow_login: true,
+    role_id: r.id, role_name: r.name,
+    is_active: u.isActive !== false,
+    locations: [], location_access: 'all',
+    max_discount: null, commission_percent: 0,
+    last_login: u.lastLogin ? String(u.lastLogin).slice(0, 10) : '',
+    _real: u,
+  };
+}
+function toRealCreateUserBody(f: any): any {
+  return {
+    name: f.name,
+    email: f.email,
+    password: f.password,
+    role: roleKeyById(f.role_id),
+  };
+}
+function toRealUpdateUserBody(f: any): any {
+  return {
+    name: f.name,
+    role: roleKeyById(f.role_id),
+    is_active: f.is_active !== false,
+  };
+}
+
 // ═══════════════════════════════════════════════════════════════════
 //  PUBLIC API  —  what every screen imports.
 //  One method per endpoint; the name says which URL it hits.
@@ -2019,8 +2193,16 @@ const API: any = {
     async remove(id: any) { return (await transport('DELETE', '/connector/api/variation/' + id)).data; },
   },
   taxRate: {
-    async list() { return (await transport('GET', '/connector/api/tax')).data; },
-    async groups() { return (await transport('GET', '/connector/api/tax-group')).data; },
+    async list() {
+      if (REAL_MODE) {
+        const res = await realReq('GET', '/tax/rates');
+        return ((res && (res.rates || res.data)) || []).map(adaptRealTaxRate);
+      }
+      return (await transport('GET', '/connector/api/tax')).data;
+    },
+    // Tax groups have no /api/v1 equivalent yet — return none in real mode so the
+    // settings screen renders without firing a request that would 404.
+    async groups() { if (REAL_MODE) return []; return (await transport('GET', '/connector/api/tax-group')).data; },
     async createGroup(body: any) { return (await transport('POST', '/connector/api/tax-group', { body })).data; },
     async removeGroup(id: any) { return (await transport('DELETE', '/connector/api/tax-group/' + id)).data; },
   },
@@ -2120,21 +2302,64 @@ const API: any = {
   contact: {
     async list(params: any = {}) {
       if (REAL_MODE) {
+        if (params.type === 'supplier') {
+          const res = await realReq('GET', '/suppliers');
+          return ((res && (res.suppliers || res.data)) || []).map(adaptRealSupplier);
+        }
         const res = await realReq('GET', '/customers', { query: params });
-        return (res.customers || res.data || []).map((c: any) => ({
-          id: c.id, name: c.name, mobile: c.phone || '', email: c.email || '',
-          loyalty_points: c.loyaltyPoints || 0, type: 'customer',
-          credit_limit: Number(c.creditLimit || 0), outstanding: Number(c.outstandingBalance || 0), ...c,
-        }));
+        return ((res.customers || res.data) || []).map(adaptRealCustomer);
       }
       return (await transport('GET', '/connector/api/contactapi', { query: params })).data;
     },
-    async get(id: any) { return (await transport('GET', '/connector/api/contactapi/' + id)).data[0]; },
-    async create(body: any) { return (await transport('POST', '/connector/api/contactapi', { body })).data; },
-    async update(id: any, body: any) { return (await transport('PUT', '/connector/api/contactapi/' + id, { body })).data; },
-    async remove(id: any) { return (await transport('DELETE', '/connector/api/contactapi/' + id)).data; },
-    async ledger(id: any) { return (await transport('GET', '/connector/api/contact-ledger/' + id)).data; },
-    async pay(body: any) { return (await transport('POST', '/connector/api/contact-payment', { body })).data; },
+    async get(id: any) {
+      if (REAL_MODE) {
+        const res = await realReq('GET', '/customers/' + id);
+        return adaptRealCustomer((res && (res.customer || res.data)) || res);
+      }
+      return (await transport('GET', '/connector/api/contactapi/' + id)).data[0];
+    },
+    async create(body: any) {
+      if (REAL_MODE) {
+        if (body.type === 'supplier') return adaptRealSupplier(await realReq('POST', '/suppliers', { body: toRealSupplierBody(body) }));
+        return adaptRealCustomer(await realReq('POST', '/customers', { body: toRealCustomerBody(body) }));
+      }
+      return (await transport('POST', '/connector/api/contactapi', { body })).data;
+    },
+    async update(id: any, body: any) {
+      if (REAL_MODE) {
+        if (body.type === 'supplier') return adaptRealSupplier(await realReq('PUT', '/suppliers/' + id, { body: toRealSupplierBody(body) }));
+        return adaptRealCustomer(await realReq('PUT', '/customers/' + id, { body: toRealCustomerBody(body) }));
+      }
+      return (await transport('PUT', '/connector/api/contactapi/' + id, { body })).data;
+    },
+    async remove(id: any, row?: any) {
+      if (REAL_MODE) {
+        // Suppliers soft-delete via isActive; customers have no delete endpoint yet.
+        if (row && row.type === 'supplier') return await realReq('PUT', '/suppliers/' + id, { body: { is_active: false } });
+        throw new ApiError(405, 'Deleting customers isn’t supported yet.');
+      }
+      return (await transport('DELETE', '/connector/api/contactapi/' + id)).data;
+    },
+    async ledger(id: any) {
+      // No unified contact-ledger endpoint on /api/v1 yet — return an empty ledger
+      // so the contact drawer renders instead of erroring.
+      if (REAL_MODE) return { contact: null, ledger: [] };
+      return (await transport('GET', '/connector/api/contact-ledger/' + id)).data;
+    },
+    async pay(body: any) {
+      if (REAL_MODE) {
+        // Customer repayments map to the credit endpoint; supplier payments are
+        // recorded against POs, so there's no generic supplier path yet.
+        if (body.kind === 'receive' && isUuid(body.contact_id)) {
+          return await realReq('POST', '/sales/customer-payment', { body: {
+            customer_id: body.contact_id, amount: Number(body.amount),
+            payment_method: realPayMethod(body.method), notes: body.note || undefined,
+          }});
+        }
+        throw new ApiError(501, 'Recording this payment isn’t supported yet.');
+      }
+      return (await transport('POST', '/connector/api/contact-payment', { body })).data;
+    },
   },
   customerGroup: {
     async list() { return (await transport('GET', '/connector/api/customer-group')).data; },
@@ -2142,20 +2367,56 @@ const API: any = {
     async remove(id: any) { return (await transport('DELETE', '/connector/api/customer-group/' + id)).data; },
   },
   user: {
-    async list() { return (await transport('GET', '/connector/api/user')).data; },
-    async get(id: any) { return (await transport('GET', '/connector/api/user/' + id)).data[0]; },
-    async create(body: any) { return (await transport('POST', '/connector/api/user', { body })).data; },
-    async update(id: any, body: any) { return (await transport('PUT', '/connector/api/user/' + id, { body })).data; },
-    async remove(id: any) { return (await transport('DELETE', '/connector/api/user/' + id)).data; },
+    async list() {
+      if (REAL_MODE) {
+        const res = await realReq('GET', '/users');
+        return ((res && (res.users || res.data)) || []).map(adaptRealUser);
+      }
+      return (await transport('GET', '/connector/api/user')).data;
+    },
+    async get(id: any) {
+      if (REAL_MODE) {
+        // No GET /users/:id on the backend — find it in the list.
+        const res = await realReq('GET', '/users');
+        const u = ((res && (res.users || res.data)) || []).find((x: any) => x.id === id);
+        return u ? adaptRealUser(u) : null;
+      }
+      return (await transport('GET', '/connector/api/user/' + id)).data[0];
+    },
+    async create(body: any) {
+      if (REAL_MODE) return adaptRealUser(await realReq('POST', '/users', { body: toRealCreateUserBody(body) }));
+      return (await transport('POST', '/connector/api/user', { body })).data;
+    },
+    async update(id: any, body: any) {
+      if (REAL_MODE) return adaptRealUser(await realReq('PUT', '/users/' + id, { body: toRealUpdateUserBody(body) }));
+      return (await transport('PUT', '/connector/api/user/' + id, { body })).data;
+    },
+    async remove(id: any, row?: any) {
+      if (REAL_MODE) {
+        // No DELETE on the backend — deactivate instead (the PUT needs name+role).
+        return adaptRealUser(await realReq('PUT', '/users/' + id, { body: {
+          name: (row && row.name) || 'User', role: roleKeyById(row && row.role_id), is_active: false,
+        }}));
+      }
+      return (await transport('DELETE', '/connector/api/user/' + id)).data;
+    },
   },
   role: {
-    async list() { return (await transport('GET', '/connector/api/role')).data; },
-    async get(id: any) { return (await transport('GET', '/connector/api/role/' + id)).data[0]; },
-    async create(body: any) { return (await transport('POST', '/connector/api/role', { body })).data; },
-    async update(id: any, body: any) { return (await transport('PUT', '/connector/api/role/' + id, { body })).data; },
-    async remove(id: any) { return (await transport('DELETE', '/connector/api/role/' + id)).data; },
+    // The backend has fixed enum roles, not editable Role entities. Read works;
+    // create/update/remove aren't supported (kept honest rather than silently failing).
+    async list() {
+      if (REAL_MODE) return REAL_ROLES.map((r: any) => ({ id: r.id, name: r.name, location_access: 'all', permissions: [] }));
+      return (await transport('GET', '/connector/api/role')).data;
+    },
+    async get(id: any) {
+      if (REAL_MODE) { const r = REAL_ROLES.find((x: any) => x.id === Number(id)) || {}; return { ...r, location_access: 'all', permissions: [] }; }
+      return (await transport('GET', '/connector/api/role/' + id)).data[0];
+    },
+    async create(_body: any) { if (REAL_MODE) throw new ApiError(501, 'Custom roles aren’t supported yet — users use built-in roles.'); return (await transport('POST', '/connector/api/role', { body: _body })).data; },
+    async update(id: any, _body: any) { if (REAL_MODE) throw new ApiError(501, 'Built-in roles can’t be edited.'); return (await transport('PUT', '/connector/api/role/' + id, { body: _body })).data; },
+    async remove(id: any) { if (REAL_MODE) throw new ApiError(501, 'Built-in roles can’t be deleted.'); return (await transport('DELETE', '/connector/api/role/' + id)).data; },
   },
-  permissions: { async list() { return (await transport('GET', '/connector/api/permission-list')).data; } },
+  permissions: { async list() { if (REAL_MODE) return []; return (await transport('GET', '/connector/api/permission-list')).data; } },
   location: {
     async list() {
       if (REAL_MODE) {
@@ -2197,8 +2458,26 @@ const API: any = {
     async remove(id: any) { return (await transport('DELETE', '/connector/api/types-of-service/' + id)).data; },
   },
   module: {
-    async list() { return (await transport('GET', '/connector/api/module')).data; },
-    async setEnabled(key: any, enabled: any) { return (await transport('PUT', '/connector/api/module/' + key, { body: { enabled } })).data; },
+    async list() {
+      if (REAL_MODE) {
+        const res = await realReq('GET', '/modules');
+        return adaptRealModules((res && res.catalog) || []);
+      }
+      return (await transport('GET', '/connector/api/module')).data;
+    },
+    async setEnabled(key: any, enabled: any) {
+      if (REAL_MODE) {
+        // Backend PUT /modules takes the FULL enabled set, validated against its
+        // own catalog — so read current state, toggle, and send back known keys.
+        const res = await realReq('GET', '/modules');
+        const cat = (res && res.catalog) || [];
+        const cur = new Set(cat.filter((m: any) => m.enabled).map((m: any) => m.key));
+        if (cat.some((m: any) => m.key === key)) { if (enabled) cur.add(key); else cur.delete(key); }
+        await realReq('PUT', '/modules', { body: { enabledModules: [...cur] } });
+        return { key, enabled };
+      }
+      return (await transport('PUT', '/connector/api/module/' + key, { body: { enabled } })).data;
+    },
   },
   expense: {
     async list() { return (await transport('GET', '/connector/api/expense')).data; },
@@ -2381,18 +2660,58 @@ const API: any = {
     },
   },
   transfer: {
-    async list() { return (await transport('GET', '/connector/api/stock-transfer')).data; },
-    async get(id: any) { return (await transport('GET', '/connector/api/stock-transfer/' + id)).data[0]; },
-    async create(body: any) { return (await transport('POST', '/connector/api/stock-transfer', { body })).data; },
-    async setStatus(id: any, status: any) { return (await transport('PUT', '/connector/api/stock-transfer/' + id + '/status', { body: { status } })).data; },
-    async remove(id: any) { return (await transport('DELETE', '/connector/api/stock-transfer/' + id)).data; },
+    async list() {
+      if (REAL_MODE) {
+        const res = await realReq('GET', '/stock/transfers');
+        return (Array.isArray(res) ? res : (res.transfers || res.data || [])).map(adaptRealTransfer);
+      }
+      return (await transport('GET', '/connector/api/stock-transfer')).data;
+    },
+    async get(id: any) {
+      if (REAL_MODE) return adaptRealTransfer(await realReq('GET', '/stock/transfers/' + id));
+      return (await transport('GET', '/connector/api/stock-transfer/' + id)).data[0];
+    },
+    async create(body: any) {
+      if (REAL_MODE) return adaptRealTransfer(await realReq('POST', '/stock/transfers', { body: toRealTransferBody(body) }));
+      return (await transport('POST', '/connector/api/stock-transfer', { body })).data;
+    },
+    async setStatus(id: any, status: any) {
+      // The backend moves stock the moment a transfer is created (status 'received')
+      // and exposes no status-transition endpoint — treat as a no-op in real mode.
+      if (REAL_MODE) return { id, status };
+      return (await transport('PUT', '/connector/api/stock-transfer/' + id + '/status', { body: { status } })).data;
+    },
+    async remove(id: any) {
+      if (REAL_MODE) return await realReq('DELETE', '/stock/transfers/' + id);
+      return (await transport('DELETE', '/connector/api/stock-transfer/' + id)).data;
+    },
   },
   purchaseOrder: {
-    async list() { return (await transport('GET', '/connector/api/purchase-order')).data; },
-    async get(id: any) { return (await transport('GET', '/connector/api/purchase-order/' + id)).data[0]; },
-    async create(body: any) { return (await transport('POST', '/connector/api/purchase-order', { body })).data; },
-    async setStatus(id: any, status: any) { return (await transport('PUT', '/connector/api/purchase-order/' + id + '/status', { body: { status } })).data; },
-    async remove(id: any) { return (await transport('DELETE', '/connector/api/purchase-order/' + id)).data; },
+    async list() {
+      if (REAL_MODE) {
+        const res = await realReq('GET', '/purchase-orders');
+        return ((res && (res.orders || res.data)) || []).map(adaptRealPO);
+      }
+      return (await transport('GET', '/connector/api/purchase-order')).data;
+    },
+    async get(id: any) {
+      if (REAL_MODE) return adaptRealPO(await realReq('GET', '/purchase-orders/' + id));
+      return (await transport('GET', '/connector/api/purchase-order/' + id)).data[0];
+    },
+    async create(body: any) {
+      if (REAL_MODE) return adaptRealPO(await realReq('POST', '/purchase-orders', { body: toRealPOBody(body) }));
+      return (await transport('POST', '/connector/api/purchase-order', { body })).data;
+    },
+    // Receiving (status 'received'/'partial') needs a received_items payload the
+    // orders screen doesn't send yet; simple transitions (approve/send/cancel) work.
+    async setStatus(id: any, status: any) {
+      if (REAL_MODE) return adaptRealPO(await realReq('PUT', '/purchase-orders/' + id + '/status', { body: { status } }));
+      return (await transport('PUT', '/connector/api/purchase-order/' + id + '/status', { body: { status } })).data;
+    },
+    async remove(id: any) {
+      if (REAL_MODE) return await realReq('DELETE', '/purchase-orders/' + id);
+      return (await transport('DELETE', '/connector/api/purchase-order/' + id)).data;
+    },
   },
   salesOrder: {
     async list() { return (await transport('GET', '/connector/api/sales-order')).data; },
