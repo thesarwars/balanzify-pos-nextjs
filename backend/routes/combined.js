@@ -508,13 +508,16 @@ reportsRouter.get('/sales', auth, async (req, res, next) => {
       ...(from && { createdAt: { gte: new Date(from) } }),
       ...(to && { createdAt: { lte: new Date(new Date(to).setDate(new Date(to).getDate() + 1)) } }),
     };
+    // Bound by_day with a real Date parameter (never interpolate a conditional
+    // SQL fragment into a tagged $queryRaw — it becomes a bound param → syntax error).
+    const fromDate = from ? new Date(from) : new Date('2000-01-01');
     const [totals, byMethod, byDay] = await Promise.all([
       prisma.sale.aggregate({ where, _sum: { totalAmount: true, discountAmount: true }, _count: { id: true }, _avg: { totalAmount: true } }),
       prisma.sale.groupBy({ by: ['paymentMethod'], where, _sum: { totalAmount: true }, _count: { id: true } }),
       prisma.$queryRaw`
-        SELECT DATE(created_at) as date, COUNT(*) as count, SUM(total_amount) as revenue
+        SELECT DATE(created_at) as date, COUNT(*)::int as count, SUM(total_amount) as revenue
         FROM sales WHERE business_id = ${req.user.business_id}::uuid AND status = 'completed'
-        ${from ? `AND created_at >= '${from}'` : ''}
+          AND created_at >= ${fromDate}
         GROUP BY DATE(created_at) ORDER BY date
       `,
     ]);

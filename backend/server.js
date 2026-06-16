@@ -1,6 +1,12 @@
 require('dotenv').config();
 require('express-async-errors'); // patches async route errors into Express error handler
 
+// Postgres COUNT()/SUM() come back from $queryRaw as BigInt, which JSON.stringify
+// can't serialize — make BigInt JSON-safe globally (reports, dashboards, etc.).
+if (typeof BigInt.prototype.toJSON !== 'function') {
+  BigInt.prototype.toJSON = function () { return Number(this); };
+}
+
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
