@@ -1881,6 +1881,11 @@ function realPayMethod(m: any): string {
   return ({ cash: 'cash', zaad: 'zaad', evc: 'zaad', card: 'visa', visa: 'visa', mastercard: 'mastercard', credit: 'credit' } as any)[m] || 'cash';
 }
 const isUuid = (v: any) => typeof v === 'string' && /^[0-9a-f-]{32,36}$/i.test(v);
+// Client-local HH:MM + YYYY-MM-DD (sent to HRM attendance so server-UTC doesn't skew times).
+function hrStamp(): { at: string; date: string } {
+  const d = new Date(), p = (n: number) => String(n).padStart(2, '0');
+  return { at: `${p(d.getHours())}:${p(d.getMinutes())}`, date: `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}` };
+}
 
 // Map a backend Shift row → the cash-register shape the POS UI expects.
 // Backend shift: { id, locationId, location:{name}, openingFloat, totalCash,
@@ -2988,10 +2993,22 @@ const API: any = {
     },
     // ── Phases 2–5 (attendance, leave, payroll, shifts, advances, todos):
     //    not wired yet — return empty in real mode so the tabs render cleanly. ──
-    async attendance() { if (REAL_MODE) return []; return (await transport('GET', '/connector/api/hrm/attendance')).data; },
-    async clock(employee_id: any) { if (REAL_MODE) throw new ApiError(501, 'Attendance is coming soon.'); return (await transport('POST', '/connector/api/hrm/attendance/clock', { body: { employee_id } })).data; },
-    async breakToggle(employee_id: any) { if (REAL_MODE) throw new ApiError(501, 'Attendance is coming soon.'); return (await transport('POST', '/connector/api/hrm/attendance/break', { body: { employee_id } })).data; },
-    async autoAbsent() { if (REAL_MODE) return { added: 0 }; return (await transport('POST', '/connector/api/hrm/attendance/auto-absent', { body: {} })).data; },
+    async attendance() {
+      if (REAL_MODE) return await realReq('GET', '/hrm/attendance');
+      return (await transport('GET', '/connector/api/hrm/attendance')).data;
+    },
+    async clock(employee_id: any) {
+      if (REAL_MODE) return await realReq('POST', '/hrm/attendance/clock', { body: { employee_id, ...hrStamp() } });
+      return (await transport('POST', '/connector/api/hrm/attendance/clock', { body: { employee_id } })).data;
+    },
+    async breakToggle(employee_id: any) {
+      if (REAL_MODE) return await realReq('POST', '/hrm/attendance/break', { body: { employee_id, ...hrStamp() } });
+      return (await transport('POST', '/connector/api/hrm/attendance/break', { body: { employee_id } })).data;
+    },
+    async autoAbsent() {
+      if (REAL_MODE) return await realReq('POST', '/hrm/attendance/auto-absent', { body: { date: hrStamp().date } });
+      return (await transport('POST', '/connector/api/hrm/attendance/auto-absent', { body: {} })).data;
+    },
     async leaves() { if (REAL_MODE) return []; return (await transport('GET', '/connector/api/hrm/leave')).data; },
     async addLeave(body: any) { if (REAL_MODE) throw new ApiError(501, 'Leave is coming soon.'); return (await transport('POST', '/connector/api/hrm/leave', { body })).data; },
     async setLeave(id: any, status: any) { if (REAL_MODE) throw new ApiError(501, 'Leave is coming soon.'); return (await transport('PUT', '/connector/api/hrm/leave/' + id, { body: { status } })).data; },
@@ -3004,8 +3021,14 @@ const API: any = {
     async leaveOverride(empId: any) { if (REAL_MODE) return {}; return (await transport('GET', '/connector/api/hrm/leave-override/' + empId)).data; },
     async setLeaveOverride(empId: any, overrides: any) { if (REAL_MODE) throw new ApiError(501, 'Leave is coming soon.'); return (await transport('PUT', '/connector/api/hrm/leave-override/' + empId, { body: { overrides } })).data; },
     async payroll() { if (REAL_MODE) return []; return (await transport('GET', '/connector/api/hrm/payroll')).data; },
-    async attendanceSummary(month: any) { if (REAL_MODE) return []; return (await transport('GET', '/connector/api/hrm/attendance-summary', { query: { month } })).data; },
-    async empSummary(id: any, month: any) { if (REAL_MODE) return {}; return (await transport('GET', '/connector/api/hrm/attendance-summary/' + id, { query: { month } })).data; },
+    async attendanceSummary(month: any) {
+      if (REAL_MODE) return await realReq('GET', '/hrm/attendance-summary', { query: { month } });
+      return (await transport('GET', '/connector/api/hrm/attendance-summary', { query: { month } })).data;
+    },
+    async empSummary(id: any, month: any) {
+      if (REAL_MODE) return await realReq('GET', '/hrm/attendance-summary/' + id, { query: { month } });
+      return (await transport('GET', '/connector/api/hrm/attendance-summary/' + id, { query: { month } })).data;
+    },
     async addPayroll(body: any) { if (REAL_MODE) throw new ApiError(501, 'Payroll is coming soon.'); return (await transport('POST', '/connector/api/hrm/payroll', { body })).data; },
     async payslip(id: any) { if (REAL_MODE) return {}; return (await transport('GET', '/connector/api/hrm/payslip/' + id)).data; },
     async payslipSettings() { if (REAL_MODE) return {}; return (await transport('GET', '/connector/api/hrm/payslip-settings')).data; },
