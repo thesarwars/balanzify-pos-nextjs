@@ -651,7 +651,7 @@ function TodoModal({ T, emps, onClose, onSaved }: { T: any; emps: any[]; onClose
       footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Cancel</Btn><Btn T={T} kind="accent" onClick={async () => { if (!f.title.trim()) return; setBusy(true); try { await API.hrm.addTodo(f); onSaved(); } finally { setBusy(false); } }} disabled={busy}>{busy ? 'Saving…' : 'Add'}</Btn></>}>
       <FormGrid>
         <Field T={T} label="Task" full><TextField T={T} value={f.title} onChange={v => set('title', v)} placeholder="What needs doing?" /></Field>
-        <Field T={T} label="Assign to"><SelectField T={T} value={String(f.assigned_to)} options={emps.map((e: any) => String(e.id))} onChange={v => set('assigned_to', Number(v))} render={v => (emps.find((e: any) => String(e.id) === v) || {}).name} /></Field>
+        <Field T={T} label="Assign to"><SelectField T={T} value={String(f.assigned_to)} options={emps.map((e: any) => String(e.id))} onChange={v => set('assigned_to', /^\d+$/.test(String(v)) ? Number(v) : v)} render={v => (emps.find((e: any) => String(e.id) === v) || {}).name} /></Field>
         <Field T={T} label="Priority"><SelectField T={T} value={f.priority} options={['high', 'medium', 'low']} onChange={v => set('priority', v)} /></Field>
         <Field T={T} label="Due"><TextField T={T} type="date" value={f.due} onChange={v => set('due', v)} /></Field>
       </FormGrid>
@@ -663,14 +663,14 @@ function SwapModal({ T, shifts, emps, onClose, onSaved }: { T: any; shifts: any[
   const [f, setF] = useStateHr<any>({ shift_id: (shifts[0] || {}).id || '', to_id: '', reason: '' });
   const [busy, setBusy] = useStateHr(false); const [err, setErr] = useStateHr<any>(null);
   const set = (k: string, v: any) => setF((s: any) => ({ ...s, [k]: v }));
-  const shift = shifts.find((s: any) => s.id === Number(f.shift_id));
-  const others = emps.filter((e: any) => !shift || e.id !== shift.employee_id);
+  const shift = shifts.find((s: any) => String(s.id) === String(f.shift_id));
+  const others = emps.filter((e: any) => !shift || String(e.id) !== String(shift.employee_id));
   return (
     <Modal T={T} title="Request shift swap" subtitle="Hand a shift to a colleague" width={500} onClose={onClose}
       footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Cancel</Btn><Btn T={T} kind="accent" onClick={async () => { if (!f.shift_id || !f.to_id) { setErr('Pick a shift and a colleague.'); return; } setBusy(true); setErr(null); try { await API.hrm.addSwap(f); onSaved(); } catch (e: any) { setErr(e.message); } finally { setBusy(false); } }} disabled={busy}>{busy ? 'Saving…' : 'Request swap'}</Btn></>}>
       <FormGrid>
-        <Field T={T} label="Shift" full><SelectField T={T} value={String(f.shift_id)} options={shifts.map((s: any) => String(s.id))} onChange={v => set('shift_id', Number(v))} render={v => { const s = shifts.find((x: any) => String(x.id) === v); return s ? `${s.employee_name} · ${s.date} ${s.start}–${s.end}` : '—'; }} /></Field>
-        <Field T={T} label="Swap to" full><SelectField T={T} value={String(f.to_id)} options={['', ...others.map((e: any) => String(e.id))]} onChange={v => set('to_id', v ? Number(v) : '')} render={v => v ? (others.find((e: any) => String(e.id) === v) || {}).name : 'Select colleague…'} /></Field>
+        <Field T={T} label="Shift" full><SelectField T={T} value={String(f.shift_id)} options={shifts.map((s: any) => String(s.id))} onChange={v => set('shift_id', /^\d+$/.test(String(v)) ? Number(v) : v)} render={v => { const s = shifts.find((x: any) => String(x.id) === v); return s ? `${s.employee_name} · ${s.date} ${s.start}–${s.end}` : '—'; }} /></Field>
+        <Field T={T} label="Swap to" full><SelectField T={T} value={String(f.to_id)} options={['', ...others.map((e: any) => String(e.id))]} onChange={v => set('to_id', v ? (/^\d+$/.test(String(v)) ? Number(v) : v) : '')} render={v => v ? (others.find((e: any) => String(e.id) === v) || {}).name : 'Select colleague…'} /></Field>
         <Field T={T} label="Reason" full><TextField T={T} value={f.reason} onChange={v => set('reason', v)} placeholder="Why the swap?" /></Field>
       </FormGrid>
       {err && <div style={{ marginTop: 14, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}>⚠ {err}</div>}
@@ -709,9 +709,9 @@ function ShiftModal({ T, emps, locs, onClose, onSaved }: { T: any; emps: any[]; 
     <Modal T={T} title="Add shift" subtitle="Schedule a roster slot" width={520} onClose={onClose}
       footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Cancel</Btn><Btn T={T} kind="accent" onClick={async () => { if (!f.employee_id) return; setBusy(true); try { await API.hrm.addShift(f); onSaved(); } finally { setBusy(false); } }} disabled={busy}>{busy ? 'Saving…' : 'Add shift'}</Btn></>}>
       <FormGrid>
-        <Field T={T} label="Employee" full><SelectField T={T} value={String(f.employee_id)} options={emps.map((e: any) => String(e.id))} onChange={v => set('employee_id', Number(v))} render={v => (emps.find((e: any) => String(e.id) === v) || {}).name} /></Field>
+        <Field T={T} label="Employee" full><SelectField T={T} value={String(f.employee_id)} options={emps.map((e: any) => String(e.id))} onChange={v => set('employee_id', /^\d+$/.test(String(v)) ? Number(v) : v)} render={v => (emps.find((e: any) => String(e.id) === v) || {}).name} /></Field>
         <Field T={T} label="Date"><TextField T={T} type="date" value={f.date} onChange={v => set('date', v)} /></Field>
-        <Field T={T} label="Location"><SelectField T={T} value={String(f.location_id)} options={locs.map(l => String(l.id))} onChange={v => set('location_id', Number(v))} render={v => (locs.find(l => String(l.id) === v) || {}).name} /></Field>
+        <Field T={T} label="Location"><SelectField T={T} value={String(f.location_id)} options={locs.map(l => String(l.id))} onChange={v => set('location_id', /^\d+$/.test(String(v)) ? Number(v) : v)} render={v => (locs.find(l => String(l.id) === v) || {}).name} /></Field>
         <Field T={T} label="Start"><TextField T={T} type="time" value={f.start} onChange={v => set('start', v)} /></Field>
         <Field T={T} label="End"><TextField T={T} type="time" value={f.end} onChange={v => set('end', v)} /></Field>
         <Field T={T} label="Role" full><TextField T={T} value={f.role} onChange={v => set('role', v)} placeholder="e.g. Cashier" /></Field>
@@ -832,10 +832,10 @@ function AdvanceModal({ T, emps, onClose, onSaved }: { T: any; emps: any[]; onCl
     <Modal T={T} title="Give advance / loan" subtitle="Paid now, recovered via payroll deduction" width={520} onClose={onClose}
       footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Cancel</Btn><Btn T={T} kind="accent" onClick={async () => { if (!(Number(f.amount) > 0)) { setErr('Enter an amount.'); return; } setBusy(true); setErr(null); try { await API.hrm.addAdvance(f); onSaved(); } catch (e: any) { setErr(e.message); } finally { setBusy(false); } }} disabled={busy}>{busy ? 'Saving…' : 'Give advance'}</Btn></>}>
       <FormGrid>
-        <Field T={T} label="Employee" full><SelectField T={T} value={String(f.employee_id)} options={emps.map((e: any) => String(e.id))} onChange={v => set('employee_id', Number(v))} render={v => (emps.find((e: any) => String(e.id) === v) || {}).name} /></Field>
+        <Field T={T} label="Employee" full><SelectField T={T} value={String(f.employee_id)} options={emps.map((e: any) => String(e.id))} onChange={v => set('employee_id', /^\d+$/.test(String(v)) ? Number(v) : v)} render={v => (emps.find((e: any) => String(e.id) === v) || {}).name} /></Field>
         <Field T={T} label="Amount"><TextField T={T} type="number" value={f.amount} onChange={v => set('amount', v)} placeholder="0.00" /></Field>
         <Field T={T} label="Date"><TextField T={T} type="date" value={f.date} onChange={v => set('date', v)} /></Field>
-        <Field T={T} label="Pay from account" full><SelectField T={T} value={String(f.account_id)} options={accounts.map((a: any) => String(a.id))} onChange={v => set('account_id', Number(v))} render={v => { const a: any = accounts.find((x: any) => String(x.id) === v) || {}; return a.name + ' · ' + money(a.balance || 0); }} /></Field>
+        <Field T={T} label="Pay from account" full><SelectField T={T} value={String(f.account_id)} options={accounts.map((a: any) => String(a.id))} onChange={v => set('account_id', /^\d+$/.test(String(v)) ? Number(v) : v)} render={v => { const a: any = accounts.find((x: any) => String(x.id) === v) || {}; return a.name + ' · ' + money(a.balance || 0); }} /></Field>
         <Field T={T} label="Note" full><TextField T={T} value={f.note} onChange={v => set('note', v)} placeholder="Reason / terms" /></Field>
       </FormGrid>
       <div style={{ fontSize: 11.5, color: T.inkMute, marginTop: 12, lineHeight: 1.5 }}>The amount is drawn from the selected account now, and recovers automatically from the employee's next payroll deduction.</div>

@@ -7,7 +7,8 @@ const prisma = require('../lib/prisma');
 const { auth, requireRole } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { EmployeeSchema, OrgUnitSchema, HrmSettingsSchema, EmployeeShiftSchema, AttendanceClockSchema,
-  LeaveTypeSchema, LeaveTypeUpdateSchema, LeaveSchema, LeaveStatusSchema, LeaveOverrideSchema } = require('../validation/schemas');
+  LeaveTypeSchema, LeaveTypeUpdateSchema, LeaveSchema, LeaveStatusSchema, LeaveOverrideSchema,
+  RosterShiftSchema, RosterSwapSchema, HrAdvanceSchema, HrTodoSchema, StatusSchema } = require('../validation/schemas');
 
 const router = express.Router();
 
@@ -53,14 +54,15 @@ async function employeeSales(businessId, userId, pct) {
 router.get('/summary', auth, async (req, res, next) => {
   try {
     const businessId = req.user.business_id;
-    const [employees, onLeave, present, pendingLeave] = await Promise.all([
+    const [employees, onLeave, present, pendingLeave, openTodos] = await Promise.all([
       prisma.employee.count({ where: { businessId } }),
       prisma.employee.count({ where: { businessId, status: 'on_leave' } }),
       prisma.attendance.count({ where: { businessId, date: new Date(serverDate()), clockIn: { not: null } } }),
       prisma.leave.count({ where: { businessId, status: 'pending' } }),
+      prisma.hrTodo.count({ where: { businessId, status: 'pending' } }),
     ]);
-    // payroll / open_todos arrive in later HRM phases.
-    res.json({ employees, present, on_leave: onLeave, pending_leave: pendingLeave, payroll: 0, open_todos: 0 });
+    // payroll total arrives in HRM phase 5.
+    res.json({ employees, present, on_leave: onLeave, pending_leave: pendingLeave, payroll: 0, open_todos: openTodos });
   } catch (err) { next(err); }
 });
 
@@ -590,6 +592,177 @@ router.put('/leave-override/:empId', auth, requireRole('owner', 'manager'), vali
       }
     }
     res.json({ employee_id: emp.id, overrides: req.body.overrides });
+  } catch (err) { next(err); }
+});
+
+// ── Roster shifts ────────────────────────────────────────────────────────────────
+function serializeShift(s) {
+  return {
+    id: s.id, employee_id: s.employeeId, employee_name: s.employee?.name || '—',
+    location_id: s.locationId, location_name: s.location?.name || '—',
+    date: s.date.toISOString().slice(0, 10), start: s.start, end: s.end, role: s.role || '',
+  };
+}
+const shiftInclude = { employee: { select: { name: true } }, location: { select: { name: true } } };
+
+router.get('/shift', auth, async (req, res, next) => {
+  try {
+    const shifts = await prisma.rosterShift.findMany({ where: { businessId: req.user.business_id }, include: shiftInclude, orderBy: { date: 'desc' } });
+    res.json(shifts.map(serializeShift));
+  } catch (err) { next(err); }
+});
+router.post('/shift', auth, requireRole('owner', 'manager'), validate(RosterShiftSchema), async (req, res, next) => {
+  try {
+    const b = req.body;
+    const emp = await prisma.employee.findFirst({ where: { id: b.employee_id, businessId: req.user.business_id } });
+    if (!emp) return res.status(404).json({ title: 'Employee not found', status: 404 });
+    const shift = await prisma.rosterShift.create({
+      data: { businessId: req.user.business_id, employeeId: b.employee_id, locationId: b.location_id || null, date: new Date(b.date || serverDate()), start: b.start, end: b.end, role: b.role || null },
+      include: shiftInclude,
+    });
+    res.status(201).json(serializeShift(shift));
+  } catch (err) { next(err); }
+});
+router.delete('/shift/:id', auth, requireRole('owner', 'manager'), async (req, res, next) => {
+  try {
+    const s = await prisma.rosterShift.findFirst({ where: { id: req.params.id, businessId: req.user.business_id } });
+    if (!s) return res.status(404).json({ title: 'Not found', status: 404 });
+    await prisma.rosterShift.delete({ where: { id: req.params.id } });
+    res.json({ deleted: true });
+  } catch (err) { next(err); }
+});
+
+// ── Shift swaps ──────────────────────────────────────────────────────────────────
+function serializeSwap(s) {
+  return {
+    id: s.id, shift_id: s.shiftId, from_id: s.fromId, to_id: s.toId,
+    from_name: s.from?.name || '—', to_name: s.to?.name || '—',
+    reason: s.reason || '', status: s.status,
+    date: s.createdAt.toISOString().slice(0, 10),
+    shift: s.shift ? serializeShift(s.shift) : null,
+  };
+}
+const swapInclude = { from: { select: { name: true } }, to: { select: { name: true } }, shift: { include: shiftInclude } };
+
+router.get('/shift-swap', auth, async (req, res, next) => {
+  try {
+    const swaps = await prisma.rosterSwap.findMany({ where: { businessId: req.user.business_id }, include: swapInclude, orderBy: { createdAt: 'desc' } });
+    res.json(swaps.map(serializeSwap));
+  } catch (err) { next(err); }
+});
+router.post('/shift-swap', auth, validate(RosterSwapSchema), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const shift = await prisma.rosterShift.findFirst({ where: { id: req.body.shift_id, businessId } });
+    if (!shift) return res.status(404).json({ title: 'Shift not found', status: 404 });
+    const swap = await prisma.rosterSwap.create({
+      data: { businessId, shiftId: shift.id, fromId: shift.employeeId, toId: req.body.to_id, reason: req.body.reason || null },
+      include: swapInclude,
+    });
+    res.status(201).json(serializeSwap(swap));
+  } catch (err) { next(err); }
+});
+router.put('/shift-swap/:id', auth, requireRole('owner', 'manager'), validate(StatusSchema), async (req, res, next) => {
+  try {
+    const swap = await prisma.rosterSwap.findFirst({ where: { id: req.params.id, businessId: req.user.business_id } });
+    if (!swap) return res.status(404).json({ title: 'Not found', status: 404 });
+    if (req.body.status === 'approved') {
+      await prisma.rosterShift.update({ where: { id: swap.shiftId }, data: { employeeId: swap.toId } });
+    }
+    await prisma.rosterSwap.update({ where: { id: req.params.id }, data: { status: req.body.status } });
+    const updated = await prisma.rosterSwap.findUnique({ where: { id: req.params.id }, include: swapInclude });
+    res.json(serializeSwap(updated));
+  } catch (err) { next(err); }
+});
+router.delete('/shift-swap/:id', auth, requireRole('owner', 'manager'), async (req, res, next) => {
+  try {
+    const s = await prisma.rosterSwap.findFirst({ where: { id: req.params.id, businessId: req.user.business_id } });
+    if (!s) return res.status(404).json({ title: 'Not found', status: 404 });
+    await prisma.rosterSwap.delete({ where: { id: req.params.id } });
+    res.json({ deleted: true });
+  } catch (err) { next(err); }
+});
+
+// ── Advances ─────────────────────────────────────────────────────────────────────
+function serializeAdvance(a) {
+  return {
+    id: a.id, employee_id: a.employeeId, employee_name: a.employee?.name || '—',
+    amount: parseFloat(a.amount || 0), date: a.advanceDate.toISOString().slice(0, 10),
+    account_id: a.accountId, account_name: a.account?.name || '—',
+    note: a.note || '', outstanding: parseFloat(a.outstanding || 0), status: a.status,
+  };
+}
+const advanceInclude = { employee: { select: { name: true } }, account: { select: { name: true } } };
+
+router.get('/advance', auth, async (req, res, next) => {
+  try {
+    const advances = await prisma.hrAdvance.findMany({ where: { businessId: req.user.business_id }, include: advanceInclude, orderBy: { createdAt: 'desc' } });
+    res.json(advances.map(serializeAdvance));
+  } catch (err) { next(err); }
+});
+router.get('/advance/outstanding/:empId', auth, async (req, res, next) => {
+  try {
+    const agg = await prisma.hrAdvance.aggregate({ where: { businessId: req.user.business_id, employeeId: req.params.empId, status: 'outstanding' }, _sum: { outstanding: true } });
+    res.json({ outstanding: parseFloat(agg._sum.outstanding || 0) });
+  } catch (err) { next(err); }
+});
+router.post('/advance', auth, requireRole('owner', 'manager'), validate(HrAdvanceSchema), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id, b = req.body;
+    const emp = await prisma.employee.findFirst({ where: { id: b.employee_id, businessId } });
+    if (!emp) return res.status(404).json({ title: 'Employee not found', status: 404 });
+    const advance = await prisma.$transaction(async (tx) => {
+      if (b.account_id) {
+        const acc = await tx.paymentAccount.findFirst({ where: { id: b.account_id, businessId } });
+        if (!acc) throw Object.assign(new Error('Account not found'), { status: 404 });
+        await tx.paymentAccount.update({ where: { id: b.account_id }, data: { balance: { decrement: b.amount } } });
+      }
+      return tx.hrAdvance.create({
+        data: { businessId, employeeId: emp.id, amount: b.amount, advanceDate: new Date(b.date || serverDate()), accountId: b.account_id || null, note: b.note || null, outstanding: b.amount },
+        include: advanceInclude,
+      });
+    });
+    res.status(201).json(serializeAdvance(advance));
+  } catch (err) { if (err.status === 404) return res.status(404).json({ title: err.message, status: 404 }); next(err); }
+});
+router.delete('/advance/:id', auth, requireRole('owner', 'manager'), async (req, res, next) => {
+  try {
+    const a = await prisma.hrAdvance.findFirst({ where: { id: req.params.id, businessId: req.user.business_id } });
+    if (!a) return res.status(404).json({ title: 'Not found', status: 404 });
+    await prisma.hrAdvance.delete({ where: { id: req.params.id } });
+    res.json({ deleted: true });
+  } catch (err) { next(err); }
+});
+
+// ── Todos ────────────────────────────────────────────────────────────────────────
+function serializeTodo(t) {
+  return {
+    id: t.id, title: t.title, assigned_to: t.assignedTo, assigned_name: t.assignee?.name || '—',
+    priority: t.priority, status: t.status, due: t.dueDate ? t.dueDate.toISOString().slice(0, 10) : '',
+  };
+}
+router.get('/todo', auth, async (req, res, next) => {
+  try {
+    const todos = await prisma.hrTodo.findMany({ where: { businessId: req.user.business_id }, include: { assignee: { select: { name: true } } }, orderBy: { createdAt: 'desc' } });
+    res.json(todos.map(serializeTodo));
+  } catch (err) { next(err); }
+});
+router.post('/todo', auth, validate(HrTodoSchema), async (req, res, next) => {
+  try {
+    const b = req.body;
+    const todo = await prisma.hrTodo.create({
+      data: { businessId: req.user.business_id, title: b.title, assignedTo: b.assigned_to || null, priority: b.priority || 'medium', dueDate: b.due ? new Date(b.due) : null },
+      include: { assignee: { select: { name: true } } },
+    });
+    res.status(201).json(serializeTodo(todo));
+  } catch (err) { next(err); }
+});
+router.put('/todo/:id', auth, validate(StatusSchema), async (req, res, next) => {
+  try {
+    const t = await prisma.hrTodo.findFirst({ where: { id: req.params.id, businessId: req.user.business_id } });
+    if (!t) return res.status(404).json({ title: 'Not found', status: 404 });
+    const updated = await prisma.hrTodo.update({ where: { id: req.params.id }, data: { status: req.body.status }, include: { assignee: { select: { name: true } } } });
+    res.json(serializeTodo(updated));
   } catch (err) { next(err); }
 });
 
