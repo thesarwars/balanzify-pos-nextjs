@@ -50,7 +50,9 @@ const ProductSchema = z.object({
   barcode: optStr(100),
   description: optStr(1000),
   category_id: uuid.optional().nullable(),
-  unit_of_measure: z.enum(['unit','kg','g','liter','ml','box','dozen','pair','set','meter']).default('unit'),
+  brand_id: uuid.optional().nullable(),
+  // Free-form so businesses can manage their own units (see Unit reference table).
+  unit_of_measure: z.string().trim().min(1).max(50).default('unit'),
   cost_price: money.default(0),
   selling_price: money.default(0),
   wholesale_price: money.default(0),
@@ -325,6 +327,19 @@ const CustomerGroupSchema = z.object({
   amount: z.coerce.number().min(-100).max(1000).default(0),  // pricing %: negative = discount
 });
 
+const UnitSchema = z.object({
+  actual_name:   shortStr(100),
+  short_name:    shortStr(20),
+  allow_decimal: z.coerce.boolean().default(false),
+});
+
+const BrandSchema = z.object({ name: shortStr(255) });
+
+const VariationTemplateSchema = z.object({
+  name:   shortStr(100),
+  values: z.array(z.string().trim().min(1).max(100)).default([]),
+});
+
 const ExpenseSchema = z.object({
   category_id:    uuid.optional().nullable(),
   location_id:    uuid.optional().nullable(),
@@ -537,7 +552,7 @@ module.exports = {
   SettingsSchema, CategorySchema, LocationSchema, CustomerSchema,
   ExpenseSchema, ExpenseCategorySchema,
   PaymentAccountSchema, AccountTransferSchema, AccountDepositSchema,
-  CustomerGroupSchema,
+  CustomerGroupSchema, UnitSchema, BrandSchema, VariationTemplateSchema,
   PaginationSchema, ProductVariantSchema,
   CouponSchema, ApplyCouponSchema, LoyaltyRuleSchema, PettyCashSchema,
   BundleSchema, ScheduledReportSchema, CustomerSegmentSchema,

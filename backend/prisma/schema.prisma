@@ -303,6 +303,9 @@ model Business {
   expenseCategories  ExpenseCategory[]
   paymentAccounts    PaymentAccount[]
   customerGroups     CustomerGroup[]
+  units              Unit[]
+  brands             Brand[]
+  variationTemplates VariationTemplate[]
 
   // ── Module licensing: which products this business has enabled ──
   // Each module is sellable as a separate product (pos, inventory, hotel,
@@ -349,6 +352,44 @@ model Expense {
 
   @@index([businessId, expenseDate])
   @@map("expenses")
+}
+
+model Unit {
+  id           String   @id @default(uuid()) @db.Uuid
+  businessId   String   @map("business_id") @db.Uuid
+  actualName   String   @map("actual_name") @db.VarChar(100)
+  shortName    String   @map("short_name") @db.VarChar(20)
+  allowDecimal Boolean  @default(false) @map("allow_decimal")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@map("units")
+}
+
+model Brand {
+  id         String    @id @default(uuid()) @db.Uuid
+  businessId String    @map("business_id") @db.Uuid
+  name       String    @db.VarChar(255)
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  business Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  products Product[]
+
+  @@unique([businessId, name])
+  @@map("brands")
+}
+
+model VariationTemplate {
+  id         String   @id @default(uuid()) @db.Uuid
+  businessId String   @map("business_id") @db.Uuid
+  name       String   @db.VarChar(100)
+  values     String[] @default([])
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@map("variation_templates")
 }
 
 model CustomerGroup {
@@ -521,6 +562,7 @@ model Product {
   id                 String   @id @default(uuid()) @db.Uuid
   businessId         String   @map("business_id") @db.Uuid
   categoryId         String?  @map("category_id") @db.Uuid
+  brandId            String?  @map("brand_id") @db.Uuid
   name               String   @db.VarChar(255)
   sku                String?  @db.VarChar(100)
   barcode            String?  @db.VarChar(100)
@@ -556,6 +598,7 @@ model Product {
 
   business           Business               @relation(fields: [businessId], references: [id], onDelete: Cascade)
   category           Category?              @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  brand              Brand?                 @relation(fields: [brandId], references: [id], onDelete: SetNull)
   stockLevels        StockLevel[]
   stockBatches       StockBatch[]
   stockMovements     StockMovement[]
