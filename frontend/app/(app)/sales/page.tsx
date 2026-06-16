@@ -89,7 +89,7 @@ function SellReturnModal({ T, sale, onClose, onDone }: { T: Theme; sale: any; on
       .then((u: any) => {
         const ls = (u.sell_lines || []).map((ln: any, i: any) => {
           const p = PRODUCTS.find((p: any) => parseInt(String(p.id).replace(/\D/g, ''), 10) === ln.product_id);
-          return { i, name: p ? p.name : 'Product #' + ln.product_id, qty: ln.quantity, returned: Number(ln.quantity_returned) || 0, unit_price: Number(ln.unit_price) };
+          return { i, name: ln.product_name || (p ? p.name : 'Product #' + ln.product_id), qty: ln.quantity, returned: Number(ln.quantity_returned) || 0, unit_price: Number(ln.unit_price), sale_item_id: ln.sale_item_id, product_id: ln.product_id_real };
         });
         setLines(ls);
       })
@@ -108,7 +108,7 @@ function SellReturnModal({ T, sale, onClose, onDone }: { T: Theme; sale: any; on
     try {
       await API.sellReturn.create({
         transaction_id: sale._id,
-        products: lines.filter((l: any) => (ret[l.i] || 0) > 0).map((l: any) => ({ line_index: l.i, quantity: ret[l.i], unit_price: l.unit_price })),
+        products: lines.filter((l: any) => (ret[l.i] || 0) > 0).map((l: any) => ({ line_index: l.i, sale_item_id: l.sale_item_id, product_id: l.product_id, quantity: ret[l.i], unit_price: l.unit_price })),
       });
       onDone();
     } catch (e: any) { setErr(e.message || 'Return failed.'); }
