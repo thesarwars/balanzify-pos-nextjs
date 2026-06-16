@@ -270,12 +270,15 @@ const MilestoneSchema = z.object({
 });
 
 // ── Users ─────────────────────────────────────────────────────────────────────
+const commissionPct = z.coerce.number().min(0).max(100).optional();
+
 const CreateUserSchema = z.object({
   name: shortStr(255),
   email,
   password: z.string().min(8).max(128),
   role: z.enum(['owner','manager','cashier','warehouse']).default('cashier'),
   pin: z.string().regex(/^\d{4,10}$/, 'PIN must be 4-10 digits').optional().nullable(),
+  commission_percent: commissionPct,
 });
 
 const UpdateUserSchema = z.object({
@@ -283,6 +286,12 @@ const UpdateUserSchema = z.object({
   role: z.enum(['owner','manager','cashier','warehouse']),
   is_active: z.boolean(),
   pin: z.string().regex(/^\d{4,10}$/).optional().nullable(),
+  commission_percent: commissionPct,
+});
+
+const CommissionSettingsSchema = z.object({
+  calculation_type: z.enum(['invoice_value', 'payment_received']).optional(),
+  agent_type:       z.enum(['logged_in_user', 'select_from_users', 'select_from_agents']).optional(),
 });
 
 // ── Settings ──────────────────────────────────────────────────────────────────
@@ -595,7 +604,7 @@ module.exports = {
   ExpenseSchema, ExpenseCategorySchema,
   PaymentAccountSchema, AccountTransferSchema, AccountDepositSchema,
   CustomerGroupSchema, UnitSchema, BrandSchema, VariationTemplateSchema, DiscountSchema,
-  PriceGroupSchema, InvoiceLayoutSchema, InvoiceSchemeSchema,
+  PriceGroupSchema, InvoiceLayoutSchema, InvoiceSchemeSchema, CommissionSettingsSchema,
   PaginationSchema, ProductVariantSchema,
   CouponSchema, ApplyCouponSchema, LoyaltyRuleSchema, PettyCashSchema,
   BundleSchema, ScheduledReportSchema, CustomerSegmentSchema,

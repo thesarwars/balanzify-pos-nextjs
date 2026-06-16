@@ -2061,17 +2061,19 @@ function adaptRealUser(u: any): any {
     role_id: r.id, role_name: r.name,
     is_active: u.isActive !== false,
     locations: [], location_access: 'all',
-    max_discount: null, commission_percent: 0,
+    max_discount: null, commission_percent: Number(u.commissionPercent || 0),
     last_login: u.lastLogin ? String(u.lastLogin).slice(0, 10) : '',
     _real: u,
   };
 }
+const commissionVal = (v: any) => (v === '' || v == null) ? undefined : Number(v);
 function toRealCreateUserBody(f: any): any {
   return {
     name: f.name,
     email: f.email,
     password: f.password,
     role: roleKeyById(f.role_id),
+    commission_percent: commissionVal(f.commission_percent),
   };
 }
 function toRealUpdateUserBody(f: any): any {
@@ -2079,6 +2081,7 @@ function toRealUpdateUserBody(f: any): any {
     name: f.name,
     role: roleKeyById(f.role_id),
     is_active: f.is_active !== false,
+    commission_percent: commissionVal(f.commission_percent),
   };
 }
 
@@ -3017,11 +3020,26 @@ const API: any = {
       if (REAL_MODE) return await realReq('GET', '/reports/sales', { query: range });
       return null;
     },
-    async commissionSettings() { return (await transport('GET', '/connector/api/commission-setting')).data; },
-    async saveCommissionSettings(body: any) { return (await transport('PUT', '/connector/api/commission-setting', { body })).data; },
-    async salesReps(calc: any) { return (await transport('GET', '/connector/api/sales-representative', { query: { calc } })).data; },
-    async salesRep(id: any, calc: any) { return (await transport('GET', '/connector/api/sales-representative/' + id, { query: { calc } })).data; },
-    async registers() { return (await transport('GET', '/connector/api/cash-register-report')).data; },
+    async commissionSettings() {
+      if (REAL_MODE) return await realReq('GET', '/reports/commission/settings');
+      return (await transport('GET', '/connector/api/commission-setting')).data;
+    },
+    async saveCommissionSettings(body: any) {
+      if (REAL_MODE) return await realReq('PUT', '/reports/commission/settings', { body });
+      return (await transport('PUT', '/connector/api/commission-setting', { body })).data;
+    },
+    async salesReps(calc: any) {
+      if (REAL_MODE) return await realReq('GET', '/reports/commission/reps', { query: { calc } });
+      return (await transport('GET', '/connector/api/sales-representative', { query: { calc } })).data;
+    },
+    async salesRep(id: any, calc: any) {
+      if (REAL_MODE) return await realReq('GET', '/reports/commission/reps/' + id, { query: { calc } });
+      return (await transport('GET', '/connector/api/sales-representative/' + id, { query: { calc } })).data;
+    },
+    async registers() {
+      if (REAL_MODE) return await realReq('GET', '/reports/registers');
+      return (await transport('GET', '/connector/api/cash-register-report')).data;
+    },
   },
   register: {
     async current() {
