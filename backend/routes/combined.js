@@ -80,15 +80,27 @@ suppliersRouter.post('/:id/products', auth, requireRole('owner', 'manager'), val
   } catch (err) { next(err); }
 });
 
+// Maps only the keys present in the request body so partial updates (PUT) don't
+// reset untouched columns to their defaults. Prisma ignores undefined values.
 function mapSupplier(b) {
-  return {
-    name: b.name, contactPerson: b.contact_person, phone: b.phone, whatsapp: b.whatsapp,
-    email: b.email, country: b.country, city: b.city, address: b.address,
-    paymentTerms: b.payment_terms || 0, creditLimit: b.credit_limit || 0,
-    currency: b.currency || 'USD', rating: b.rating || 0,
-    isBlacklisted: b.is_blacklisted || false, blacklistReason: b.blacklist_reason || null,
-    isActive: b.is_active ?? true, notes: b.notes,
-  };
+  const m = {};
+  if (b.name           !== undefined) m.name = b.name;
+  if (b.contact_person !== undefined) m.contactPerson = b.contact_person;
+  if (b.phone          !== undefined) m.phone = b.phone;
+  if (b.whatsapp       !== undefined) m.whatsapp = b.whatsapp;
+  if (b.email          !== undefined) m.email = b.email;
+  if (b.country        !== undefined) m.country = b.country;
+  if (b.city           !== undefined) m.city = b.city;
+  if (b.address        !== undefined) m.address = b.address;
+  if (b.payment_terms  !== undefined) m.paymentTerms = b.payment_terms;
+  if (b.credit_limit   !== undefined) m.creditLimit = b.credit_limit;
+  if (b.currency       !== undefined) m.currency = b.currency;
+  if (b.rating         !== undefined) m.rating = b.rating;
+  if (b.is_blacklisted !== undefined) m.isBlacklisted = b.is_blacklisted;
+  if (b.blacklist_reason !== undefined) m.blacklistReason = b.blacklist_reason;
+  if (b.is_active      !== undefined) m.isActive = b.is_active;
+  if (b.notes          !== undefined) m.notes = b.notes;
+  return m;
 }
 
 // ── STOCK (adjustments, transfers) ───────────────────────────────────────────
@@ -243,9 +255,9 @@ stockRouter.get('/transfers', auth, async (req, res, next) => {
 stockRouter.get('/transfers/:id', auth, async (req, res, next) => {
   try {
     const transfer = await prisma.stockTransfer.findFirst({
-      where: { 
-        id: req.id, // Or req.params.id depending on your path-param middleware
-        businessId: req.user.business_id 
+      where: {
+        id: req.params.id,
+        businessId: req.user.business_id
       },
       include: {
         fromLocation: true,

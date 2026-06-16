@@ -40,7 +40,7 @@ function UsersRoles({ T }: { T: any }) {
 
   async function del(kind: any, item: any) {
     try {
-      if (kind === 'user') await API.user.remove(item.id); else await API.role.remove(item.id);
+      if (kind === 'user') await API.user.remove(item.id, item); else await API.role.remove(item.id);
       setConfirm(null); toast(kind === 'user' ? 'User deleted' : 'Role deleted');
       kind === 'user' ? reloadUsers() : reloadRoles();
     } catch (ex: any) { setConfirm(null); toast(ex.message || 'Delete failed'); }
