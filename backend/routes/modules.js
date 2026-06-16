@@ -29,10 +29,12 @@ router.get('/', auth, async (req, res, next) => {
       catalog: Object.values(MODULES).map(m => ({
         key: m.key, name: m.name, description: m.description,
         standalone: !!m.standalone, requires: m.requires || [],
+        alwaysOn: !!m.alwaysOn,        // core — never toggleable
+        addon: m.default === false,    // opt-in add-on / vertical (vs base plan)
         enabled: enabled.has(m.key),
       })),
       plan: {
-        licensed: biz?.enabledModules?.length ? biz.enabledModules : ['(full suite)'],
+        licensed: biz?.enabledModules?.length ? biz.enabledModules : ['(base plan)'],
         effective: [...enabled],
       },
     });

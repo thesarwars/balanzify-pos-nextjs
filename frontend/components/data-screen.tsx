@@ -694,7 +694,32 @@ export function Modules({ T }: { T: Theme }) {
   const activeCount = mods.filter((m: any) => m.enabled).length;
   const addonTotal = mods.filter((m: any) => m.addon && m.enabled).reduce((s: number, m: any) => s + (m.price || 0), 0);
   const basePrice = 49;
-  const groups = ['Core', 'Growth', 'Operations', 'Add-on', 'Vertical', 'Platform'].filter(g => mods.some((m: any) => m.group === g));
+  const included = mods.filter((m: any) => !m.addon);   // base plan (core/pos/inventory/operations)
+  const addons = mods.filter((m: any) => m.addon);      // opt-in add-ons & verticals
+  const card = (m: any) => {
+    const on = m.enabled;
+    return (
+      <button key={m.key} onClick={() => toggle(m)} style={{ textAlign: 'left', cursor: m.core ? 'default' : 'pointer', fontFamily: T.fBody, background: T.card, border: `1px solid ${on ? T.accent.base + '55' : T.line}`, borderRadius: T.rLg, padding: 18, boxShadow: T.sh1, position: 'relative', opacity: m.core ? 0.92 : 1 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+          <span style={{ width: 38, height: 38, borderRadius: 10, background: on ? T.accent.soft : T.paperSink, color: on ? T.accent.base : T.inkMute, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>{m.icon}</span>
+          <span style={{ width: 38, height: 22, borderRadius: 99, background: on ? T.accent.base : T.lineMid, position: 'relative', transition: 'background .2s', opacity: m.core ? 0.5 : 1 }}>
+            <span style={{ position: 'absolute', top: 2, left: on ? 18 : 2, width: 18, height: 18, borderRadius: 99, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,0.2)' }} />
+          </span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+          <span style={{ fontSize: 14, fontWeight: 700, color: T.ink }}>{m.name}</span>
+          {m.addon && <Badge T={T} tone="violet">Add-on</Badge>}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginTop: 4 }}>
+          <span style={{ fontSize: 11.5, color: T.inkSub }}>{m.core ? 'Core · always on' : m.requires && m.requires.length > 1 ? 'Needs ' + m.requires.filter((r: any) => r !== 'core').join(', ') : m.group + ' module'}</span>
+          {m.addon
+            ? <span style={{ fontFamily: T.fMono, fontSize: 13, fontWeight: 700, color: on ? T.accent.text : T.inkSub }}>{money(m.price)}<span style={{ fontSize: 9.5, color: T.inkMute }}>/mo</span></span>
+            : <span style={{ fontSize: 11, color: T.greenText, fontWeight: 600 }}>Included</span>}
+        </div>
+      </button>
+    );
+  };
+  const sectionLabel = (txt: string) => <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.6, textTransform: 'uppercase', color: T.inkSub, margin: '4px 2px 12px' }}>{txt}</div>;
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: T.paperAlt }}>
       <Topbar T={T} title="Plan & Modules" subtitle="Growth plan · billed monthly" right={<Btn T={T} kind="primary">Manage billing</Btn>} />
@@ -711,30 +736,16 @@ export function Modules({ T }: { T: Theme }) {
               <div style={{ fontSize: 11, opacity: 0.6, marginTop: 2, fontFamily: T.fMono }}>{money(basePrice)} base{addonTotal ? ` + ${money(addonTotal)}` : ''}</div>
             </div>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))', gap: 14 }}>
-            {mods.map((m: any) => {
-              const on = m.enabled;
-              return (
-              <button key={m.key} onClick={() => toggle(m)} style={{ textAlign: 'left', cursor: m.core ? 'default' : 'pointer', fontFamily: T.fBody, background: T.card, border: `1px solid ${on ? T.accent.base + '55' : T.line}`, borderRadius: T.rLg, padding: 18, boxShadow: T.sh1, position: 'relative' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-                  <span style={{ width: 38, height: 38, borderRadius: 10, background: on ? T.accent.soft : T.paperSink, color: on ? T.accent.base : T.inkMute, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>{m.icon}</span>
-                  <span style={{ width: 38, height: 22, borderRadius: 99, background: on ? T.accent.base : T.lineMid, position: 'relative', transition: 'background .2s' }}>
-                    <span style={{ position: 'absolute', top: 2, left: on ? 18 : 2, width: 18, height: 18, borderRadius: 99, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,0.2)' }} />
-                  </span>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                  <span style={{ fontSize: 14, fontWeight: 700, color: T.ink }}>{m.name}</span>
-                  {m.addon && <Badge T={T} tone="violet">Add-on</Badge>}
-                </div>
-                <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginTop: 4 }}>
-                  <span style={{ fontSize: 11.5, color: T.inkSub }}>{m.core ? 'Core · always on' : m.group + ' module'}</span>
-                  {m.addon
-                    ? <span style={{ fontFamily: T.fMono, fontSize: 13, fontWeight: 700, color: on ? T.accent.text : T.inkSub }}>{money(m.price)}<span style={{ fontSize: 9.5, color: T.inkMute }}>/mo</span></span>
-                    : <span style={{ fontSize: 11, color: T.greenText, fontWeight: 600 }}>Included</span>}
-                </div>
-              </button>
-            ); })}
+          {sectionLabel('Included in your plan')}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))', gap: 14, marginBottom: 26 }}>
+            {included.map(card)}
           </div>
+          {addons.length > 0 && <>
+            {sectionLabel('Add-ons')}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))', gap: 14 }}>
+              {addons.map(card)}
+            </div>
+          </>}
         </div>
       </div>
       {toastNode}
