@@ -2236,6 +2236,19 @@ function adaptRealCoupon(c: any): any {
     valid_until: c.validUntil ? String(c.validUntil).slice(0, 10) : '', is_active: c.isActive,
   };
 }
+function adaptRealWholesaleOrder(o: any): any {
+  if (!o) return o;
+  return {
+    id: o.id, order_number: o.orderNumber, customer_id: o.customerId,
+    customer_name: (o.customer && o.customer.name) || '—', customer_phone: (o.customer && o.customer.phone) || '',
+    status: o.status, payment_status: o.paymentStatus,
+    total: Number(o.total || 0), amount_paid: Number(o.amountPaid || 0),
+    outstanding: +(Number(o.total || 0) - Number(o.amountPaid || 0)).toFixed(2),
+    driver_name: o.driverName || '', delivery_notes: o.deliveryNotes || '',
+    date: o.createdAt ? String(o.createdAt).slice(0, 10) : '',
+    items: Array.isArray(o.items) ? o.items.map((i: any) => ({ id: i.id, product_id: i.productId, product_name: (i.product && i.product.name) || '', quantity: i.quantity, unit_price: Number(i.unitPrice || 0), line_total: Number(i.lineTotal || 0), picked: !!i.picked })) : [],
+  };
+}
 function toRealCouponBody(f: any): any {
   const b: any = {};
   if (f.code !== undefined) b.code = f.code;
@@ -2655,6 +2668,38 @@ const API: any = {
     async updateDrug(id: any, body: any) { if (REAL_MODE) return await realReq('PUT', '/pharmacy/drugs/' + id, { body }); throw new ApiError(501, 'Pharmacy needs the live backend.'); },
     async fastMovers(days?: any) { if (REAL_MODE) { const r = await realReq('GET', '/pharmacy/fast-movers', { query: days ? { days } : undefined }); return r.fast_movers || []; } return []; },
     async pullExpired(batchId: any, notes?: any) { if (REAL_MODE) return await realReq('POST', '/pharmacy/pull-expired', { body: { batch_id: batchId, notes } }); throw new ApiError(501, 'Pharmacy needs the live backend.'); },
+  },
+
+  // Wholesale (/api/v1/wholesale) — gated by the wholesale module. Real only.
+  wholesale: {
+    async orders(status?: any) {
+      if (REAL_MODE) { const r = await realReq('GET', '/wholesale/orders', { query: status ? { status } : undefined }); return ((r && (r.orders || r.data)) || []).map(adaptRealWholesaleOrder); }
+      return [];
+    },
+    async createOrder(body: any) {
+      if (REAL_MODE) return adaptRealWholesaleOrder(await realReq('POST', '/wholesale/orders', { body: { customer_id: body.customer_id, items: body.items, delivery_notes: body.delivery_notes || undefined } }));
+      throw new ApiError(501, 'Wholesale needs the live backend.');
+    },
+    async pick(id: any, itemIds: any[]) {
+      if (REAL_MODE) return await realReq('POST', '/wholesale/orders/' + id + '/pick', { body: { item_ids: itemIds } });
+      throw new ApiError(501, 'Wholesale needs the live backend.');
+    },
+    async dispatch(id: any, driver: any) {
+      if (REAL_MODE) return await realReq('POST', '/wholesale/orders/' + id + '/dispatch', { body: { driver_name: driver } });
+      throw new ApiError(501, 'Wholesale needs the live backend.');
+    },
+    async deliver(id: any) {
+      if (REAL_MODE) return await realReq('POST', '/wholesale/orders/' + id + '/deliver', { body: {} });
+      throw new ApiError(501, 'Wholesale needs the live backend.');
+    },
+    async payOrder(id: any, amount: any) {
+      if (REAL_MODE) return await realReq('POST', '/wholesale/orders/' + id + '/payment', { body: { amount: Number(amount || 0) } });
+      throw new ApiError(501, 'Wholesale needs the live backend.');
+    },
+    async outstanding() {
+      if (REAL_MODE) { const r = await realReq('GET', '/wholesale/outstanding'); return (r && r.outstanding) || []; }
+      return [];
+    },
   },
 
   // Receipts (/api/v1/checkout) — real backend only; mock mode is a no-op.
