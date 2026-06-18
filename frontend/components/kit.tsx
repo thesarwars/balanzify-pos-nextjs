@@ -109,8 +109,8 @@ export function Trend({ T, value }: { T: Theme; value: number }) {
   return <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 999, fontFamily: T.fMono, background: up ? T.greenSoft : T.redSoft, color: up ? T.greenText : T.redText }}>{up ? '↑' : '↓'} {Math.abs(value)}%</span>;
 }
 
-export function FormGrid({ children, cols = 2 }: { children: React.ReactNode; cols?: number }) {
-  return <div style={{ display: 'grid', gridTemplateColumns: `repeat(auto-fit, minmax(min(100%, ${cols >= 3 ? 150 : 210}px), 1fr))`, gap: 16 }}>{children}</div>;
+export function FormGrid({ children, cols = 2, style }: { children: React.ReactNode; cols?: number; style?: React.CSSProperties }) {
+  return <div style={{ display: 'grid', gridTemplateColumns: `repeat(auto-fit, minmax(min(100%, ${cols >= 3 ? 150 : 210}px), 1fr))`, gap: 16, ...style }}>{children}</div>;
 }
 
 export function SelectField({ T, value, onChange, options, render }:

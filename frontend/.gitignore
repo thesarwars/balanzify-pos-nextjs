@@ -6,3 +6,6 @@ build/
 .DS_Store
 *.log
 next-env.d.ts
+
+# typecheck artifact
+*.tsbuildinfo
