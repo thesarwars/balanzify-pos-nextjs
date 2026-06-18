@@ -2228,6 +2228,28 @@ function toRealDiscountBody(f: any): any {
   if (f.is_active !== undefined) b.is_active = f.is_active;
   return b;
 }
+function adaptRealCoupon(c: any): any {
+  return {
+    id: c.id, code: c.code, description: c.description || '', type: c.type, value: Number(c.value || 0),
+    min_purchase: Number(c.minPurchase || 0), max_uses: c.maxUses, used_count: c.usedCount || 0,
+    per_customer_limit: c.perCustomerLimit, valid_from: c.validFrom ? String(c.validFrom).slice(0, 10) : '',
+    valid_until: c.validUntil ? String(c.validUntil).slice(0, 10) : '', is_active: c.isActive,
+  };
+}
+function toRealCouponBody(f: any): any {
+  const b: any = {};
+  if (f.code !== undefined) b.code = f.code;
+  if (f.description !== undefined) b.description = f.description || undefined;
+  if (f.type !== undefined) b.type = f.type;
+  if (f.value !== undefined) b.value = Number(f.value || 0);
+  if (f.min_purchase !== undefined) b.min_purchase = Number(f.min_purchase || 0);
+  if (f.max_uses !== undefined) b.max_uses = f.max_uses ? Number(f.max_uses) : null;
+  if (f.per_customer_limit !== undefined) b.per_customer_limit = Number(f.per_customer_limit || 1);
+  if (f.valid_from !== undefined) b.valid_from = f.valid_from || null;
+  if (f.valid_until !== undefined) b.valid_until = f.valid_until || null;
+  if (f.is_active !== undefined) b.is_active = f.is_active;
+  return b;
+}
 
 // ── Payment accounts (/api/v1/payment-accounts) ───────────────────────────────
 function adaptRealPaymentAccount(a: any): any {
@@ -3258,9 +3280,36 @@ const API: any = {
     async set(body: any) { return (await transport('POST', '/connector/api/opening-stock', { body })).data; },
   },
   reward: {
-    async getSettings() { return (await transport('GET', '/connector/api/reward-point-setting')).data; },
-    async saveSettings(body: any) { return (await transport('PUT', '/connector/api/reward-point-setting', { body })).data; },
-    async members() { return (await transport('GET', '/connector/api/reward-member')).data; },
+    async getSettings() {
+      if (REAL_MODE) return await realReq('GET', '/loyalty/rules');
+      return (await transport('GET', '/connector/api/reward-point-setting')).data;
+    },
+    async saveSettings(body: any) {
+      if (REAL_MODE) return await realReq('PUT', '/loyalty/rules', { body });
+      return (await transport('PUT', '/connector/api/reward-point-setting', { body })).data;
+    },
+    async members() {
+      if (REAL_MODE) return await realReq('GET', '/loyalty/members');
+      return (await transport('GET', '/connector/api/reward-member')).data;
+    },
+  },
+  coupon: {
+    async list() {
+      if (REAL_MODE) { const r = await realReq('GET', '/coupons'); return ((r && (r.coupons || r.data)) || []).map(adaptRealCoupon); }
+      return [];
+    },
+    async create(body: any) {
+      if (REAL_MODE) return adaptRealCoupon(await realReq('POST', '/coupons', { body: toRealCouponBody(body) }));
+      throw new ApiError(501, 'Coupons need the live backend.');
+    },
+    async update(id: any, body: any) {
+      if (REAL_MODE) return adaptRealCoupon(await realReq('PUT', '/coupons/' + id, { body: toRealCouponBody(body) }));
+      throw new ApiError(501, 'Coupons need the live backend.');
+    },
+    async validate(code: any, subtotal: any) {
+      if (REAL_MODE) return await realReq('POST', '/coupons/validate', { body: { code, subtotal: Number(subtotal || 0) } });
+      throw new ApiError(501, 'Coupons need the live backend.');
+    },
   },
   report: {
     // Live KPIs from the backend; null in mock mode so screens keep their seed data.

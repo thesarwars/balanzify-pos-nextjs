@@ -588,6 +588,21 @@ const LoyaltyRuleSchema = z.object({
   is_active: z.boolean().default(true),
 });
 
+// Rich POS reward-settings config (stored as JSON on the loyalty rule).
+const RewardSettingsSchema = z.object({
+  enabled:                 z.coerce.boolean().optional(),
+  display_name:            optStr(100),
+  amount_per_unit_point:   z.coerce.number().min(0).optional(),
+  min_order_total_earn:    z.coerce.number().min(0).optional(),
+  max_points_per_order:    z.coerce.number().min(0).nullable().optional(),
+  redeem_amount_per_point: z.coerce.number().min(0).optional(),
+  min_order_total_redeem:  z.coerce.number().min(0).optional(),
+  min_redeem_point:        z.coerce.number().int().min(0).optional(),
+  max_redeem_point:        z.coerce.number().int().min(0).optional(),
+  expiry_period:           z.coerce.number().int().min(0).optional(),
+  expiry_type:             z.enum(['day', 'week', 'month', 'year']).optional(),
+}).passthrough();
+
 const PettyCashSchema = z.object({
   type: z.enum(['in','out']),
   amount: money.refine(v => v > 0, 'Amount must be greater than 0'),
@@ -731,7 +746,7 @@ module.exports = {
   RosterShiftSchema, RosterSwapSchema, HrAdvanceSchema, HrTodoSchema, StatusSchema,
   PayrollSchema, PayslipSettingsSchema, PackageSchema, ServiceTypeSchema,
   PaginationSchema, ProductVariantSchema,
-  CouponSchema, ApplyCouponSchema, LoyaltyRuleSchema, PettyCashSchema,
+  CouponSchema, ApplyCouponSchema, LoyaltyRuleSchema, RewardSettingsSchema, PettyCashSchema,
   BundleSchema, ScheduledReportSchema, CustomerSegmentSchema,
   BarcodeJobSchema, SupplierCatalogImportSchema, SaleSchemaV3,
 };
