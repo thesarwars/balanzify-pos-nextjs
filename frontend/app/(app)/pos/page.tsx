@@ -56,6 +56,8 @@ function POS({ T, tweaks }: { T: any; tweaks: any }) {
   const [payOpen, setPayOpen] = useStateP(false);
   const [posting, setPosting] = useStateP(false);  // sale POST in flight
   const [invoice, setInvoice] = useStateP<any>(null);   // invoice_no returned by the API
+  const [saleId, setSaleId] = useStateP<any>(null);     // sale uuid for receipt actions
+  const [receiptMsg, setReceiptMsg] = useStateP<any>(null);
   const [postErr, setPostErr] = useStateP<any>(null);
   // till context: selected customer, reference data, variation picker, points redeem
   const [customer, setCustomer] = useStateP<any>(null);
@@ -199,7 +201,15 @@ function POS({ T, tweaks }: { T: any; tweaks: any }) {
   function setQty(key: any, d: number) {
     setCart((prev: any[]) => prev.flatMap((c: any) => c.key !== key ? [c] : (c.qty + d <= 0 ? [] : [{ ...c, qty: c.qty + d }])));
   }
-  function clear() { setCart([]); setCharged(null); setInvoice(null); setPostErr(null); setRedeem(false); setPayMode('quick'); setTenders([]); setChangeDue(0); }
+  function clear() { setCart([]); setCharged(null); setInvoice(null); setSaleId(null); setReceiptMsg(null); setPostErr(null); setRedeem(false); setPayMode('quick'); setTenders([]); setChangeDue(0); }
+  async function doReceipt(kind: string) {
+    if (!saleId) return;
+    try {
+      if (kind === 'pdf') { await API.receipt.pdf(saleId); setReceiptMsg('Receipt opened'); }
+      else if (kind === 'whatsapp') { const r: any = await API.receipt.whatsapp(saleId); setReceiptMsg(r?.message || 'Sent on WhatsApp'); }
+      else if (kind === 'email') { const e = (typeof window !== 'undefined') ? window.prompt('Send receipt to email:', (customer && customer.email) || '') : ''; if (!e) return; const r: any = await API.receipt.email(saleId, e); setReceiptMsg(r?.message || 'Emailed'); }
+    } catch (ex: any) { setReceiptMsg(ex.message || 'Receipt action failed'); }
+  }
   function pickCustomer(c: any) { setCustomer(c); setCustOpen(false); }
   const refreshParked = () => API.heldSale.list().then(setParked).catch(() => {});
   async function park(type: any) {
@@ -233,11 +243,15 @@ function POS({ T, tweaks }: { T: any; tweaks: any }) {
         lines: lines.map((l: any) => ({ product_id: l.id, variation: l.varName, quantity: l.qty, unit_price: l.price })),
       });
       setInvoice(created.invoice_no);
+      setSaleId(created.id || created._id || (created._real && created._real.id) || null);
+      setReceiptMsg(null);
       setChangeDue(Number(created.change_return) || 0);
       setCharged(methodLabel || (payments[0] ? payments[0].method : 'credit'));
       setPayOpen(false); setSheetOpen(false);
       refreshRegister();
-      setTimeout(() => { clear(); }, 2800);
+      // Auto-dismiss only when receipt actions aren't available (mock mode);
+      // in real mode keep the panel so the cashier can print/send the receipt.
+      if (!(API.config?.isReal?.())) setTimeout(() => { clear(); }, 2800);
     } catch (ex: any) {
       setPostErr(ex.message || 'Could not record the sale.');
     } finally { setPosting(false); }
@@ -632,6 +646,15 @@ function POS({ T, tweaks }: { T: any; tweaks: any }) {
             <div style={{ fontSize: 14, color: 'rgba(255,255,255,0.7)', marginTop: 6 }}>{money(total)} · {charged === 'credit' ? 'Credit' : (PAYMENT_METHODS.find((m: any) => m.id === charged)?.label || 'Paid')} · Receipt sent</div>
             {changeDue > 0 && <div style={{ fontSize: 20, color: '#fff', marginTop: 12, fontFamily: T.fMono, fontWeight: 700, background: 'rgba(255,255,255,0.12)', borderRadius: 10, padding: '8px 18px', display: 'inline-block' }}>Change {money(changeDue)}</div>}
             {invoice && <div style={{ fontSize: 12.5, color: 'rgba(255,255,255,0.5)', marginTop: 12, fontFamily: T.fMono }}>Invoice {invoice}</div>}
+            {saleId && (API.config?.isReal?.()) && (
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginTop: 18, flexWrap: 'wrap' }}>
+                {[['pdf', '🖨 Receipt'], ['whatsapp', '⊞ WhatsApp'], ['email', '✉ Email']].map(([k, lbl]: any) => (
+                  <button key={k} onClick={() => doReceipt(k)} style={{ padding: '9px 16px', borderRadius: 9, border: '1px solid rgba(255,255,255,0.25)', background: 'rgba(255,255,255,0.12)', color: '#fff', cursor: 'pointer', fontFamily: T.fBody, fontSize: 12.5, fontWeight: 600 }}>{lbl}</button>
+                ))}
+              </div>
+            )}
+            {receiptMsg && <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.85)', marginTop: 10 }}>{receiptMsg}</div>}
+            {saleId && (API.config?.isReal?.()) && <div style={{ marginTop: 16 }}><button onClick={clear} style={{ padding: '10px 22px', borderRadius: 9, border: 'none', background: '#fff', color: T.ink, cursor: 'pointer', fontFamily: T.fBody, fontSize: 13, fontWeight: 700 }}>New sale →</button></div>}
           </div>
         </div>
       )}

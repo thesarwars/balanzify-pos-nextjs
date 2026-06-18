@@ -2625,6 +2625,28 @@ const API: any = {
     },
   },
 
+  // Receipts (/api/v1/checkout) — real backend only; mock mode is a no-op.
+  receipt: {
+    async pdf(saleId: any) {
+      if (!REAL_MODE) throw new ApiError(501, 'Receipts need the live backend.');
+      const headers: any = { Accept: 'application/pdf' };
+      const tok = getAccessToken(); if (tok) headers.Authorization = 'Bearer ' + tok;
+      const res = await fetch(BACKEND_BASE + '/api/v1/checkout/receipt/' + saleId + '/pdf', { headers });
+      if (!res.ok) throw new ApiError(res.status, 'Could not generate the receipt PDF.');
+      const url = URL.createObjectURL(await res.blob());
+      if (hasWindow()) window.open(url, '_blank');
+      return url;
+    },
+    async whatsapp(saleId: any, phone?: any) {
+      if (!REAL_MODE) throw new ApiError(501, 'Receipts need the live backend.');
+      return await realReq('POST', '/checkout/receipt/' + saleId + '/send-whatsapp', { body: phone ? { phone } : {} });
+    },
+    async email(saleId: any, email: any) {
+      if (!REAL_MODE) throw new ApiError(501, 'Receipts need the live backend.');
+      return await realReq('POST', '/checkout/receipt/' + saleId + '/send-email', { body: { email } });
+    },
+  },
+
   // GET /connector/api/contactapi
   contact: {
     async list(params: any = {}) {
