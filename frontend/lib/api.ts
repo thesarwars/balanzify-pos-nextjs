@@ -2625,6 +2625,16 @@ const API: any = {
     },
   },
 
+  // Pharmacy (/api/v1/pharmacy) — gated by the pharmacy module. Real backend only.
+  pharmacy: {
+    async dashboard() { if (REAL_MODE) return await realReq('GET', '/pharmacy/dashboard'); return null; },
+    async expiry(days?: any) { if (REAL_MODE) return await realReq('GET', '/pharmacy/expiry', { query: days ? { days } : undefined }); return { expired: [], urgent_30d: [], soon_90d: [], total_value_at_risk: 0 }; },
+    async drugs(q?: any) { if (REAL_MODE) { const r = await realReq('GET', '/pharmacy/drugs', { query: q ? { q } : undefined }); return r.drugs || []; } return []; },
+    async updateDrug(id: any, body: any) { if (REAL_MODE) return await realReq('PUT', '/pharmacy/drugs/' + id, { body }); throw new ApiError(501, 'Pharmacy needs the live backend.'); },
+    async fastMovers(days?: any) { if (REAL_MODE) { const r = await realReq('GET', '/pharmacy/fast-movers', { query: days ? { days } : undefined }); return r.fast_movers || []; } return []; },
+    async pullExpired(batchId: any, notes?: any) { if (REAL_MODE) return await realReq('POST', '/pharmacy/pull-expired', { body: { batch_id: batchId, notes } }); throw new ApiError(501, 'Pharmacy needs the live backend.'); },
+  },
+
   // Receipts (/api/v1/checkout) — real backend only; mock mode is a no-op.
   receipt: {
     async pdf(saleId: any) {

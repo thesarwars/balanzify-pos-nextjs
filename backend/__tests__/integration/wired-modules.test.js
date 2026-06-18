@@ -216,4 +216,31 @@ describe('service types (restaurant-gated)', () => {
   });
 });
 
+describe('pharmacy (gated)', () => {
+  let token, loc;
+  beforeAll(async () => { token = await register(); await enableModule(token, 'pharmacy'); loc = await location(token); });
+  test('403 until enabled, drug catalog + unit-selling config, expiry write-off', async () => {
+    const fresh = await register();
+    expect((await request(app).get('/api/v1/pharmacy/dashboard').set(auth(fresh))).status).toBe(403);
+
+    const pid = await stockedProduct(token, loc, 2, 40);
+    const drugs = (await request(app).get('/api/v1/pharmacy/drugs').set(auth(token))).body.drugs;
+    expect(drugs.find(d => d.id === pid).total_stock).toBe(40);
+    const cfg = await request(app).put(`/api/v1/pharmacy/drugs/${pid}`).set(auth(token))
+      .send({ genericName: 'Amoxicillin', strength: '500mg', formulation: 'capsule', sellByUnit: true, packSize: 10, unitPrice: 0.25, unitName: 'capsule' });
+    expect(cfg.status).toBe(200);
+    expect(cfg.body.sellByUnit).toBe(true);
+
+    // expired batch -> dashboard exposure -> pull-expired clears it
+    const batch = await prisma.stockBatch.create({ data: { productId: pid, locationId: loc, batchNumber: 'B-OLD', quantity: 10, costPrice: 1, expiryDate: new Date('2025-01-01') } });
+    let dash = (await request(app).get('/api/v1/pharmacy/dashboard').set(auth(token))).body;
+    expect(dash.expiry_exposure.expired_batches).toBe(1);
+    expect(dash.expiry_exposure.expired_value_at_cost).toBe(50); // 10 units x product cost 5 (dashboard values at product cost)
+    const pull = await request(app).post('/api/v1/pharmacy/pull-expired').set(auth(token)).send({ batch_id: batch.id });
+    expect(pull.status).toBe(200);
+    dash = (await request(app).get('/api/v1/pharmacy/dashboard').set(auth(token))).body;
+    expect(dash.expiry_exposure.expired_batches).toBe(0);
+  });
+});
+
 afterAll(async () => { await prisma.$disconnect(); });
