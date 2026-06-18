@@ -278,4 +278,68 @@ describe('coupons', () => {
   });
 });
 
+describe('wholesale', () => {
+  let token, loc, prod, customerId;
+  beforeAll(async () => {
+    token = await register();
+    await enableModule(token, 'wholesale');
+    loc = await location(token);
+    prod = await stockedProduct(token, loc, 10, 100);
+    const c = await request(app).post('/api/v1/customers').set(auth(token)).send({ name: 'Corner Shop', phone: '0700111222' });
+    expect(c.status).toBe(201);
+    customerId = c.body.id;
+  });
+
+  test('gated off by default', async () => {
+    const other = await register();
+    expect((await request(app).get('/api/v1/wholesale/orders').set(auth(other))).status).toBe(403);
+  });
+
+  test('full lifecycle: create → pick → dispatch → deliver → payment → outstanding', async () => {
+    // create
+    const created = await request(app).post('/api/v1/wholesale/orders').set(auth(token))
+      .send({ customer_id: customerId, items: [{ product_id: prod, quantity: 5 }], delivery_notes: 'Back gate' });
+    expect(created.status).toBe(201);
+    const id = created.body.id;
+    expect(Number(created.body.total)).toBe(50);
+    expect(created.body.status).toBe('pending');
+    const itemIds = created.body.items.map(i => i.id);
+
+    // appears in list
+    const list = await request(app).get('/api/v1/wholesale/orders').set(auth(token));
+    expect(list.status).toBe(200);
+    expect(list.body.orders.find(o => o.id === id)).toBeTruthy();
+
+    // dispatch before pick → rejected
+    expect((await request(app).post(`/api/v1/wholesale/orders/${id}/dispatch`).set(auth(token)).send({ driver_name: 'Sam' })).status).toBe(400);
+
+    // pick all → status picked
+    const picked = await request(app).post(`/api/v1/wholesale/orders/${id}/pick`).set(auth(token)).send({ item_ids: itemIds });
+    expect(picked.status).toBe(200);
+    expect(picked.body.fully_picked).toBe(true);
+
+    // dispatch
+    expect((await request(app).post(`/api/v1/wholesale/orders/${id}/dispatch`).set(auth(token)).send({ driver_name: 'Sam — Van 3' })).status).toBe(200);
+    // deliver
+    expect((await request(app).post(`/api/v1/wholesale/orders/${id}/deliver`).set(auth(token))).status).toBe(200);
+
+    // partial payment → outstanding shows remaining
+    const pay = await request(app).post(`/api/v1/wholesale/orders/${id}/payment`).set(auth(token)).send({ amount: 20 });
+    expect(pay.status).toBe(200);
+    expect(pay.body.payment_status).toBe('partial');
+
+    const out = await request(app).get('/api/v1/wholesale/outstanding').set(auth(token));
+    expect(out.status).toBe(200);
+    const row = out.body.outstanding.find(o => o.customer === 'Corner Shop');
+    expect(row).toBeTruthy();
+    expect(row.outstanding).toBe(30);
+
+    // settle the balance → drops off outstanding
+    const pay2 = await request(app).post(`/api/v1/wholesale/orders/${id}/payment`).set(auth(token)).send({ amount: 30 });
+    expect(pay2.body.payment_status).toBe('paid');
+    const out2 = await request(app).get('/api/v1/wholesale/outstanding').set(auth(token));
+    expect(out2.body.outstanding.find(o => o.customer === 'Corner Shop')).toBeFalsy();
+  });
+});
+
 afterAll(async () => { await prisma.$disconnect(); });
