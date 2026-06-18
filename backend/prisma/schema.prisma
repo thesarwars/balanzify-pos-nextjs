@@ -1901,6 +1901,9 @@ model LoyaltyRule {
   dollarPerPoint  Decimal  @default(0.01) @map("dollar_per_point") @db.Decimal(6, 4)
   minRedeemPoints Int      @default(100) @map("min_redeem_points")
   isActive        Boolean  @default(true) @map("is_active")
+  // Full reward-settings config (display name, earn/redeem thresholds, caps,
+  // expiry) used by the POS; the typed columns above stay synced for sale-earn.
+  settings        Json     @default("{}")
   createdAt       DateTime @default(now()) @map("created_at")
 
   business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)

@@ -243,4 +243,39 @@ describe('pharmacy (gated)', () => {
   });
 });
 
+describe('loyalty (rich reward settings)', () => {
+  let token;
+  beforeAll(async () => { token = await register(); });
+  test('defaults shape, save rich settings, persist + typed sync', async () => {
+    const def = (await request(app).get('/api/v1/loyalty/rules').set(auth(token))).body;
+    expect(def.display_name).toBe('Reward Points');
+    expect(def.amount_per_unit_point).toBe(1);
+    const saved = await request(app).put('/api/v1/loyalty/rules').set(auth(token))
+      .send({ enabled: true, display_name: 'Stars', amount_per_unit_point: 2, max_points_per_order: 50, redeem_amount_per_point: 0.05, min_redeem_point: 20 });
+    expect(saved.status).toBe(200);
+    expect(saved.body.display_name).toBe('Stars');
+    const reload = (await request(app).get('/api/v1/loyalty/rules').set(auth(token))).body;
+    expect(reload.display_name).toBe('Stars');
+    expect(reload.max_points_per_order).toBe(50);
+    expect(reload.min_redeem_point).toBe(20);
+    expect(Array.isArray((await request(app).get('/api/v1/loyalty/members').set(auth(token))).body)).toBe(true);
+  });
+});
+
+describe('coupons', () => {
+  let token;
+  beforeAll(async () => { token = await register(); });
+  test('create, validate (discount + min-purchase), duplicate 409, toggle', async () => {
+    const c = await request(app).post('/api/v1/coupons').set(auth(token)).send({ code: 'WEEKEND10', type: 'pct', value: 10, min_purchase: 20 });
+    expect(c.status).toBe(201);
+    const ok = await request(app).post('/api/v1/coupons/validate').set(auth(token)).send({ code: 'WEEKEND10', subtotal: 100 });
+    expect(ok.status).toBe(200);
+    expect(ok.body.discount).toBe(10);
+    expect((await request(app).post('/api/v1/coupons/validate').set(auth(token)).send({ code: 'WEEKEND10', subtotal: 10 })).status).toBe(400); // below min
+    expect((await request(app).post('/api/v1/coupons').set(auth(token)).send({ code: 'WEEKEND10', type: 'pct', value: 5 })).status).toBe(409); // dup
+    const upd = await request(app).put(`/api/v1/coupons/${c.body.id}`).set(auth(token)).send({ is_active: false });
+    expect(upd.status).toBe(200);
+  });
+});
+
 afterAll(async () => { await prisma.$disconnect(); });

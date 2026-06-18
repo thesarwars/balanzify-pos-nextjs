@@ -3,10 +3,23 @@ const prisma = require('../lib/prisma');
 const { auth, requireRole } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const {
-  CouponSchema, ApplyCouponSchema, LoyaltyRuleSchema, PettyCashSchema,
+  CouponSchema, ApplyCouponSchema, LoyaltyRuleSchema, RewardSettingsSchema, PettyCashSchema,
   BundleSchema, ScheduledReportSchema, CustomerSegmentSchema,
   BarcodeJobSchema, SupplierCatalogImportSchema,
 } = require('../validation/schemas');
+
+// Full POS reward-settings shape with sane defaults; persisted as JSON on the rule.
+const REWARD_DEFAULTS = {
+  enabled: true, display_name: 'Reward Points', amount_per_unit_point: 1,
+  min_order_total_earn: 0, max_points_per_order: null, redeem_amount_per_point: 0.01,
+  min_order_total_redeem: 0, min_redeem_point: 100, max_redeem_point: 1000,
+  expiry_period: 12, expiry_type: 'month',
+};
+function rewardSettings(rule) {
+  const s = { ...REWARD_DEFAULTS, ...(rule && rule.settings ? rule.settings : {}) };
+  s.enabled = rule ? rule.isActive : REWARD_DEFAULTS.enabled;
+  return s;
+}
 
 // ══════════════════════════════════════════════════════════════════════════════
 // COUPONS
@@ -127,22 +140,38 @@ const loyaltyRouter = express.Router();
 
 loyaltyRouter.get('/rules', auth, async (req, res, next) => {
   try {
-    const rule = await prisma.loyaltyRule.findUnique({
-      where: { businessId: req.user.business_id },
-    });
-    res.json(rule || null);
+    const rule = await prisma.loyaltyRule.findUnique({ where: { businessId: req.user.business_id } });
+    res.json(rewardSettings(rule)); // full reward-settings shape (the POS expects all fields)
   } catch (err) { next(err); }
 });
 
-loyaltyRouter.put('/rules', auth, requireRole('owner'), validate(LoyaltyRuleSchema), async (req, res, next) => {
+loyaltyRouter.put('/rules', auth, requireRole('owner'), validate(RewardSettingsSchema), async (req, res, next) => {
   try {
-    const { points_per_dollar, dollar_per_point, min_redeem_points, is_active } = req.body;
+    const s = { ...REWARD_DEFAULTS, ...req.body };
+    const typed = {
+      isActive: s.enabled !== false,
+      pointsPerDollar: s.amount_per_unit_point > 0 ? +(1 / s.amount_per_unit_point).toFixed(4) : 1,
+      dollarPerPoint: s.redeem_amount_per_point || 0.01,
+      minRedeemPoints: s.min_redeem_point || 0,
+    };
     const rule = await prisma.loyaltyRule.upsert({
       where: { businessId: req.user.business_id },
-      create: { businessId: req.user.business_id, pointsPerDollar: points_per_dollar, dollarPerPoint: dollar_per_point, minRedeemPoints: min_redeem_points, isActive: is_active },
-      update: { pointsPerDollar: points_per_dollar, dollarPerPoint: dollar_per_point, minRedeemPoints: min_redeem_points, isActive: is_active },
+      create: { businessId: req.user.business_id, settings: s, ...typed },
+      update: { settings: s, ...typed },
     });
-    res.json(rule);
+    res.json(rewardSettings(rule));
+  } catch (err) { next(err); }
+});
+
+// Members — customers who have earned points (drives the reward members list).
+loyaltyRouter.get('/members', auth, async (req, res, next) => {
+  try {
+    const customers = await prisma.customer.findMany({
+      where: { businessId: req.user.business_id, loyaltyPoints: { gt: 0 } },
+      select: { id: true, name: true, phone: true, loyaltyPoints: true },
+      orderBy: { loyaltyPoints: 'desc' }, take: 200,
+    });
+    res.json(customers.map(c => ({ id: c.id, name: c.name, mobile: c.phone || '', points: c.loyaltyPoints })));
   } catch (err) { next(err); }
 });
 
