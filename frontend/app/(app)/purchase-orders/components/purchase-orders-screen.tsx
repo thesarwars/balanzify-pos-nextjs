@@ -93,7 +93,10 @@ function PurchaseEditor({ T, suppliers, locs, onClose, onSaved }: { T: any; supp
   const [paid, setPaid] = useStatePu<any>('');
   const [busy, setBusy] = useStatePu(false);
   const [err, setErr] = useStatePu<any>(null);
-  const products = PRODUCTS.filter((p: any) => p.type !== 'combo' && p.enable_stock !== false);
+  // Live catalog in real mode; seed PRODUCTS is the mock fallback.
+  const [catalog, setCatalog] = useStatePu<any[]>(PRODUCTS);
+  useEffectPu(() => { if (API.config?.isReal?.()) API.product.list({ per_page: 200 }).then((r: any) => setCatalog(r.items || [])).catch(() => {}); }, []);
+  const products = catalog.filter((p: any) => p.type !== 'combo' && p.enable_stock !== false);
 
   const setLine = (i: any, k: any, v: any) => setLines((ls: any) => ls.map((l: any, j: any) => j === i ? { ...l, [k]: v } : l));
   const addLine = () => setLines((ls: any) => [...ls, { product_id: '', qty: '', unit_cost: '' }]);
@@ -173,7 +176,7 @@ function PurchaseView({ T, purchase, onClose }: { T: any; purchase: any; onClose
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 60px 90px 90px', padding: '8px 12px', background: T.paperAlt, fontSize: 10, fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase', color: T.inkSub }}><span>Product</span><span style={{ textAlign: 'right' }}>Qty</span><span style={{ textAlign: 'right' }}>Cost</span><span style={{ textAlign: 'right' }}>Total</span></div>
         {(p.lines || []).map((l: any, i: number) => { const pr: any = PRODUCTS.find((x: any) => parseInt(String(x.id).replace(/\D/g, ''), 10) === l.product_id) || {}; return (
           <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 60px 90px 90px', padding: '9px 12px', borderTop: `1px solid ${T.line}`, fontSize: 12.5 }}>
-            <span style={{ fontWeight: 600, color: T.ink }}>{pr.name || 'Product #' + l.product_id}</span>
+            <span style={{ fontWeight: 600, color: T.ink }}>{l.product_name || pr.name || 'Product #' + l.product_id}</span>
             <span style={{ textAlign: 'right', fontFamily: T.fMono, color: T.inkSub } as React.CSSProperties}>{l.qty}</span>
             <span style={{ textAlign: 'right', fontFamily: T.fMono, color: T.inkSub } as React.CSSProperties}>{money(l.unit_cost)}</span>
             <span style={{ textAlign: 'right', fontFamily: T.fMono, color: T.ink } as React.CSSProperties}>{money(l.qty * l.unit_cost)}</span>
@@ -190,7 +193,9 @@ function OpeningStock({ T, onClose, toast }: { T: any; onClose: () => void; toas
   const [qty, setQty] = useStatePu<any>('');
   const [busy, setBusy] = useStatePu(false);
   const [tick, setTick] = useStatePu(0);
-  const products = PRODUCTS.filter((p: any) => p.enable_stock !== false && p.type !== 'combo');
+  const [catalog, setCatalog] = useStatePu<any[]>(PRODUCTS);
+  useEffectPu(() => { if (API.config?.isReal?.()) API.product.list({ per_page: 200 }).then((r: any) => setCatalog(r.items || [])).catch(() => {}); }, []);
+  const products = catalog.filter((p: any) => p.enable_stock !== false && p.type !== 'combo');
   const current: any = products.find((p: any) => p.id === pid);
 
   async function apply() {

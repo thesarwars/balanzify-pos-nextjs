@@ -97,7 +97,10 @@ function TransferEditor({ T, locs, onClose, onSaved }: { T: Theme; locs: any[]; 
   const [lines, setLines] = useStateTr<any[]>([{ product_id: '', qty: '' }]);
   const [busy, setBusy] = useStateTr(false);
   const [err, setErr] = useStateTr<string | null>(null);
-  const products = PRODUCTS.filter((p: any) => p.type !== 'combo' && p.enable_stock !== false);
+  // Live catalog in real mode; seed PRODUCTS is the mock fallback.
+  const [catalog, setCatalog] = useStateTr<any[]>(PRODUCTS);
+  useEffectTr(() => { if (API.config?.isReal?.()) API.product.list({ per_page: 200 }).then((r: any) => setCatalog(r.items || [])).catch(() => {}); }, []);
+  const products = catalog.filter((p: any) => p.type !== 'combo' && p.enable_stock !== false);
   const setLine = (i: number, k: string, v: any) => setLines((ls: any[]) => ls.map((l, j) => j === i ? { ...l, [k]: v } : l));
 
   async function save() {
@@ -152,7 +155,7 @@ function TransferView({ T, transfer, onClose }: { T: Theme; transfer: any; onClo
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 70px 90px', padding: '8px 12px', background: T.paperAlt, fontSize: 10, fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase', color: T.inkSub }}><span>Product</span><span style={{ textAlign: 'right' }}>Qty</span><span style={{ textAlign: 'right' }}>Value</span></div>
         {(t.lines || []).map((l: any, i: number) => { const p: any = PRODUCTS.find((x: any) => parseInt(String(x.id).replace(/\D/g, ''), 10) === l.product_id) || {}; return (
           <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 70px 90px', padding: '9px 12px', borderTop: `1px solid ${T.line}`, fontSize: 12.5 }}>
-            <span style={{ fontWeight: 600, color: T.ink }}>{p.name || 'Product #' + l.product_id}</span>
+            <span style={{ fontWeight: 600, color: T.ink }}>{l.product_name || p.name || 'Product #' + l.product_id}</span>
             <span style={{ textAlign: 'right', fontFamily: T.fMono, color: T.inkSub }}>{l.qty}</span>
             <span style={{ textAlign: 'right', fontFamily: T.fMono, color: T.ink }}>{money(l.qty * l.unit_cost)}</span>
           </div>
