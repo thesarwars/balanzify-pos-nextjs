@@ -2342,8 +2342,8 @@ function adaptRealDashboard(d: any): any {
       { id: 'zaad', label: 'Zaad', value: zaad, color: '#1B3A6B' },
       { id: 'card', label: 'Card', value: card, color: '#A16207' },
     ],
-    // The backend dashboard has no hourly breakdown yet — keep a neutral shape.
-    hourly: [18, 34, 52, 78, 96, 110, 88, 64, 72, 120, 138, 102, 70, 44],
+    // Real today-by-hour from the backend (8:00–21:00 buckets); neutral fallback.
+    hourly: Array.isArray(d.hourly) && d.hourly.length ? d.hourly.map((v: any) => Number(v) || 0) : new Array(14).fill(0),
     topProducts: (d.top_products || []).map((p: any) => ({ name: p.name, qty: Number(p.units_sold || 0), revenue: Number(p.revenue || 0) })),
     recentSales: (d.recent_sales || []).map((s: any) => ({
       id: s.saleNumber || s.id,
@@ -2394,6 +2394,12 @@ const API: any = {
     logout() {
       if (REAL_MODE) { try { realReq('POST', '/auth/logout', {}); } catch (e) {} clearTokens(); return; }
       API.config.set({ token: null });
+    },
+    // The signed-in identity (business + user). Null in mock mode so the shell
+    // falls back to the seed BUSINESS/CASHIER.
+    async me() {
+      if (REAL_MODE) { try { return await realReq('GET', '/auth/me'); } catch (e) { return null; } }
+      return null;
     },
   },
 

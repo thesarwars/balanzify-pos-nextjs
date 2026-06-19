@@ -1,7 +1,7 @@
 'use client';
 import React from 'react';
 import { useRouter } from 'next/navigation';
-import { Topbar } from '@/components/shell';
+import { Topbar, useSession } from '@/components/shell';
 import { Btn, Badge, StatCard, Panel, methodTone } from '@/components/kit';
 import { money, money0, timeAgo } from '@/lib/theme';
 import { DASH, BUSINESS, SALES } from '@/lib/data';
@@ -12,6 +12,9 @@ import { API } from '@/lib/api';
 // recent sales. Calm, scannable, warm.
 // ─────────────────────────────────────────────────────────────────
 export function Dashboard({ T, setScreen }: { T: any; setScreen: (s: string) => void }) {
+  const session = useSession();
+  const firstName = (session && session.name) ? session.name.trim().split(/\s+/)[0] : 'Amina';
+  const bizName = (session && session.business_name) || BUSINESS.name;
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
   const today = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
@@ -25,12 +28,12 @@ export function Dashboard({ T, setScreen }: { T: any; setScreen: (s: string) => 
       if (Array.isArray(d.recentSales) && d.recentSales.length) setRecent(d.recentSales);
     }).catch(() => {});
   }, []);
-  const maxH = Math.max(...dash.hourly);
+  const maxH = Math.max(1, ...dash.hourly);
   const payTotal = dash.byPayment.reduce((s: number, p: any) => s + p.value, 0);
 
   return (
     <div style={{ flex: 1, overflowY: 'auto', background: T.paperAlt }}>
-      <Topbar T={T} title={`${greeting}, Amina`} subtitle={`${today} · ${BUSINESS.name}, ${BUSINESS.branch}`}
+      <Topbar T={T} title={`${greeting}, ${firstName}`} subtitle={`${today} · ${bizName}`}
         right={<>
           <Btn T={T} kind="ghost">⤓ Export</Btn>
           <Btn T={T} kind="accent" onClick={() => setScreen('pos')}>⊞ New Sale</Btn>
@@ -62,7 +65,7 @@ export function Dashboard({ T, setScreen }: { T: any; setScreen: (s: string) => 
                 const peak = v === maxH;
                 return (
                   <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 7, height: '100%', justifyContent: 'flex-end' }}>
-                    <div title={money0(v * 9.3)} style={{
+                    <div title={money0(v)} style={{
                       width: '100%', maxWidth: 26, height: `${(v / maxH) * 100}%`, borderRadius: '6px 6px 3px 3px',
                       background: peak ? `linear-gradient(to top, ${T.accent.base}, ${T.accent.bright})` : T.navyLight,
                       opacity: peak ? 1 : 0.82, transition: 'height .5s ease',
