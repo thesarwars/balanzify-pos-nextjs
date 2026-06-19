@@ -81,6 +81,39 @@ router.post('/budget-lines/:lineId/cost', auth, validate(z.object({
   } catch (err) { next(err); }
 });
 
+// Edit a budget line (re-budget / rename)
+router.put('/budget-lines/:lineId', auth, requireRole('owner', 'manager'), validate(z.object({
+  description: z.string().max(255).optional().nullable(),
+  budgeted: z.coerce.number().nonnegative().optional(),
+})), async (req, res, next) => {
+  try {
+    const line = await prisma.projectBudgetLine.findFirst({
+      where: { id: req.params.lineId, project: { businessId: req.user.business_id } },
+    });
+    if (!line) return res.status(404).json({ title: 'Budget line not found', status: 404 });
+    const updated = await prisma.projectBudgetLine.update({
+      where: { id: line.id },
+      data: {
+        ...(req.body.description !== undefined && { description: req.body.description }),
+        ...(req.body.budgeted !== undefined && { budgeted: req.body.budgeted }),
+      },
+    });
+    res.json(updated);
+  } catch (err) { next(err); }
+});
+
+// Remove a budget line
+router.delete('/budget-lines/:lineId', auth, requireRole('owner', 'manager'), async (req, res, next) => {
+  try {
+    const line = await prisma.projectBudgetLine.findFirst({
+      where: { id: req.params.lineId, project: { businessId: req.user.business_id } },
+    });
+    if (!line) return res.status(404).json({ title: 'Budget line not found', status: 404 });
+    await prisma.projectBudgetLine.delete({ where: { id: line.id } });
+    res.json({ message: 'Budget line removed.' });
+  } catch (err) { next(err); }
+});
+
 // ── Daily labor log (cash daily-rate labor — the regional norm) ─────
 router.post('/:id/labor', auth, validate(z.object({
   work_date: z.string(),

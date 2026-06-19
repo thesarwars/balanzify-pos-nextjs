@@ -562,6 +562,12 @@ describe('construction (job costing)', () => {
     const mat = await request(app).post(`/api/v1/construction/${pid}/budget-lines`).set(auth(token)).send({ category: 'materials', description: 'Cement', budgeted: 1000 });
     expect(mat.status).toBe(201);
     await request(app).post(`/api/v1/construction/${pid}/budget-lines`).set(auth(token)).send({ category: 'labor', budgeted: 500 });
+    // a spurious line can be re-budgeted then deleted (doesn't affect the assertions below)
+    const tmp = await request(app).post(`/api/v1/construction/${pid}/budget-lines`).set(auth(token)).send({ category: 'equipment', budgeted: 999 });
+    const edited = await request(app).put(`/api/v1/construction/budget-lines/${tmp.body.id}`).set(auth(token)).send({ budgeted: 250, description: 'Scaffolding' });
+    expect(edited.status).toBe(200);
+    expect(Number(edited.body.budgeted)).toBe(250);
+    expect((await request(app).delete(`/api/v1/construction/budget-lines/${tmp.body.id}`).set(auth(token))).status).toBe(200);
     // record a material cost
     expect((await request(app).post(`/api/v1/construction/budget-lines/${mat.body.id}/cost`).set(auth(token)).send({ amount: 300 })).status).toBe(200);
     // log a labor day: 5 workers x 10 = 50
