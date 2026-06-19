@@ -334,6 +334,23 @@ describe('service-type packing charge on a sale', () => {
   });
 });
 
+describe('business profile (settings)', () => {
+  let token;
+  beforeAll(async () => { token = await register(); });
+  test('get + update name/currency persists', async () => {
+    const get = await request(app).get('/api/v1/settings').set(auth(token));
+    expect(get.status).toBe(200);
+    expect(get.body.name).toBeTruthy();
+    const upd = await request(app).put('/api/v1/settings').set(auth(token)).send({ name: 'Renamed Biz', currency: 'KES' });
+    expect(upd.status).toBe(200);
+    expect(upd.body.name).toBe('Renamed Biz');
+    expect(upd.body.currency).toBe('KES');
+    const reget = await request(app).get('/api/v1/settings').set(auth(token));
+    expect(reget.body.name).toBe('Renamed Biz');
+    expect(reget.body.currency).toBe('KES');
+  });
+});
+
 describe('hotel (PMS)', () => {
   let token;
   beforeAll(async () => { token = await register(); await enableModule(token, 'hotel'); });
