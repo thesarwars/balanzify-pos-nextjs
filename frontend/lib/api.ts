@@ -2427,6 +2427,10 @@ const API: any = {
       if (REAL_MODE) return await realReq('POST', '/auth/mfa/enable', { body: { token: String(code) } });
       throw new ApiError(501, 'Two-factor auth needs the live backend.');
     },
+    async mfaDisable(password: any) {
+      if (REAL_MODE) return await realReq('POST', '/auth/mfa/disable', { body: { password } });
+      throw new ApiError(501, 'Two-factor auth needs the live backend.');
+    },
     // The signed-in identity (business + user). Null in mock mode so the shell
     // falls back to the seed BUSINESS/CASHIER.
     async me() {

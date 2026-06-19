@@ -141,6 +141,17 @@ router.post('/mfa/enable', auth, validate(VerifyMfaSchema), async (req, res, nex
   } catch (err) { next(err); }
 });
 
+// POST /api/v1/auth/mfa/disable — re-auth with the account password to turn 2FA off
+router.post('/mfa/disable', auth, validate(z.object({ password: z.string().min(1) })), async (req, res, next) => {
+  try {
+    const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+    const valid = await bcrypt.compare(req.body.password, user.password);
+    if (!valid) return res.status(400).json({ title: 'Password is incorrect', status: 400 });
+    await prisma.user.update({ where: { id: req.user.id }, data: { mfaEnabled: false, mfaSecret: null } });
+    res.json({ message: 'Two-factor authentication disabled.' });
+  } catch (err) { next(err); }
+});
+
 // POST /api/v1/auth/refresh
 router.post('/refresh', validate(RefreshTokenSchema), async (req, res, next) => {
   try {
