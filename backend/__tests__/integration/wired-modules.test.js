@@ -319,6 +319,50 @@ describe('service-type packing charge on a sale', () => {
   });
 });
 
+describe('hotel (PMS)', () => {
+  let token;
+  beforeAll(async () => { token = await register(); await enableModule(token, 'hotel'); });
+
+  test('gated off by default', async () => {
+    const other = await register();
+    expect((await request(app).get('/api/v1/hotel/rooms').set(auth(other))).status).toBe(403);
+  });
+
+  test('lifecycle: room type → room → reservation → check-in → check-out', async () => {
+    const rt = await request(app).post('/api/v1/hotel/room-types').set(auth(token)).send({ name: 'Standard', baseRate: 50, maxOccupancy: 2 });
+    expect(rt.status).toBe(201);
+    const room = await request(app).post('/api/v1/hotel/rooms').set(auth(token)).send({ roomTypeId: rt.body.id, number: '101', floor: 1 });
+    expect(room.status).toBe(201);
+    const roomId = room.body.id;
+
+    const resv = await request(app).post('/api/v1/hotel/reservations').set(auth(token)).send({
+      roomId, guestName: 'Jo Guest', guestPhone: '0700999', checkInDate: '2026-07-01', checkOutDate: '2026-07-03', ratePerNight: 50,
+    });
+    expect(resv.status).toBe(201);
+    expect(resv.body.status).toBe('confirmed');
+    expect(Number(resv.body.totalRoomCharge)).toBe(100); // 2 nights x 50
+    const resId = resv.body.id;
+
+    // booking marks the room reserved
+    let rooms = (await request(app).get('/api/v1/hotel/rooms').set(auth(token))).body.rooms;
+    expect(rooms.find(r => r.id === roomId).status).toBe('reserved');
+
+    // check in → room occupied, folio opened
+    expect((await request(app).post(`/api/v1/hotel/reservations/${resId}/checkin`).set(auth(token))).status).toBe(200);
+    rooms = (await request(app).get('/api/v1/hotel/rooms').set(auth(token))).body.rooms;
+    expect(rooms.find(r => r.id === roomId).status).toBe('occupied');
+
+    // check out (zero balance settles) → housekeeping task auto-created
+    expect((await request(app).post(`/api/v1/hotel/reservations/${resId}/checkout`).set(auth(token))).status).toBe(200);
+    const hk = await request(app).get('/api/v1/hotel/housekeeping').set(auth(token));
+    expect(hk.body.tasks.length).toBeGreaterThan(0);
+
+    const dash = await request(app).get('/api/v1/hotel/dashboard').set(auth(token));
+    expect(dash.status).toBe(200);
+    expect(dash.body).toHaveProperty('occupancy_pct');
+  });
+});
+
 describe('wholesale', () => {
   let token, loc, prod, customerId;
   beforeAll(async () => {

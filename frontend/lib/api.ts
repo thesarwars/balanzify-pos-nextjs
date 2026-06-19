@@ -2705,6 +2705,24 @@ const API: any = {
     },
   },
 
+  // Hotel / PMS (/api/v1/hotel) — gated by the hotel module. Real only.
+  // The hotel backend takes camelCase request bodies, so pass them through as-is.
+  hotel: {
+    async dashboard() { if (REAL_MODE) return await realReq('GET', '/hotel/dashboard'); return null; },
+    async rooms(params?: any) { if (REAL_MODE) return await realReq('GET', '/hotel/rooms', { query: params }); return { rooms: [], stats: {} }; },
+    async setRoomStatus(id: any, status: any, notes?: any) { if (REAL_MODE) return await realReq('PUT', '/hotel/rooms/' + id + '/status', { body: { status, notes: notes || undefined } }); throw new ApiError(501, 'Hotel needs the live backend.'); },
+    async roomTypes() { if (REAL_MODE) { const r = await realReq('GET', '/hotel/room-types'); return (r && r.room_types) || []; } return []; },
+    async createRoomType(body: any) { if (REAL_MODE) return await realReq('POST', '/hotel/room-types', { body }); throw new ApiError(501, 'Hotel needs the live backend.'); },
+    async createRoom(body: any) { if (REAL_MODE) return await realReq('POST', '/hotel/rooms', { body }); throw new ApiError(501, 'Hotel needs the live backend.'); },
+    async reservations(params?: any) { if (REAL_MODE) return await realReq('GET', '/hotel/reservations', { query: params }); return { reservations: [], summary: {} }; },
+    async createReservation(body: any) { if (REAL_MODE) return await realReq('POST', '/hotel/reservations', { body }); throw new ApiError(501, 'Hotel needs the live backend.'); },
+    async checkin(id: any) { if (REAL_MODE) return await realReq('POST', '/hotel/reservations/' + id + '/checkin', { body: {} }); throw new ApiError(501, 'Hotel needs the live backend.'); },
+    async checkout(id: any, body?: any) { if (REAL_MODE) return await realReq('POST', '/hotel/reservations/' + id + '/checkout', { body: body || {} }); throw new ApiError(501, 'Hotel needs the live backend.'); },
+    async cancelReservation(id: any, reason?: any) { if (REAL_MODE) return await realReq('DELETE', '/hotel/reservations/' + id, { body: { reason } }); throw new ApiError(501, 'Hotel needs the live backend.'); },
+    async housekeeping(params?: any) { if (REAL_MODE) { const r = await realReq('GET', '/hotel/housekeeping', { query: params }); return (r && r.tasks) || []; } return []; },
+    async updateHousekeeping(id: any, status: any) { if (REAL_MODE) return await realReq('PUT', '/hotel/housekeeping/' + id, { body: { status } }); throw new ApiError(501, 'Hotel needs the live backend.'); },
+  },
+
   // Receipts (/api/v1/checkout) — real backend only; mock mode is a no-op.
   receipt: {
     async pdf(saleId: any) {
