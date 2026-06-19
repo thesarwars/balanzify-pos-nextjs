@@ -271,8 +271,9 @@ export function DataScreen({ T, id }: { T: Theme; id: any }) {
 export function Reports({ T }: { T: Theme }) {
   const [tab, setTab] = useStateD('overview');
   // Deterministic per-category value (not Math.random) to avoid SSR/client hydration mismatch.
-  const byCat = React.useMemo(() => CATEGORIES.filter((c: any) => c.id !== 'all').map((c: any, i: number) => ({ name: c.name, val: Math.round(200 + (((i * 2654435761) % 100) / 100) * 1400) })), []);
-  const max = Math.max(...byCat.map((c: any) => c.val));
+  const seedByCat = React.useMemo(() => CATEGORIES.filter((c: any) => c.id !== 'all').map((c: any, i: number) => ({ name: c.name, val: Math.round(200 + (((i * 2654435761) % 100) / 100) * 1400) })), []);
+  const [byCat, setByCat] = useStateD<any[]>(seedByCat);
+  const max = Math.max(1, ...byCat.map((c: any) => c.val));
   // Live month-to-date KPIs in real mode; seed values are the fallback.
   const [ov, setOv] = useStateD<any>(null);
   React.useEffect(() => {
@@ -281,6 +282,8 @@ export function Reports({ T }: { T: Theme }) {
     Promise.all([API.report.profit({ from }), API.report.dashboard()])
       .then(([p, d]: any[]) => setOv({ summary: p && p.summary, top: d && d.topProducts }))
       .catch(() => {});
+    // Real revenue-by-category (null = mock mode → keep the seed chart).
+    API.report.byCategory({ from }).then((cats: any) => { if (cats != null) setByCat(cats.map((c: any) => ({ name: c.name, val: Math.round(Number(c.revenue) || 0) }))); }).catch(() => {});
   }, []);
   const ovStats: any[] = ov && ov.summary
     ? [['Revenue', money0(ov.summary.revenue)], ['Gross profit', money0(ov.summary.gross_profit)], ['Transactions', String(ov.summary.transactions)], ['Avg. margin', Math.round(ov.summary.gross_margin_pct || 0) + '%']]
@@ -315,6 +318,7 @@ export function Reports({ T }: { T: Theme }) {
                         </div>
                       </div>
                     ))}
+                    {byCat.length === 0 && <div style={{ padding: 20, textAlign: 'center', color: T.inkMute, fontSize: 12.5 }}>No category sales yet this month.</div>}
                   </div>
                 </Panel>
                 <Panel T={T} title="Top Products" pad={false}>
