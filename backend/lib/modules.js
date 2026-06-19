@@ -146,6 +146,13 @@ const MODULES = {
   },
 };
 
+// Monthly price (USD) for each paid add-on — authoritative source for billing.
+const MODULE_PRICES = {
+  pharmacy: 15, hotel: 25, restaurant: 19, credit: 9, insights: 12,
+  wholesale: 14, construction: 22, hrm: 18, superadmin: 39,
+};
+const modulePrice = (key) => MODULE_PRICES[key] || 0;
+
 /** Resolve the full set of enabled module keys for a business, expanding
  *  dependencies. Empty/null enabledModules = the base plan (default modules). */
 function resolveEnabled(enabledModules) {
@@ -178,4 +185,4 @@ function moduleForPath(path) {
   return best;
 }
 
-module.exports = { MODULES, resolveEnabled, moduleForPath };
+module.exports = { MODULES, MODULE_PRICES, modulePrice, resolveEnabled, moduleForPath };

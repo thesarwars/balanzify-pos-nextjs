@@ -73,7 +73,7 @@ app.use(cors({
 
 // ── Body parsing and compression ──────────────────────────────────────────────
 app.use(compression());
-app.use(express.json({ limit: '5mb' }));
+app.use(express.json({ limit: '5mb', verify: (req, res, buf) => { if (req.originalUrl === '/api/v1/billing/webhook') req.rawBody = buf; } }));
 app.use(express.urlencoded({ extended: true, limit: '5mb' }));
 
 // ── Health & readiness probes (required by Docker HEALTHCHECK + docker-compose) ─
@@ -122,6 +122,7 @@ try {
   const modulesRoutes  = require('./routes/modules');
   const wholesaleRoutes = require('./routes/wholesale');
   const constructionRoutes = require('./routes/construction');
+  const billingRoutes  = require('./routes/billing');
   const { requireModule } = require('./lib/moduleGate');
   // requireModule needs req.user, so auth must run at the mount (before the
   // router's own per-route auth) — otherwise the gate sees no user and bypasses.
@@ -162,6 +163,9 @@ try {
   app.use('/api/v1/service-types', apiLimiter, gateAuth, requireModule('restaurant'), serviceTypesRouter);
   app.use('/api/v1/pharmacy',   apiLimiter, gateAuth, requireModule('pharmacy'), pharmacyRoutes);
   app.use('/api/v1/modules',    apiLimiter, modulesRoutes);
+  // Stripe webhook first (raw body via the express.json verify hook), then the rest.
+  app.post('/api/v1/billing/webhook', billingRoutes.webhook);
+  app.use('/api/v1/billing',    apiLimiter, billingRoutes);
   app.use('/api/v1/wholesale',  apiLimiter, gateAuth, requireModule('wholesale'), wholesaleRoutes);
   app.use('/api/v1/construction', apiLimiter, gateAuth, requireModule('construction'), constructionRoutes);
   app.use('/api/v1/checkout',   apiLimiter, checkoutRoutes);

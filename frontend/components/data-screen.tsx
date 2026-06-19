@@ -801,10 +801,44 @@ function MfaDisableModal({ T, onClose, onDone }: { T: Theme; onClose: () => void
 // ── Plan & Modules ───────────────────────────────────────────────
 export function Modules({ T }: { T: Theme }) {
   const [mods, setMods] = useStateD<any[]>([]);
+  const [billing, setBilling] = useStateD<any>({ configured: false, providers: [] });
+  const [busyKey, setBusyKey] = useStateD<any>(null);
   const [toast, toastNode] = useToast();
-  React.useEffect(() => { API.module.list().then(setMods).catch(() => {}); }, []);
+  const loadMods = React.useCallback(() => API.module.list().then(setMods).catch(() => {}), []);
+  React.useEffect(() => {
+    loadMods();
+    API.billing.status().then(setBilling).catch(() => {});
+    if (typeof window !== 'undefined') {
+      const b = new URLSearchParams(window.location.search).get('billing');
+      if (b === 'success') { toast('Payment received — add-on enabled.'); loadMods(); window.dispatchEvent(new Event('bz:modules-changed')); }
+      else if (b === 'cancel') { toast('Checkout canceled.'); }
+      if (b) window.history.replaceState({}, '', window.location.pathname);
+    }
+  }, [loadMods]);
+
   async function toggle(m: any) {
     if (m.core) { toast('Core modules are always on'); return; }
+    if (busyKey) return;
+    // Paid add-ons go through billing: enabling = pay (checkout), disabling = cancel.
+    if (m.addon) {
+      setBusyKey(m.key);
+      try {
+        if (m.enabled) {
+          await API.billing.cancel(m.key);
+          setMods((ms: any) => ms.map((x: any) => x.key === m.key ? { ...x, enabled: false } : x));
+          if (typeof window !== 'undefined') window.dispatchEvent(new Event('bz:modules-changed'));
+          toast(`${m.name} turned off`);
+        } else if (!billing.configured) {
+          toast('Online billing isn’t set up yet — ask your platform admin to enable this add-on.');
+        } else {
+          const r: any = await API.billing.checkout(m.key);
+          if (r && r.url && typeof window !== 'undefined') { window.location.href = r.url; return; }
+          toast('Could not start checkout.');
+        }
+      } catch (e: any) { toast(e.message); } finally { setBusyKey(null); }
+      return;
+    }
+    // base module (non-add-on) — keep the direct toggle
     try { const u = await API.module.setEnabled(m.key, !m.enabled); setMods((ms: any) => ms.map((x: any) => x.key === m.key ? u : x)); toast(`${m.name} ${u.enabled ? 'enabled' : 'disabled'}`); }
     catch (e: any) { toast(e.message); }
   }
