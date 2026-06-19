@@ -18,6 +18,7 @@ const ROOM_TONE: any = { available: 'green', occupied: 'red', reserved: 'blue', 
 const RES_TONE: any = { confirmed: 'blue', checked_in: 'green', checked_out: 'gray', cancelled: 'red', no_show: 'red' };
 const HK_TONE: any = { pending: 'amber', in_progress: 'blue', done: 'green', inspected: 'green' };
 const ROOM_STATUSES = ['available', 'cleaning', 'maintenance', 'blocked', 'occupied', 'reserved'];
+const CHARGE_TYPES = ['restaurant', 'laundry', 'minibar', 'transport', 'spa', 'telephone', 'damage', 'service_charge', 'other'];
 
 const today = () => new Date().toISOString().slice(0, 10);
 const addDays = (d: string, n: number) => { const x = new Date(d); x.setDate(x.getDate() + n); return x.toISOString().slice(0, 10); };
@@ -36,6 +37,7 @@ export function Hotel({ T }: { T: Theme }) {
   const [newType, setNewType] = useS(false);
   const [newRoom, setNewRoom] = useS(false);
   const [roomAct, setRoomAct] = useS<any>(null);   // room awaiting a status change
+  const [folioId, setFolioId] = useS<any>(null);   // open folio
   const [show, node] = useToast();
 
   useE(() => { API.module.list().then((ms: any) => setEnabled(!!(ms.find((m: any) => m.key === 'hotel') || {}).enabled)).catch(() => setEnabled(false)); }, []);
@@ -160,7 +162,8 @@ export function Hotel({ T }: { T: Theme }) {
                     <td style={td(T)}><Badge T={T} tone={RES_TONE[r.status] || 'gray'}>{(r.status || '').replace('_', ' ')}</Badge></td>
                     <td style={{ ...td(T), textAlign: 'right', whiteSpace: 'nowrap' }}>
                       {r.status === 'confirmed' && <button onClick={() => checkin(r)} style={mini(T)}>Check in</button>}
-                      {r.status === 'checked_in' && <button onClick={() => checkout(r)} style={mini(T)}>Check out</button>}
+                      {r.folio && r.folio.id && <button onClick={() => setFolioId(r.folio.id)} style={{ ...mini(T), marginLeft: 6 }}>Folio</button>}
+                      {r.status === 'checked_in' && <button onClick={() => checkout(r)} style={{ ...mini(T), marginLeft: 6 }}>Check out</button>}
                       {r.status === 'confirmed' && <button onClick={() => cancelRes(r)} style={{ ...mini(T), marginLeft: 6, color: T.redText }}>Cancel</button>}
                     </td>
                   </tr>
@@ -220,6 +223,7 @@ export function Hotel({ T }: { T: Theme }) {
       {newType && <RoomTypeModal T={T} onClose={() => setNewType(false)} onSaved={() => { setNewType(false); show('Room type added'); reloadTypes(); }} />}
       {newRoom && <RoomModal T={T} roomTypes={roomTypes} onClose={() => setNewRoom(false)} onSaved={() => { setNewRoom(false); show('Room added'); reloadRooms(); reloadTypes(); }} />}
       {roomAct && <RoomActionModal T={T} room={roomAct} onClose={() => setRoomAct(null)} onPick={(s: any) => changeRoomStatus(roomAct, s)} />}
+      {folioId && <FolioModal T={T} folioId={folioId} onClose={() => setFolioId(null)} onChanged={() => { reloadRes(); reloadDash(); }} show={show} />}
       {node}
     </div>
   );
@@ -384,6 +388,94 @@ function RoomActionModal({ T, room, onClose, onPick }: { T: Theme; room: any; on
         ))}
       </div>
       <div style={{ fontSize: 11, color: T.inkMute, marginTop: 12 }}>Setting a room to cleaning or checkout opens a housekeeping task automatically.</div>
+    </Modal>
+  );
+}
+
+// ── Folio: charges + payments → balance ───────────────────────────
+function FolioModal({ T, folioId, onClose, onChanged, show }: { T: Theme; folioId: any; onClose: () => void; onChanged: () => void; show: (m: string) => void }) {
+  const [folio, setFolio] = useS<any>(null);
+  const [busy, setBusy] = useS(false);
+  const [pane, setPane] = useS<any>(null);   // 'charge' | 'payment'
+  const [c, setC] = useS<any>({ type: 'restaurant', description: '', quantity: '1', unitAmount: '' });
+  const [p, setP] = useS<any>({ provider: 'cash', amount: '' });
+  const [err, setErr] = useS<any>(null);
+
+  const reload = useCb(() => API.hotel.folio(folioId).then(setFolio).catch((e: any) => setErr(e.message)), [folioId]);
+  useE(() => { reload(); }, [reload]);
+
+  async function addCharge() {
+    if (!c.description.trim() || !(Number(c.unitAmount) > 0)) { setErr('Description and amount are required.'); return; }
+    setBusy(true); setErr(null);
+    try { await API.hotel.addCharge(folioId, { type: c.type, description: c.description.trim(), quantity: Number(c.quantity) || 1, unitAmount: Number(c.unitAmount), chargeDate: today() }); setC({ type: 'restaurant', description: '', quantity: '1', unitAmount: '' }); setPane(null); reload(); onChanged(); show('Charge posted'); }
+    catch (e: any) { setErr(e.message || 'Could not post charge.'); } finally { setBusy(false); }
+  }
+  async function recordPayment() {
+    if (!(Number(p.amount) > 0)) { setErr('Enter a payment amount.'); return; }
+    setBusy(true); setErr(null);
+    try { await API.hotel.folioPayment(folioId, { provider: p.provider, amount: Number(p.amount) }); setP({ provider: 'cash', amount: '' }); setPane(null); reload(); onChanged(); show('Payment recorded'); }
+    catch (e: any) { setErr(e.message || 'Could not record payment.'); } finally { setBusy(false); }
+  }
+
+  const balance = folio ? Number(folio.balance || 0) : 0;
+  return (
+    <Modal T={T} title={folio ? `Folio ${folio.folioNumber || ''}` : 'Folio'} subtitle={(folio && folio.guest && folio.guest.name) || ''} width={620} onClose={onClose}
+      footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Close</Btn></>}>
+      {!folio ? <div style={empty(T)}>Loading folio…</div> : (<>
+        <div style={{ display: 'flex', gap: 12, marginBottom: 14, flexWrap: 'wrap' }}>
+          {[['Charges', money(folio.totalCharges || 0)], ['Payments', money(folio.totalPayments || 0)], ['Balance', money(balance)]].map(([k, v]: any, i: number) => (
+            <div key={i} style={{ flex: 1, minWidth: 120, background: T.card, border: `1px solid ${T.line}`, borderRadius: T.rLg, padding: '12px 14px' }}>
+              <div style={{ fontSize: 10.5, color: T.inkSub, textTransform: 'uppercase', letterSpacing: 0.6, fontWeight: 700 }}>{k}</div>
+              <div style={{ fontFamily: T.fMono, fontSize: 18, color: k === 'Balance' && balance > 0 ? T.redText : T.ink, marginTop: 4 }}>{v}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+          <Btn T={T} kind="ghost" onClick={() => { setPane(pane === 'charge' ? null : 'charge'); setErr(null); }}>+ Charge</Btn>
+          <Btn T={T} kind="ghost" onClick={() => { setPane(pane === 'payment' ? null : 'payment'); setErr(null); }}>+ Payment</Btn>
+        </div>
+        {pane === 'charge' && (
+          <div style={{ border: `1px solid ${T.line}`, borderRadius: T.r, padding: 12, marginBottom: 12 }}>
+            <FormGrid>
+              <Field T={T} label="Type"><SelectField T={T} value={c.type} options={CHARGE_TYPES} onChange={(v: any) => setC((s: any) => ({ ...s, type: v }))} render={(v: any) => v.replace('_', ' ')} /></Field>
+              <Field T={T} label="Amount"><TextField T={T} type="number" value={c.unitAmount} onChange={(v: any) => setC((s: any) => ({ ...s, unitAmount: v }))} placeholder="0.00" /></Field>
+              <Field T={T} label="Quantity"><TextField T={T} type="number" value={c.quantity} onChange={(v: any) => setC((s: any) => ({ ...s, quantity: v }))} /></Field>
+              <Field T={T} label="Description" full><TextField T={T} value={c.description} onChange={(v: any) => setC((s: any) => ({ ...s, description: v }))} placeholder="e.g. Dinner — table 4" /></Field>
+            </FormGrid>
+            <div style={{ marginTop: 10, textAlign: 'right' }}><Btn T={T} kind="accent" onClick={addCharge} disabled={busy}>{busy ? 'Posting…' : 'Post charge'}</Btn></div>
+          </div>
+        )}
+        {pane === 'payment' && (
+          <div style={{ border: `1px solid ${T.line}`, borderRadius: T.r, padding: 12, marginBottom: 12 }}>
+            <FormGrid>
+              <Field T={T} label="Method"><SelectField T={T} value={p.provider} options={['cash', 'zaad']} onChange={(v: any) => setP((s: any) => ({ ...s, provider: v }))} render={(v: any) => v === 'cash' ? 'Cash' : 'Zaad'} /></Field>
+              <Field T={T} label="Amount"><TextField T={T} type="number" value={p.amount} onChange={(v: any) => setP((s: any) => ({ ...s, amount: v }))} placeholder={balance > 0 ? String(balance) : '0.00'} /></Field>
+            </FormGrid>
+            <div style={{ marginTop: 10, textAlign: 'right' }}><Btn T={T} kind="accent" onClick={recordPayment} disabled={busy}>{busy ? 'Saving…' : 'Record payment'}</Btn></div>
+          </div>
+        )}
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase', color: T.inkSub, margin: '4px 0 6px' }}>Charges</div>
+        <div style={{ border: `1px solid ${T.line}`, borderRadius: T.r, overflow: 'hidden', marginBottom: 12 }}>
+          {(folio.charges || []).map((ch: any, i: number) => (
+            <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', borderBottom: `1px solid ${T.line}`, fontSize: 12.5 }}>
+              <span style={{ color: T.ink }}>{ch.description}<span style={{ color: T.inkMute }}> · {(ch.type || '').replace('_', ' ')}{Number(ch.quantity) > 1 ? ` ×${ch.quantity}` : ''}</span></span>
+              <span style={{ fontFamily: T.fMono, color: T.ink }}>{money(ch.totalAmount)}</span>
+            </div>
+          ))}
+          {(folio.charges || []).length === 0 && <div style={{ padding: 14, textAlign: 'center', color: T.inkMute, fontSize: 12.5 }}>No charges yet.</div>}
+        </div>
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase', color: T.inkSub, margin: '4px 0 6px' }}>Payments</div>
+        <div style={{ border: `1px solid ${T.line}`, borderRadius: T.r, overflow: 'hidden' }}>
+          {(folio.payments || []).map((pm: any, i: number) => (
+            <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', borderBottom: `1px solid ${T.line}`, fontSize: 12.5 }}>
+              <span style={{ color: T.inkMid }}>{String(pm.provider || '').toUpperCase()}</span>
+              <span style={{ fontFamily: T.fMono, color: T.green }}>−{money(pm.amount)}</span>
+            </div>
+          ))}
+          {(folio.payments || []).length === 0 && <div style={{ padding: 14, textAlign: 'center', color: T.inkMute, fontSize: 12.5 }}>No payments yet.</div>}
+        </div>
+      </>)}
+      {err && <div style={{ marginTop: 12, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}>⚠ {err}</div>}
     </Modal>
   );
 }

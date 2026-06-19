@@ -2775,6 +2775,10 @@ const API: any = {
     async cancelReservation(id: any, reason?: any) { if (REAL_MODE) return await realReq('DELETE', '/hotel/reservations/' + id, { body: { reason } }); throw new ApiError(501, 'Hotel needs the live backend.'); },
     async housekeeping(params?: any) { if (REAL_MODE) { const r = await realReq('GET', '/hotel/housekeeping', { query: params }); return (r && r.tasks) || []; } return []; },
     async updateHousekeeping(id: any, status: any) { if (REAL_MODE) return await realReq('PUT', '/hotel/housekeeping/' + id, { body: { status } }); throw new ApiError(501, 'Hotel needs the live backend.'); },
+    // Folio — the guest's running bill (charges + payments → balance).
+    async folio(id: any) { if (REAL_MODE) return await realReq('GET', '/hotel/folios/' + id); throw new ApiError(501, 'Hotel needs the live backend.'); },
+    async addCharge(id: any, body: any) { if (REAL_MODE) return await realReq('POST', '/hotel/folios/' + id + '/charges', { body }); throw new ApiError(501, 'Hotel needs the live backend.'); },
+    async folioPayment(id: any, body: any) { if (REAL_MODE) return await realReq('POST', '/hotel/folios/' + id + '/payments', { body }); throw new ApiError(501, 'Hotel needs the live backend.'); },
   },
 
   // Construction (/api/v1/construction) — project-centric job costing, gated by
