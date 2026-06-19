@@ -302,6 +302,23 @@ describe('coupons', () => {
   });
 });
 
+describe('service-type packing charge on a sale', () => {
+  let token, loc, prod;
+  beforeAll(async () => { token = await register(); loc = await location(token); prod = await stockedProduct(token, loc, 10, 100); });
+  test('packing_charge is recorded and added to the total', async () => {
+    await request(app).post('/api/v1/sales/shifts/open').set(auth(token)).send({ location_id: loc, opening_float: 100 });
+    const ik = (await request(app).post('/api/v1/sales/initiate').set(auth(token))).body.idempotency_key;
+    const r = await request(app).post('/api/v1/sales').set(auth(token)).send({
+      idempotency_key: ik, items: [{ product_id: prod, quantity: 2, override_price: 10 }],
+      location_id: loc, payment_method: 'cash', packing_charge: 3, cash_tendered: 100,
+    });
+    expect(r.status).toBe(201);
+    expect(Number(r.body.packingCharge)).toBe(3);
+    // total = subtotal + tax + packing (no discount/coupon on this sale)
+    expect(Number(r.body.totalAmount)).toBe(Number(r.body.subtotal) + Number(r.body.taxAmount) + 3);
+  });
+});
+
 describe('wholesale', () => {
   let token, loc, prod, customerId;
   beforeAll(async () => {
