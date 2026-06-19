@@ -620,6 +620,8 @@ export function Settings({ T }: { T: Theme }) {
   });
   const [dirty, setDirty] = useStateD(false);
   const [toast, toastNode] = useToast();
+  const [sec, setSec] = useStateD<any>(null);   // open security modal: 'password' | 'mfa'
+  const mfaEnabled = !!(session && session.mfa_enabled);
   const set = (k: any, v: any) => { setS((p: any) => ({ ...p, [k]: v })); setDirty(true); };
 
   // Hydrate the Business group from the live business record (real mode).
@@ -667,6 +669,10 @@ export function Settings({ T }: { T: Theme }) {
       { label: 'Daily summary', ctrl: <span style={{ display: 'inline-flex', alignItems: 'center', gap: 12 }}>{s.dailySummary && <SetInput T={T} value={s.dailySummaryTime} onChange={(v: any) => set('dailySummaryTime', v)} width={84} type="time" />}<Switch T={T} on={s.dailySummary} onChange={(v: any) => set('dailySummary', v)} /></span> },
       { label: 'Expiry warnings', ctrl: <span style={{ display: 'inline-flex', alignItems: 'center', gap: 12 }}>{s.expiryWarn && <SetInput T={T} value={s.expiryDays} onChange={(v: any) => set('expiryDays', v)} suffix="days before" width={56} type="number" />}<Switch T={T} on={s.expiryWarn} onChange={(v: any) => set('expiryWarn', v)} /></span> },
     ] },
+    { title: 'Security', rows: [
+      { label: 'Password', help: 'Change your account password', ctrl: <Btn T={T} kind="ghost" onClick={() => setSec('password')}>Change</Btn> },
+      { label: 'Two-factor authentication', help: mfaEnabled ? 'Enabled — required at sign-in' : 'Protect your account with an authenticator app', ctrl: mfaEnabled ? <Badge T={T} tone="green">On</Badge> : <Btn T={T} kind="ghost" onClick={() => setSec('mfa')}>Set up</Btn> },
+    ] },
   ];
 
   return (
@@ -697,8 +703,76 @@ export function Settings({ T }: { T: Theme }) {
           ))}
         </div>
       </div>
+      {sec === 'password' && <ChangePasswordModal T={T} onClose={() => setSec(null)} />}
+      {sec === 'mfa' && <MfaSetupModal T={T} onClose={() => setSec(null)} onDone={() => { setSec(null); toast('Two-factor authentication enabled'); }} />}
       {toastNode}
     </div>
+  );
+}
+
+// Change password → backend revokes all sessions, so we sign out and return to login.
+function ChangePasswordModal({ T, onClose }: { T: Theme; onClose: () => void }) {
+  const [cur, setCur] = React.useState(''); const [nw, setNw] = React.useState(''); const [cf, setCf] = React.useState('');
+  const [busy, setBusy] = React.useState(false); const [err, setErr] = React.useState<any>(null); const [done, setDone] = React.useState(false);
+  async function save() {
+    if (nw.length < 8) { setErr('New password must be at least 8 characters.'); return; }
+    if (nw !== cf) { setErr('Passwords don’t match.'); return; }
+    setBusy(true); setErr(null);
+    try { await API.auth.changePassword(cur, nw); setDone(true); }
+    catch (e: any) { setErr(e.message || 'Could not change password.'); setBusy(false); }
+  }
+  function signOut() {
+    try { API.auth.logout(); if (typeof window !== 'undefined') localStorage.removeItem('bz_authed'); } catch (e) {}
+    if (typeof window !== 'undefined') window.location.href = '/login';
+  }
+  return (
+    <Modal T={T} title="Change password" subtitle="You’ll be signed out of all devices" width={460} onClose={done ? signOut : onClose}
+      footer={done
+        ? <><div style={{ flex: 1 }} /><Btn T={T} kind="accent" onClick={signOut}>Sign in again →</Btn></>
+        : <><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Cancel</Btn><Btn T={T} kind="accent" onClick={save} disabled={busy}>{busy ? 'Saving…' : 'Change password'}</Btn></>}>
+      {done ? (
+        <div style={{ padding: '12px 14px', borderRadius: T.r, background: T.accent.soft, color: T.accent.text, fontSize: 13, lineHeight: 1.55 }}>Password changed. For security, all sessions were signed out — please sign in again with your new password.</div>
+      ) : (
+        <FormGrid>
+          <Field T={T} label="Current password" full><TextField T={T} type="password" value={cur} onChange={(v: any) => { setCur(v); setErr(null); }} /></Field>
+          <Field T={T} label="New password" full><TextField T={T} type="password" value={nw} onChange={(v: any) => { setNw(v); setErr(null); }} placeholder="At least 8 characters" /></Field>
+          <Field T={T} label="Confirm new password" full><TextField T={T} type="password" value={cf} onChange={(v: any) => { setCf(v); setErr(null); }} /></Field>
+        </FormGrid>
+      )}
+      {err && <div style={{ marginTop: 12, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}>⚠ {err}</div>}
+    </Modal>
+  );
+}
+
+// Enrol in TOTP 2FA: setup() returns a QR + secret; enable(code) confirms it.
+function MfaSetupModal({ T, onClose, onDone }: { T: Theme; onClose: () => void; onDone: () => void }) {
+  const [data, setData] = React.useState<any>(null);
+  const [code, setCode] = React.useState('');
+  const [busy, setBusy] = React.useState(false); const [err, setErr] = React.useState<any>(null);
+  React.useEffect(() => { API.auth.mfaSetup().then(setData).catch((e: any) => setErr(e.message || 'Could not start setup.')); }, []);
+  async function enable() {
+    if (code.trim().length < 6) { setErr('Enter the 6-digit code.'); return; }
+    setBusy(true); setErr(null);
+    try { await API.auth.mfaEnable(code.trim()); onDone(); }
+    catch (e: any) { setErr(e.message || 'Invalid code.'); setBusy(false); }
+  }
+  return (
+    <Modal T={T} title="Two-factor authentication" subtitle="Scan the QR with an authenticator app, then enter the code" width={460} onClose={onClose}
+      footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Cancel</Btn><Btn T={T} kind="accent" onClick={enable} disabled={busy || !data}>{busy ? 'Enabling…' : 'Enable 2FA'}</Btn></>}>
+      {!data ? (
+        <div style={{ padding: 24, textAlign: 'center', fontFamily: T.fMono, fontSize: 12.5, color: T.inkSub }}>Preparing…</div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
+          {data.qr_code && <img src={data.qr_code} alt="2FA QR code" style={{ width: 168, height: 168, borderRadius: T.r, border: `1px solid ${T.line}` }} />}
+          <div style={{ fontSize: 11.5, color: T.inkSub, textAlign: 'center' }}>Can’t scan? Enter this key manually:</div>
+          <div style={{ fontFamily: T.fMono, fontSize: 12.5, color: T.ink, background: T.paperAlt, padding: '6px 12px', borderRadius: 8, wordBreak: 'break-all', textAlign: 'center' }}>{data.secret}</div>
+          <FormGrid style={{ width: '100%' }}>
+            <Field T={T} label="6-digit code" full><TextField T={T} value={code} onChange={(v: any) => { setCode(String(v).replace(/\D/g, '').slice(0, 6)); setErr(null); }} placeholder="123456" /></Field>
+          </FormGrid>
+        </div>
+      )}
+      {err && <div style={{ marginTop: 12, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}>⚠ {err}</div>}
+    </Modal>
   );
 }
 
