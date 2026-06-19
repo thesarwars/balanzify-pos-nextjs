@@ -924,7 +924,7 @@ usersRouter.put('/:id', auth, requireRole('owner'), validate(UpdateUserSchema), 
   try {
     const user = await prisma.user.update({
       where: { id: req.params.id },
-      data: { name: req.body.name, role: req.body.role, isActive: req.body.is_active, pin: req.body.pin || null, ...(req.body.commission_percent !== undefined && { commissionPercent: req.body.commission_percent }) },
+      data: { name: req.body.name, role: req.body.role, isActive: req.body.is_active, ...(req.body.pin !== undefined && { pin: req.body.pin || null }), ...(req.body.commission_percent !== undefined && { commissionPercent: req.body.commission_percent }) },
       select: { id: true, name: true, email: true, role: true, isActive: true, commissionPercent: true },
     });
     res.json(user);

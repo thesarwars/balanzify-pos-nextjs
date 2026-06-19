@@ -68,7 +68,7 @@ export const NAV = [
   ]},
 ];
 
-export function Sidebar({ T, screen, setScreen, collapsed, setCollapsed, onLogout, mobile }: any) {
+export function Sidebar({ T, screen, setScreen, collapsed, setCollapsed, onLogout, onLock, mobile }: any) {
   const W = collapsed ? 68 : 244;
   const S = T.side;
   const session = useSession();
@@ -170,10 +170,16 @@ export function Sidebar({ T, screen, setScreen, collapsed, setCollapsed, onLogou
             </div>
           )}
           {!collapsed && (
-            <button onClick={onLogout} title="Sign out" style={{
-              width: 28, height: 28, borderRadius: 7, flexShrink: 0, cursor: 'pointer',
-              background: S.iconBg, border: 'none', color: S.iconText, fontSize: 13,
-            }}>⏻</button>
+            <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+              {onLock && <button onClick={onLock} title="Lock / switch user" style={{
+                width: 28, height: 28, borderRadius: 7, cursor: 'pointer',
+                background: S.iconBg, border: 'none', color: S.iconText, fontSize: 13,
+              }}>🔒</button>}
+              <button onClick={onLogout} title="Sign out" style={{
+                width: 28, height: 28, borderRadius: 7, cursor: 'pointer',
+                background: S.iconBg, border: 'none', color: S.iconText, fontSize: 13,
+              }}>⏻</button>
+            </div>
           )}
         </div>
       </div>
@@ -264,6 +270,44 @@ function ConfirmDialog({ T, onCancel, onConfirm }: { T: Theme; onCancel: () => v
   );
 }
 
+// Lock / switch-user overlay — a cashier unlocks the till with their PIN
+// (POST /auth/pin-login within the current business), swapping the session.
+function LockScreen({ T, session, onCancel }: { T: Theme; session: any; onCancel: () => void }) {
+  const [pin, setPin] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState<any>(null);
+  const bizId = session && session.business_id;
+  async function unlock() {
+    if (pin.length < 4) { setErr('Enter your 4–10 digit PIN.'); return; }
+    if (!bizId) { setErr('Session not ready — please sign in again.'); return; }
+    setBusy(true); setErr(null);
+    try { await API.auth.pinLogin(pin, bizId); if (typeof window !== 'undefined') window.location.reload(); }
+    catch (e: any) { setErr(e.message || 'Invalid PIN.'); setPin(''); setBusy(false); }
+  }
+  const press = (d: string) => { setErr(null); setPin((p) => (p + d).slice(0, 10)); };
+  const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', '⌫'];
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 90, background: T.navy, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: T.fBody } as React.CSSProperties}>
+      <div style={{ width: 320, textAlign: 'center', color: '#fff' }}>
+        <div style={{ fontSize: 34, marginBottom: 10 }}>🔒</div>
+        <div style={{ fontFamily: T.fDisplay, fontSize: 24, fontWeight: T.dispWeight }}>Till locked</div>
+        <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.6)', marginTop: 4, marginBottom: 20 }}>{(session && session.business_name) || 'Balanzify'} · enter PIN to continue</div>
+        <div style={{ display: 'flex', justifyContent: 'center', gap: 10, marginBottom: 18, minHeight: 12 }}>
+          {Array.from({ length: Math.max(4, pin.length) }).map((_, i) => <span key={i} style={{ width: 12, height: 12, borderRadius: 99, background: i < pin.length ? T.accent.bright : 'rgba(255,255,255,0.2)' }} />)}
+        </div>
+        {err && <div style={{ marginBottom: 14, color: '#FCA5A5', fontSize: 12.5 }}>⚠ {err}</div>}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
+          {keys.map((k, i) => k === '' ? <span key={i} /> : (
+            <button key={i} onClick={() => k === '⌫' ? setPin((p) => p.slice(0, -1)) : press(k)} style={{ padding: '16px 0', borderRadius: 12, border: 'none', cursor: 'pointer', fontFamily: T.fMono, fontSize: 20, fontWeight: 600, background: 'rgba(255,255,255,0.08)', color: '#fff' }}>{k}</button>
+          ))}
+        </div>
+        <button onClick={unlock} disabled={busy} style={{ width: '100%', marginTop: 16, padding: '14px', borderRadius: 12, border: 'none', cursor: busy ? 'wait' : 'pointer', fontFamily: T.fBody, fontSize: 15, fontWeight: 700, color: '#fff', background: `linear-gradient(135deg, ${T.accent.bright}, ${T.accent.base})`, opacity: busy ? 0.8 : 1 }}>{busy ? 'Unlocking…' : 'Unlock'}</button>
+        <button onClick={onCancel} style={{ marginTop: 12, background: 'none', border: 'none', color: 'rgba(255,255,255,0.55)', cursor: 'pointer', fontSize: 12.5, fontWeight: 600 }}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -273,6 +317,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // redirecting to /login; `true` = authorized.
   const [authed, setAuthed] = React.useState<boolean | null>(null);
   const [session, setSession] = React.useState<any>(null);
+  const [locked, setLocked] = React.useState(false);
   React.useEffect(() => {
     let ok = false;
     try { ok = localStorage.getItem('bz_authed') === '1'; } catch {}
@@ -355,15 +400,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <>
               {drawerOpen && <div onClick={() => setDrawerOpen(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(8,12,20,0.5)', backdropFilter: 'blur(2px)', zIndex: 60 } as React.CSSProperties} />}
               <div style={{ position: 'fixed', top: 0, bottom: 0, left: 0, zIndex: 70, transform: drawerOpen ? 'none' : 'translateX(-100%)', transition: 'transform .24s cubic-bezier(.4,0,.2,1)', boxShadow: drawerOpen ? '8px 0 30px rgba(0,0,0,0.3)' : 'none' } as React.CSSProperties}>
-                <Sidebar T={T} screen={active} setScreen={go} collapsed={false} setCollapsed={() => {}} onLogout={logout} mobile />
+                <Sidebar T={T} screen={active} setScreen={go} collapsed={false} setCollapsed={() => {}} onLogout={logout} onLock={() => setLocked(true)} mobile />
               </div>
             </>
           ) : (
-            <Sidebar T={T} screen={active} setScreen={go} collapsed={collapsed} setCollapsed={setCollapsed} onLogout={logout} />
+            <Sidebar T={T} screen={active} setScreen={go} collapsed={collapsed} setCollapsed={setCollapsed} onLogout={logout} onLock={() => setLocked(true)} />
           )}
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>{children}</div>
           <ApiPanel T={T} />
           {pendingNav && <ConfirmDialog T={T} onCancel={() => setPendingNav(null)} onConfirm={confirmPendingNav} />}
+          {locked && <LockScreen T={T} session={session} onCancel={() => setLocked(false)} />}
         </div>
       </TweaksCtx.Provider>
      </SessionCtx.Provider>

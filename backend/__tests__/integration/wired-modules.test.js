@@ -395,6 +395,36 @@ describe('auth depth (MFA, password change & recovery)', () => {
   });
 });
 
+describe('PIN till-login', () => {
+  let token, bizId;
+  beforeAll(async () => {
+    token = await register();
+    bizId = (await request(app).get('/api/v1/auth/me').set(auth(token))).body.business_id;
+  });
+
+  test('a user with a PIN can sign in by PIN; edits without a PIN keep it', async () => {
+    const email = `cashier_${Date.now()}_${SEQ++}@balanzify.test`;
+    const created = await request(app).post('/api/v1/users').set(auth(token))
+      .send({ name: 'Till Cashier', email, password: 'CashierPass123!', role: 'cashier', pin: '4821' });
+    expect(created.status).toBe(201);
+    const userId = created.body.id;
+
+    // PIN sign-in within the business
+    const pl = await request(app).post('/api/v1/auth/pin-login').send({ pin: '4821', business_id: bizId });
+    expect(pl.status).toBe(200);
+    expect(pl.body.access_token).toBeTruthy();
+    expect(pl.body.user.name).toBe('Till Cashier');
+
+    // editing the user without sending a PIN must NOT clear it
+    const upd = await request(app).put(`/api/v1/users/${userId}`).set(auth(token)).send({ name: 'Till Cashier 2', role: 'cashier', is_active: true });
+    expect(upd.status).toBe(200);
+    expect((await request(app).post('/api/v1/auth/pin-login').send({ pin: '4821', business_id: bizId })).status).toBe(200);
+
+    // wrong PIN is rejected
+    expect((await request(app).post('/api/v1/auth/pin-login').send({ pin: '0000', business_id: bizId })).status).toBe(401);
+  });
+});
+
 describe('business profile (settings)', () => {
   let token;
   beforeAll(async () => { token = await register(); });
