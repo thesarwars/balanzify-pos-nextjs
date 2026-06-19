@@ -407,7 +407,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <Sidebar T={T} screen={active} setScreen={go} collapsed={collapsed} setCollapsed={setCollapsed} onLogout={logout} onLock={() => setLocked(true)} />
           )}
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>{children}</div>
-          <ApiPanel T={T} />
+          {/* Dev/debug overlay — only in mock mode; hidden in the real (production) build. */}
+          {!(API.config?.isReal?.()) && <ApiPanel T={T} />}
           {pendingNav && <ConfirmDialog T={T} onCancel={() => setPendingNav(null)} onConfirm={confirmPendingNav} />}
           {locked && <LockScreen T={T} session={session} onCancel={() => setLocked(false)} />}
         </div>
