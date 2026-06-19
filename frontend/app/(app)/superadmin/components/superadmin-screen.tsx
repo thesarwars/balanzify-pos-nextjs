@@ -23,6 +23,8 @@ export function Superadmin({ T }: { T: Theme }) {
   const [pays, setPays] = useStateSa<any[]>([]);
   const [gw, setGw] = useStateSa<any>({});
   const [addPkg, setAddPkg] = useStateSa(false);
+  const [catalog, setCatalog] = useStateSa<any[]>([]);
+  const [modBiz, setModBiz] = useStateSa<any>(null);   // business whose modules are being edited
   const [show, node] = useToast();
 
   const reload = React.useCallback(() => {
@@ -33,7 +35,7 @@ export function Superadmin({ T }: { T: Theme }) {
     API.superadmin.gateways().then(setGw).catch(() => {});
   }, []);
   useEffectSa(() => { API.module.list().then((ms: any) => setEnabled(!!(ms.find((m: any) => m.key === 'superadmin') || {}).enabled)).catch(() => setEnabled(false)); }, []);
-  useEffectSa(() => { if (enabled) reload(); }, [enabled, reload]);
+  useEffectSa(() => { if (enabled) { reload(); API.superadmin.moduleCatalog().then(setCatalog).catch(() => {}); } }, [enabled, reload]);
 
   async function enableModule() { await API.module.setEnabled('superadmin', true); setEnabled(true); show('Superadmin module enabled'); }
 
@@ -95,6 +97,7 @@ export function Superadmin({ T }: { T: Theme }) {
                       <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right' }}>
                         <span style={{ display: 'inline-flex', gap: 6, justifyContent: 'flex-end' }}>
                           {b.status !== 'active' ? <button onClick={() => setBizStatus(b, 'active')} style={saMini(T, 'accent')}>Activate</button> : <button onClick={() => setBizStatus(b, 'expired')} style={saMini(T)}>Deactivate</button>}
+                          <button onClick={() => setModBiz(b)} style={saMini(T)}>Modules</button>
                           <button onClick={() => show('Logging in as ' + b.owner + '…')} style={saMini(T)}>Login as</button>
                         </span>
                       </td>
@@ -155,8 +158,41 @@ export function Superadmin({ T }: { T: Theme }) {
       </div>
 
       {addPkg && <PackageModal T={T} onClose={() => setAddPkg(false)} onSaved={() => { setAddPkg(false); show('Package added'); reload(); }} />}
+      {modBiz && <BizModulesModal T={T} biz={modBiz} catalog={catalog} onClose={() => setModBiz(null)} onSaved={() => { setModBiz(null); show('Modules updated'); reload(); }} />}
       {node}
     </div>
+  );
+}
+
+function BizModulesModal({ T, biz, catalog, onClose, onSaved }: { T: Theme; biz: any; catalog: any[]; onClose: () => void; onSaved: () => void }) {
+  const addons = catalog.filter((m: any) => m.addon);
+  const coreNames = catalog.filter((m: any) => !m.addon).map((m: any) => m.name);
+  const [sel, setSel] = useStateSa<Set<string>>(() => new Set((biz.enabled_modules || []).filter((k: string) => catalog.find((m: any) => m.key === k && m.addon))));
+  const [busy, setBusy] = useStateSa(false); const [err, setErr] = useStateSa<any>(null);
+  const toggle = (k: string) => setSel((s: Set<string>) => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; });
+  async function save() {
+    setBusy(true); setErr(null);
+    try { await API.superadmin.setBusinessModules(biz.id, [...sel]); onSaved(); }
+    catch (e: any) { setErr(e.message || 'Could not save.'); setBusy(false); }
+  }
+  return (
+    <Modal T={T} title={`Modules · ${biz.name}`} subtitle="Enable or disable add-ons for this business" width={520} onClose={onClose}
+      footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Cancel</Btn><Btn T={T} kind="accent" onClick={save} disabled={busy}>{busy ? 'Saving…' : 'Save modules'}</Btn></>}>
+      {coreNames.length > 0 && <div style={{ fontSize: 11.5, color: T.inkSub, marginBottom: 10 }}>Core ({coreNames.join(', ')}) is always on.</div>}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {addons.map((m: any) => (
+          <label key={m.key} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '10px 12px', border: `1px solid ${T.line}`, borderRadius: T.r, cursor: 'pointer' }}>
+            <input type="checkbox" checked={sel.has(m.key)} onChange={() => toggle(m.key)} style={{ accentColor: T.accent.base, width: 16, height: 16 }} />
+            <span style={{ flex: 1, minWidth: 0 }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: T.ink }}>{m.name}</span>
+              {m.description ? <span style={{ display: 'block', fontSize: 11, color: T.inkSub }}>{m.description}</span> : null}
+            </span>
+          </label>
+        ))}
+        {addons.length === 0 && <div style={{ padding: 20, textAlign: 'center', color: T.inkMute, fontSize: 12.5 }}>No add-on modules.</div>}
+      </div>
+      {err && <div style={{ marginTop: 12, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}>⚠ {err}</div>}
+    </Modal>
   );
 }
 

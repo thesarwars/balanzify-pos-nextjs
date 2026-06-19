@@ -3415,6 +3415,14 @@ const API: any = {
       if (REAL_MODE) return await realReq('PUT', '/superadmin/business/' + id, { body });
       return (await transport('PUT', '/connector/api/superadmin/business/' + id, { body })).data;
     },
+    async moduleCatalog() {
+      if (REAL_MODE) { const r = await realReq('GET', '/superadmin/module-catalog'); return (r && r.modules) || []; }
+      return [];
+    },
+    async setBusinessModules(id: any, enabledModules: any[]) {
+      if (REAL_MODE) return await realReq('PUT', '/superadmin/business/' + id + '/modules', { body: { enabled_modules: enabledModules } });
+      throw new ApiError(501, 'Module overrides need the live backend.');
+    },
     async packages() {
       if (REAL_MODE) return await realReq('GET', '/superadmin/package');
       return (await transport('GET', '/connector/api/superadmin/package')).data;
