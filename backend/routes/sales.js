@@ -164,6 +164,8 @@ router.post('/', auth, validate(SaleSchemaV3), async (req, res, next) => {
       loyalty_points_redeemed = 0,
       tip_amount = 0,
       tip_type,
+      packing_charge = 0,
+      service_type_id,
       custom_item,
       notes,
       type,
@@ -498,8 +500,9 @@ router.post('/', auth, validate(SaleSchemaV3), async (req, res, next) => {
       const tipAmt     = tip_type === 'pct'
         ? subtotal * (parseFloat(tip_amount) || 0) / 100
         : parseFloat(tip_amount) || 0;
+      const packAmt    = parseFloat(packing_charge) || 0;
 
-      const total = Math.max(0, subtotal - discAmt - couponAmt - loyaltyDiscountAmt + tipAmt + lineTax);
+      const total = Math.max(0, subtotal - discAmt - couponAmt - loyaltyDiscountAmt + tipAmt + packAmt + lineTax);
 
       // ── 7a. Validate all payment legs via the provider registry ──────────
       // payments[] is an array of tender lines: [{ method, amount, ... }]
@@ -559,6 +562,8 @@ router.post('/', auth, validate(SaleSchemaV3), async (req, res, next) => {
           loyaltyPointsRedeemed: loyalty_points_redeemed,
           taxAmount:     lineTax,
           tipAmount:     tipAmt,
+          packingCharge: packAmt,
+          serviceTypeId: service_type_id || null,
           totalAmount:   total,
           amountPaid,
           amountDue:     total - amountPaid,

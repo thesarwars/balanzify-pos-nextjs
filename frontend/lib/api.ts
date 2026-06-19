@@ -2595,6 +2595,8 @@ const API: any = {
           discount_type: payload.discount_type === 'percentage' ? 'pct' : 'flat',
           discount_value: Number(payload.discount_amount || 0),
           ...(payload.coupon_id ? { coupon_id: payload.coupon_id, coupon_discount: Number(payload.coupon_discount || 0) } : {}),
+          ...(Number(payload.packing_charge) > 0 ? { packing_charge: Number(payload.packing_charge) } : {}),
+          ...(isUuid(payload.service_type_id) ? { service_type_id: payload.service_type_id } : {}),
           type: 'pos',
         };
         if (split) {

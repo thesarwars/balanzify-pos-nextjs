@@ -258,6 +258,8 @@ export function POS({ T, tweaks }: { T: any; tweaks: any }) {
         redeem_points: redeemPts,
         coupon_id: couponOk && couponDiscount > 0 ? coupon.id : undefined,
         coupon_discount: couponOk && couponDiscount > 0 ? couponDiscount : undefined,
+        packing_charge: packing > 0 ? packing : undefined,
+        service_type_id: svcType ? svcType.id : undefined,
         payments: payments.filter((p: any) => Number(p.amount) > 0).map((p: any) => ({ method: p.method, amount: Number(p.amount) })),
         lines: lines.map((l: any) => ({ product_id: l.id, variation: l.varName, quantity: l.qty, unit_price: l.price })),
       });

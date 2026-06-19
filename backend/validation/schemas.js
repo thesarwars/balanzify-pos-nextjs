@@ -710,6 +710,8 @@ const SaleSchemaV3 = z.object({
   loyalty_points_redeemed: nonNegInt.default(0),
   tip_amount: money.default(0),
   tip_type: z.enum(['pct','flat']).default('flat'),
+  packing_charge: money.default(0),
+  service_type_id: uuid.optional().nullable(),
   display_currency: z.string().length(3).optional().nullable(),
   notes: optStr(1000),
   type: z.enum(['pos','order','invoice','credit']).default('pos'),

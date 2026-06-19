@@ -1557,6 +1557,8 @@ model Sale {
   couponDiscount        Decimal       @default(0) @map("coupon_discount") @db.Decimal(12, 2)
   loyaltyDiscount       Decimal       @default(0) @map("loyalty_discount") @db.Decimal(12, 2)
   tipAmount             Decimal       @default(0) @map("tip_amount") @db.Decimal(12, 2)
+  packingCharge         Decimal       @default(0) @map("packing_charge") @db.Decimal(12, 2)
+  serviceTypeId         String?       @map("service_type_id") @db.Uuid
   totalAmount           Decimal       @default(0) @map("total_amount") @db.Decimal(12, 2)
   amountPaid            Decimal       @default(0) @map("amount_paid") @db.Decimal(12, 2)
   amountDue             Decimal       @default(0) @map("amount_due") @db.Decimal(12, 2)
