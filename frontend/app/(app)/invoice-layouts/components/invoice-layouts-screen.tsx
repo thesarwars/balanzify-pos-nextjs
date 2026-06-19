@@ -8,7 +8,7 @@
 import React from 'react';
 import type { Theme } from '@/lib/theme';
 import { Btn, Badge, Panel, Field, TextField, useToast } from '@/components/kit';
-import { Topbar } from '@/components/shell';
+import { Topbar, useSession } from '@/components/shell';
 import { API } from '@/lib/api';
 import { BUSINESS } from '@/lib/data';
 
@@ -124,6 +124,8 @@ export function InvoiceLayouts({ T }: { T: Theme }) {
 }
 
 function ReceiptPreview({ T, layout: L }: { T: Theme; layout: any }) {
+  const session = useSession();
+  const bizName = (session && session.business_name) || BUSINESS.name;
   const slim = L.design === 'slim';
   const width = slim ? 250 : 380;
   const sub = SAMPLE_INV.lines.reduce((s, l) => s + l.qty * l.price, 0);
@@ -138,7 +140,7 @@ function ReceiptPreview({ T, layout: L }: { T: Theme; layout: any }) {
     <div style={{ width, background: '#fff', color: '#1a1a1a', fontFamily: slim ? mono : 'Georgia, serif', padding: slim ? '14px 14px' : '24px 26px', boxShadow: '0 8px 30px rgba(0,0,0,0.18)', borderRadius: slim ? 4 : 8, fontSize: 12, lineHeight: 1.4 }}>
       {L.show_letterhead && <div style={{ height: 36, borderRadius: 4, background: 'linear-gradient(90deg,#1f2d4d,#2a3f6b)', marginBottom: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 10, letterSpacing: 1, fontFamily: 'system-ui' }}>LETTERHEAD</div>}
       <div style={{ textAlign: 'center', marginBottom: 8 }}>
-        <div style={{ fontSize: slim ? 15 : 20, fontWeight: 800, letterSpacing: slim ? 0 : -0.3 }}>{L.header_text || BUSINESS.name}</div>
+        <div style={{ fontSize: slim ? 15 : 20, fontWeight: 800, letterSpacing: slim ? 0 : -0.3 }}>{L.header_text || bizName}</div>
         {L.show_address && <div style={{ fontSize: 9.5, color: '#555', marginTop: 2 }}>{BUSINESS.branch} · Mogadishu</div>}
         {!slim && L.design === 'elegant' && <div style={{ width: 40, height: 2, background: '#1a1a1a', margin: '8px auto 0' }} />}
       </div>

@@ -9,7 +9,7 @@ import React from 'react';
 import type { Theme } from '@/lib/theme';
 import { money, money0 } from '@/lib/theme';
 import { Btn, Badge, Panel, Modal, Field, TextField, SelectField, FormGrid, useToast } from '@/components/kit';
-import { Topbar } from '@/components/shell';
+import { Topbar, useSession } from '@/components/shell';
 import { API } from '@/lib/api';
 import { BUSINESS } from '@/lib/data';
 
@@ -30,6 +30,8 @@ function StatStrip({ T, stats }: { T: Theme; stats: any[] }) {
 }
 
 export function Finance({ T, tab: initial }: { T: Theme; tab?: string }) {
+  const session = useSession();
+  const currency = (session && session.currency) || BUSINESS.currency;
   const [tab, setTab] = useStateFn<any>(initial || 'expenses');
   const [expenses, setExpenses] = useStateFn<any[]>([]);
   const [cats, setCats] = useStateFn<any[]>([]);
@@ -95,7 +97,7 @@ export function Finance({ T, tab: initial }: { T: Theme; tab?: string }) {
               {expenses.length === 0 && <div style={{ padding: 44, textAlign: 'center', color: T.inkMute, fontSize: 13 }}>No expenses recorded.</div>}
             </Panel>
           </> : <>
-            <StatStrip T={T} stats={[['Accounts', accounts.length], ['Total balance', money0(totalBal)], ['Currency', BUSINESS.currency === '$' ? 'USD' : BUSINESS.currency]]} />
+            <StatStrip T={T} stats={[['Accounts', accounts.length], ['Total balance', money0(totalBal)], ['Currency', currency === '$' ? 'USD' : currency]]} />
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16 }}>
               {accounts.map((a: any) => (
                 <div key={a.id} style={{ background: a.type === 'Bank' ? `linear-gradient(135deg, ${T.navy}, ${T.navyLight})` : T.card, color: a.type === 'Bank' ? '#fff' : T.ink, border: a.type === 'Bank' ? 'none' : `1px solid ${T.line}`, borderRadius: T.rLg, padding: 20, boxShadow: T.sh1 }}>
