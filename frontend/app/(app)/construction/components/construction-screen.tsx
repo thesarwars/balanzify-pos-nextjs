@@ -20,6 +20,10 @@ const PROJECT_STATUSES = ['planning', 'active', 'on_hold', 'completed', 'cancell
 const MS_NEXT: any = { pending: 'in_progress', in_progress: 'complete', complete: 'billed', billed: 'paid' };
 const MS_TONE: any = { pending: 'gray', in_progress: 'blue', complete: 'amber', billed: 'violet', paid: 'green' };
 const PRJ_TONE: any = { planning: 'gray', active: 'green', on_hold: 'amber', completed: 'blue', cancelled: 'red' };
+const TASK_NEXT: any = { not_started: 'in_progress', in_progress: 'completed' };
+const TASK_TONE: any = { not_started: 'gray', in_progress: 'blue', blocked: 'amber', completed: 'green', cancelled: 'red' };
+const PRIORITY_TONE: any = { critical: 'red', high: 'amber', medium: 'blue', low: 'gray' };
+const PRIORITIES = ['critical', 'high', 'medium', 'low'];
 
 const today = () => new Date().toISOString().slice(0, 10);
 const addDays = (d: string, n: number) => { const x = new Date(d); x.setDate(x.getDate() + n); return x.toISOString().slice(0, 10); };
@@ -34,7 +38,8 @@ export function Construction({ T }: { T: Theme }) {
   const [labor, setLabor] = useS<any>({ entries: [], total: 0 });
   const [logs, setLogs] = useS<any[]>([]);
   const [milestones, setMilestones] = useS<any[]>([]);
-  const [modal, setModal] = useS<any>(null);   // 'project'|'line'|'labor'|'log'|'milestone'|{cost:line}
+  const [tasks, setTasks] = useS<any[]>([]);
+  const [modal, setModal] = useS<any>(null);   // 'project'|'line'|'labor'|'log'|'milestone'|'task'|{cost:line}
   const [show, node] = useToast();
 
   useE(() => { API.module.list().then((ms: any) => setEnabled(!!(ms.find((m: any) => m.key === 'construction') || {}).enabled)).catch(() => setEnabled(false)); }, []);
@@ -46,7 +51,8 @@ export function Construction({ T }: { T: Theme }) {
   const reloadLabor = useCb(() => { if (pid) API.construction.labor(pid).then(setLabor).catch(() => {}); }, [pid]);
   const reloadLogs = useCb(() => { if (pid) API.construction.siteLogs(pid).then(setLogs).catch(() => {}); }, [pid]);
   const reloadMs = useCb(() => { if (pid) API.construction.milestones(pid).then(setMilestones).catch(() => {}); }, [pid]);
-  useE(() => { if (!pid) { setCosting(null); return; } reloadCosting(); reloadLabor(); reloadLogs(); reloadMs(); }, [pid, reloadCosting, reloadLabor, reloadLogs, reloadMs]);
+  const reloadTasks = useCb(() => { if (pid) API.task.list({ project_id: pid }).then(setTasks).catch(() => {}); }, [pid]);
+  useE(() => { if (!pid) { setCosting(null); return; } reloadCosting(); reloadLabor(); reloadLogs(); reloadMs(); reloadTasks(); }, [pid, reloadCosting, reloadLabor, reloadLogs, reloadMs, reloadTasks]);
 
   async function enableModule() { try { await API.module.setEnabled('construction', true); setEnabled(true); show('Construction module enabled'); } catch (e: any) { show(e.message); } }
   async function advanceMs(m: any) {
@@ -71,7 +77,11 @@ export function Construction({ T }: { T: Theme }) {
   );
 
   const project = projects.find((p: any) => p.id === pid) || null;
-  const tabs = [['costing', 'Costing'], ['labor', 'Labor'], ['diary', 'Site diary'], ['milestones', 'Milestones']];
+  const tabs = [['costing', 'Costing'], ['labor', 'Labor'], ['diary', 'Site diary'], ['milestones', 'Milestones'], ['tasks', 'Tasks']];
+  async function advanceTask(t: any) {
+    const next = TASK_NEXT[t.status]; if (!next) return;
+    try { await API.task.update(t.id, { status: next }); show(`Task → ${next.replace('_', ' ')}`); reloadTasks(); } catch (e: any) { show(e.message); }
+  }
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: T.paperAlt }}>
@@ -183,6 +193,21 @@ export function Construction({ T }: { T: Theme }) {
                   ))}{milestones.length === 0 && <tr><td colSpan={7} style={empty(T)}>No milestones yet.</td></tr>}</tbody></table>
               </Panel>
             )}
+
+            {tab === 'tasks' && (
+              <Panel T={T} title="Project tasks" action={<Btn T={T} kind="ghost" onClick={() => setModal('task')}>+ Task</Btn>} pad={false}>
+                <table style={tbl}><thead><tr>{['Task', 'Priority', 'Due', 'Status', ''].map((h, i) => <th key={i} style={th(T)}>{h}</th>)}</tr></thead>
+                  <tbody>{tasks.map((t: any) => (
+                    <tr key={t.id}>
+                      <td style={td(T)}><b style={{ color: T.ink }}>{t.title}</b>{t.assignee ? <span style={{ display: 'block', fontSize: 11, color: T.inkSub }}>{t.assignee}</span> : null}</td>
+                      <td style={td(T)}><Badge T={T} tone={PRIORITY_TONE[t.priority] || 'gray'}>{t.priority}</Badge></td>
+                      <td style={td(T)}><span style={{ fontFamily: T.fMono, fontSize: 12 }}>{t.due_date || '—'}</span></td>
+                      <td style={td(T)}><Badge T={T} tone={TASK_TONE[t.status] || 'gray'}>{(t.status || '').replace('_', ' ')}</Badge></td>
+                      <td style={{ ...td(T), textAlign: 'right' }}>{TASK_NEXT[t.status] ? <button onClick={() => advanceTask(t)} style={mini(T)}>→ {TASK_NEXT[t.status].replace('_', ' ')}</button> : <span style={{ fontSize: 12, color: T.green }}>✓ done</span>}</td>
+                    </tr>
+                  ))}{tasks.length === 0 && <tr><td colSpan={5} style={empty(T)}>No tasks for this project yet.</td></tr>}</tbody></table>
+              </Panel>
+            )}
           </>)}
         </div>
       </div>
@@ -193,6 +218,7 @@ export function Construction({ T }: { T: Theme }) {
       {modal === 'labor' && <LaborModal T={T} pid={pid} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Labor logged'); reloadLabor(); reloadCosting(); }} />}
       {modal === 'log' && <SiteLogModal T={T} pid={pid} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Diary entry added'); reloadLogs(); }} />}
       {modal === 'milestone' && <MilestoneModal T={T} pid={pid} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Milestone added'); reloadMs(); }} />}
+      {modal === 'task' && <TaskModal T={T} pid={pid} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Task added'); reloadTasks(); }} />}
       {node}
     </div>
   );
@@ -336,6 +362,30 @@ function MilestoneModal({ T, pid, onClose, onSaved }: { T: Theme; pid: any; onCl
         <Field T={T} label="Amount"><TextField T={T} type="number" value={f.amount} onChange={(v: any) => set('amount', v)} placeholder="0" /></Field>
         <Field T={T} label="Retention %"><TextField T={T} type="number" value={f.retention_pct} onChange={(v: any) => set('retention_pct', v)} /></Field>
         <Field T={T} label="Sort order"><TextField T={T} type="number" value={f.sort_order} onChange={(v: any) => set('sort_order', v)} /></Field>
+      </FormGrid>
+      {err && <div style={errBox(T)}>⚠ {err}</div>}
+    </Modal>
+  );
+}
+
+function TaskModal({ T, pid, onClose, onSaved }: { T: Theme; pid: any; onClose: () => void; onSaved: () => void }) {
+  const [f, setF] = useS<any>({ title: '', priority: 'medium', due_date: addDays(today(), 7), description: '' });
+  const [busy, setBusy] = useS(false); const [err, setErr] = useS<any>(null);
+  const set = (k: string, v: any) => setF((s: any) => ({ ...s, [k]: v }));
+  async function save() {
+    if (!f.title.trim()) { setErr('Task title is required.'); return; }
+    setBusy(true); setErr(null);
+    try { await API.task.create({ title: f.title.trim(), priority: f.priority, status: 'not_started', due_date: f.due_date, project_id: pid, description: f.description || undefined, category: 'other' }); onSaved(); }
+    catch (e: any) { setErr(e.message || 'Could not save.'); } finally { setBusy(false); }
+  }
+  return (
+    <Modal T={T} title="New task" subtitle="Tracked against this project" width={480} onClose={onClose}
+      footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Cancel</Btn><Btn T={T} kind="accent" onClick={save} disabled={busy}>{busy ? 'Saving…' : 'Add task'}</Btn></>}>
+      <FormGrid>
+        <Field T={T} label="Title" full><TextField T={T} value={f.title} onChange={(v: any) => set('title', v)} placeholder="e.g. Order rebar for slab" /></Field>
+        <Field T={T} label="Priority"><SelectField T={T} value={f.priority} options={PRIORITIES} onChange={(v: any) => set('priority', v)} /></Field>
+        <Field T={T} label="Due date"><TextField T={T} type="date" value={f.due_date} onChange={(v: any) => set('due_date', v)} /></Field>
+        <Field T={T} label="Notes" full><TextField T={T} value={f.description} onChange={(v: any) => set('description', v)} placeholder="optional" /></Field>
       </FormGrid>
       {err && <div style={errBox(T)}>⚠ {err}</div>}
     </Modal>
