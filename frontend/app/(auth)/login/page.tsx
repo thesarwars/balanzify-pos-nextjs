@@ -132,7 +132,7 @@ function Login({ T, onLogin, onRegister, prefillUser }: { T: Theme; onLogin: () 
                 <Lbl T={T} noMargin>Password</Lbl>
                 <button type="button" onClick={() => { setFgEmail(email); setStage('forgot'); setErr(null); }} style={{ background: 'none', border: 'none', padding: 0, fontSize: 12, fontWeight: 600, color: T.accent.text, cursor: 'pointer' }}>Forgot?</button>
               </div>
-              <IconInp T={T} icon="⚿" type={show ? 'text' : 'password'} placeholder="••••••••" value={pw} onChange={(e: any) => { setPw(e.target.value); setErr(null); }}
+              <IconInp T={T} icon="⚿" type={show ? 'text' : 'password'} placeholder="Enter your password" value={pw} onChange={(e: any) => { setPw(e.target.value); setErr(null); }}
                 trailing={<button type="button" onClick={() => setShow(!show)} style={{ background: 'none', border: 'none', color: T.inkMute, cursor: 'pointer', fontSize: 13, padding: 0 }}>{show ? '◯' : '●'}</button>} />
               <ErrBox T={T} err={err} />
               <SubmitBtn T={T} busy={busy} busyLabel="Authorizing…" label="Sign in →" marginTop={err ? 16 : 24} />

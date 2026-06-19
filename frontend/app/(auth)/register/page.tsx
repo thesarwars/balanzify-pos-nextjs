@@ -184,7 +184,7 @@ function RegisterBusiness({ T, onRegistered, onBackToLogin }: { T: Theme; onRegi
                   </RField>
                   <RField T={T} label="Password" required error={errField === 'password'} hint="At least 6 characters.">
                     <div style={{ position: 'relative' }}>
-                      <RInp T={T} type={showPw ? 'text' : 'password'} value={user.password} onChange={(e: any) => sU('password', e.target.value)} placeholder="••••••••" style={{ paddingRight: 44 }} />
+                      <RInp T={T} type={showPw ? 'text' : 'password'} value={user.password} onChange={(e: any) => sU('password', e.target.value)} placeholder="At least 8 characters" style={{ paddingRight: 44 }} />
                       <button type="button" onClick={() => setShowPw((s: any) => !s)} style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: T.inkMute, cursor: 'pointer', fontSize: 13 }}>{showPw ? '◯' : '●'}</button>
                     </div>
                   </RField>
