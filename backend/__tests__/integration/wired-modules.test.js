@@ -80,6 +80,12 @@ describe('reports after a sale (regression: BigInt + $queryRaw)', () => {
     // real hourly breakdown: 14 buckets (8:00–21:00) for the dashboard chart
     expect(Array.isArray(dash.body.hourly)).toBe(true);
     expect(dash.body.hourly.length).toBe(14);
+    // sales history list is live + carries a real per-sale item count
+    const hist = await request(app).get('/api/v1/sales').set(auth(token));
+    expect(hist.status).toBe(200);
+    expect(hist.body.sales.length).toBeGreaterThan(0);
+    expect(hist.body.sales[0]._count.items).toBe(1);
+
     const sales = await request(app).get('/api/v1/reports/sales').set(auth(token));
     expect(sales.status).toBe(200);
     expect(sales.body.totals._count.id).toBe(1);
