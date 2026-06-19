@@ -11,20 +11,43 @@ import { API } from '@/lib/api';
 import { money, timeAgo } from '@/lib/theme';
 import { SALES, PRODUCTS } from '@/lib/data';
 
-const { useState: useStateM } = React;
+const { useState: useStateM, useEffect: useEffectM } = React;
+
+// Map a raw backend sale (camelCase) → the history row view-model.
+function adaptSaleRow(r: any): any {
+  return {
+    _id: r.id,
+    id: r.saleNumber || r.invoice_no || r.id,
+    customer: (r.customer && r.customer.name) || 'Walk-in',
+    cashier: (r.cashier && r.cashier.name) || '—',
+    items: (r._count && r._count.items) != null ? r._count.items : '—',
+    method: r.paymentMethod, methodLabel: r.paymentMethod,
+    total: Number(r.totalAmount || 0),
+    minsAgo: r.createdAt ? Math.max(0, Math.round((Date.now() - new Date(r.createdAt).getTime()) / 60000)) : 0,
+    status: r.status || 'completed',
+  };
+}
 
 export function Sales({ T }: { T: Theme }) {
+  const isReal = !!(API.config?.isReal?.());
   const [f, setF] = useStateM('all');
   const [selSale, setSelSale] = useStateM<any>(null);
   const [tick, setTick] = useStateM(0);
+  const [sales, setSales] = useStateM<any[]>(isReal ? [] : SALES);
+  const [loading, setLoading] = useStateM(isReal);
+  useEffectM(() => {
+    if (!isReal) return;
+    setLoading(true);
+    API.sell.list({ limit: 100 }).then((r: any) => setSales((r.items || []).map(adaptSaleRow))).catch(() => setSales([])).finally(() => setLoading(false));
+  }, [isReal, tick]);
   const filters = [['all', 'All'], ['completed', 'Completed'], ['held', 'Held'], ['refunded', 'Refunded']];
-  const rows = f === 'all' ? SALES : SALES.filter((s: any) => s.status === f);
+  const rows = f === 'all' ? sales : sales.filter((s: any) => s.status === f);
   const tone: any = { completed: 'green', held: 'amber', refunded: 'red' };
-  const totalToday = SALES.filter((s: any) => s.status === 'completed').reduce((s: any, x: any) => s + x.total, 0);
+  const totalToday = sales.filter((s: any) => s.status === 'completed').reduce((s: any, x: any) => s + x.total, 0);
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: T.paperAlt }}>
-      <Topbar T={T} title="Sales History" subtitle={`${SALES.length} transactions today · ${money(totalToday)} collected`}
+      <Topbar T={T} title="Sales History" subtitle={`${rows.length} transactions · ${money(totalToday)} collected`}
         right={<><Btn T={T} kind="ghost">⤓ Export</Btn><Btn T={T} kind="ghost">📅 Today ▾</Btn></>} />
       <div style={{ flex: 1, overflowY: 'auto', padding: 28 }}>
         <div style={{ maxWidth: 1280, margin: '0 auto' }}>
@@ -60,6 +83,8 @@ export function Sales({ T }: { T: Theme }) {
                 ))}
               </tbody>
             </table>
+            {loading && <div style={{ padding: 44, textAlign: 'center', fontFamily: T.fMono, fontSize: 12.5, color: T.inkSub }}>Loading sales…</div>}
+            {!loading && rows.length === 0 && <div style={{ padding: 44, textAlign: 'center', color: T.inkMute, fontSize: 13 }}>No sales{f !== 'all' ? ` (${f})` : ' yet'}.</div>}
           </Panel>
         </div>
       </div>

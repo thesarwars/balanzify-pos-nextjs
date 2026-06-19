@@ -876,7 +876,7 @@ router.get('/', auth, async (req, res, next) => {
     const [sales, total] = await Promise.all([
       prisma.sale.findMany({
         where,
-        include: { cashier: { select: { name: true } }, customer: { select: { name: true } } },
+        include: { cashier: { select: { name: true } }, customer: { select: { name: true } }, _count: { select: { items: true } } },
         orderBy: { createdAt: 'desc' },
         take:    parseInt(limit),
         skip:    (parseInt(page) - 1) * parseInt(limit),
