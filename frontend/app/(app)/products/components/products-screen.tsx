@@ -1,7 +1,7 @@
 'use client';
 import React from 'react';
 import { Btn, Badge, Panel, Modal, Field, TextField, SelectField, FormGrid, useToast, useViewport, swatchBg } from '@/components/kit';
-import { Topbar } from '@/components/shell';
+import { Topbar, useSession } from '@/components/shell';
 import { money } from '@/lib/theme';
 import { API } from '@/lib/api';
 import { BUSINESS, CATEGORIES, PRODUCTS } from '@/lib/data';
@@ -25,7 +25,7 @@ export function Products({ T }: { T: any }) {
   const [form, setForm] = useStatePr<any>({});
   const [saving, setSaving] = useStatePr(false);
   const [formErr, setFormErr] = useStatePr<any>(null);
-  const [refs, setRefs] = useStatePr<any>({ units: [], brands: [], variations: [], taxRates: [], priceGroups: [] });
+  const [refs, setRefs] = useStatePr<any>({ units: [], brands: [], variations: [], taxRates: [], priceGroups: [], cats: [] });
   const [unitMgr, setUnitMgr] = useStatePr(false);
   const [varMgr, setVarMgr] = useStatePr(false);
   const [pgMgr, setPgMgr] = useStatePr(false);
@@ -47,8 +47,8 @@ export function Products({ T }: { T: any }) {
 
   // Load catalog reference data (units, brands, variation templates, taxes).
   const loadRefs = React.useCallback(() => {
-    Promise.all([API.unit.list(), API.brand.list(), API.variation.list(), API.taxRate.list(), API.priceGroup.list()])
-      .then(([units, brands, variations, taxRates, priceGroups]: any) => setRefs({ units, brands, variations, taxRates, priceGroups }))
+    Promise.all([API.unit.list(), API.brand.list(), API.variation.list(), API.taxRate.list(), API.priceGroup.list(), API.category.list()])
+      .then(([units, brands, variations, taxRates, priceGroups, cats]: any) => setRefs({ units, brands, variations, taxRates, priceGroups, cats }))
       .catch(() => {});
   }, []);
   React.useEffect(() => { loadRefs(); }, [loadRefs]);
@@ -68,7 +68,8 @@ export function Products({ T }: { T: any }) {
   if (cat) rows = rows.filter((p: any) => p.cat === cat);
   if (lowOnly) rows = rows.filter((p: any) => p.stock <= 12);
 
-  const cats = CATEGORIES.filter((c: any) => c.id !== 'all');
+  // Live categories in real mode; seed list is the mock fallback.
+  const cats = (refs.cats && refs.cats.length) ? refs.cats : CATEGORIES.filter((c: any) => c.id !== 'all');
   const stockTone = (n: number) => n <= 0 ? 'red' : n <= 12 ? 'amber' : 'green';
   const setF = (k: string, v: any) => setForm((f: any) => ({ ...f, [k]: v }));
 
@@ -278,13 +279,13 @@ export function Products({ T }: { T: any }) {
               <div style={{ marginBottom: 16, border: `1px solid ${T.line}`, borderRadius: T.r, overflow: 'hidden' }}>
                 <div style={{ padding: '7px 11px', background: T.paperAlt, fontSize: 9.5, fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase', color: T.inkSub }}>Includes</div>
                 {sel.combo.map((c: any, i: number) => {
-                  const cp = PRODUCTS.find((p: any) => parseInt(String(p.id).replace(/\D/g, ''), 10) === c.product_id) || PRODUCTS.find((p: any) => p.id === c.product_id);
+                  const cp = list.find((p: any) => p.id === c.product_id) || PRODUCTS.find((p: any) => parseInt(String(p.id).replace(/\D/g, ''), 10) === c.product_id) || PRODUCTS.find((p: any) => p.id === c.product_id);
                   return <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 11px', borderTop: `1px solid ${T.line}`, fontSize: 12 }}><span style={{ color: T.ink, fontWeight: 600 }}>{cp ? cp.name : 'Product'}</span><span style={{ fontFamily: T.fMono, color: T.inkSub }}>×{c.qty}</span></div>;
                 })}
               </div>
             )}
 
-            {([['Type', ({ single: 'Single', variable: 'Variable', combo: 'Combo' } as any)[sel.type || 'single']], ['Category', CATEGORIES.find((c: any) => c.id === sel.cat)?.name], ['Brand', (refs.brands.find((b: any) => b.id === sel.brand_id) || {}).name || '—'], ['Unit of measure', sel.unit], ['Tax', (refs.taxRates.find((t: any) => t.id === (sel.tax_id || 0)) || {}).name || 'None'], ['Alert quantity', (sel.alert_quantity || 0) + ' ' + sel.unit], ['Stock managed', sel.enable_stock === false ? 'No' : 'Yes'], ['For selling', sel.not_for_selling ? 'No' : 'Yes']] as any[]).map(([k, v]: any) => (
+            {([['Type', ({ single: 'Single', variable: 'Variable', combo: 'Combo' } as any)[sel.type || 'single']], ['Category', cats.find((c: any) => c.id === sel.cat)?.name], ['Brand', (refs.brands.find((b: any) => b.id === sel.brand_id) || {}).name || '—'], ['Unit of measure', sel.unit], ['Tax', (refs.taxRates.find((t: any) => t.id === (sel.tax_id || 0)) || {}).name || 'None'], ['Alert quantity', (sel.alert_quantity || 0) + ' ' + sel.unit], ['Stock managed', sel.enable_stock === false ? 'No' : 'Yes'], ['For selling', sel.not_for_selling ? 'No' : 'Yes']] as any[]).map(([k, v]: any) => (
               <div key={k} style={{ display: 'flex', justifyContent: 'space-between', padding: '9px 0', borderBottom: `1px solid ${T.line}`, fontSize: 12.5 }}>
                 <span style={{ color: T.inkSub }}>{k}</span>
                 <span style={{ fontWeight: 600, color: T.ink }}>{v}</span>
@@ -436,7 +437,7 @@ export function Products({ T }: { T: any }) {
       {pgMgr && <PriceGroupManager T={T} groups={refs.priceGroups} onClose={() => setPgMgr(false)} onChange={loadRefs} toast={toast} />}
       {varMgr && <VariationManager T={T} templates={refs.variations} onClose={() => setVarMgr(false)} onChange={loadRefs} toast={toast} />}
       {impExp && <ImportExport T={T} onClose={() => setImpExp(false)} onImported={reload} toast={toast} />}
-      {labels && <PrintLabels T={T} initial={sel ? [sel] : []} onClose={() => setLabels(false)} />}
+      {labels && <PrintLabels T={T} products={list} initial={sel ? [sel] : []} onClose={() => setLabels(false)} />}
       {confirmDel && (
         <Modal T={T} title="Delete product?" subtitle={confirmDel.name} width={420} onClose={() => setConfirmDel(null)} onSave={() => doDelete(confirmDel)} saveLabel="Delete">
           <div style={{ fontSize: 13.5, color: T.inkMid, lineHeight: 1.6 }}>This removes <b style={{ color: T.ink }}>{confirmDel.name}</b> from your catalog. Products with sales or stock history can't be deleted.</div>
@@ -601,31 +602,34 @@ function Barcode({ code, height = 34, color = '#111' }: any) {
   );
 }
 
-function PrintLabels({ T, onClose, initial }: any) {
+function PrintLabels({ T, onClose, initial, products }: any) {
+  const session = useSession();
+  const bizName = (session && session.business_name) || BUSINESS.name;
+  const catalog = (products && products.length) ? products : PRODUCTS;
   const [items, setItems] = useStateLb(() => (initial || []).map((p: any) => ({ id: p.id, qty: 1 })));
   const [q, setQ] = useStateLb('');
   const [opts, setOpts] = useStateLb<any>({ business: true, name: true, price: true, sku: true });
   const [perRow, setPerRow] = useStateLb(3);
 
-  const found = q.trim() ? PRODUCTS.filter((p: any) => p.name.toLowerCase().includes(q.toLowerCase()) || p.sku.toLowerCase().includes(q.toLowerCase())).slice(0, 6) : [];
+  const found = q.trim() ? catalog.filter((p: any) => p.name.toLowerCase().includes(q.toLowerCase()) || (p.sku || '').toLowerCase().includes(q.toLowerCase())).slice(0, 6) : [];
   const add = (p: any) => { setItems((it: any) => it.find((x: any) => x.id === p.id) ? it : [...it, { id: p.id, qty: 1 }]); setQ(''); };
   const setQty = (id: any, v: any) => setItems((it: any) => it.map((x: any) => x.id === id ? { ...x, qty: Math.max(1, v) } : x));
   const rm = (id: any) => setItems((it: any) => it.filter((x: any) => x.id !== id));
 
   const labels: any[] = [];
-  items.forEach((it: any) => { const p = PRODUCTS.find((p: any) => p.id === it.id); if (p) for (let i = 0; i < it.qty; i++) labels.push(p); });
+  items.forEach((it: any) => { const p = catalog.find((p: any) => p.id === it.id); if (p) for (let i = 0; i < it.qty; i++) labels.push(p); });
 
   function doPrint() {
     const w = window.open('', '_blank', 'width=800,height=600');
     if (!w) return;
     const cell = (p: any) => `<div style="border:1px dashed #ccc;border-radius:6px;padding:8px 10px;display:flex;flex-direction:column;align-items:center;gap:3px;text-align:center;font-family:system-ui,sans-serif;">
-      ${opts.business ? `<div style="font-size:9px;color:#666;font-weight:600;letter-spacing:.3px">${BUSINESS.name}</div>` : ''}
+      ${opts.business ? `<div style="font-size:9px;color:#666;font-weight:600;letter-spacing:.3px">${bizName}</div>` : ''}
       ${opts.name ? `<div style="font-size:11px;font-weight:700;color:#111;line-height:1.15">${p.name}</div>` : ''}
       <div style="display:flex;align-items:flex-end;height:30px;margin:2px 0">${barsFor(p.sku).map((b: any) => `<span style="width:${b.w}px;height:100%;background:${b.on ? '#111' : 'transparent'}"></span>`).join('')}</div>
       ${opts.sku ? `<div style="font-size:9px;font-family:monospace;color:#333;letter-spacing:1px">${p.sku}</div>` : ''}
       ${opts.price ? `<div style="font-size:13px;font-weight:700;color:#111">$${p.price.toFixed(2)}</div>` : ''}
     </div>`;
-    w.document.write(`<html><head><title>Labels — ${BUSINESS.name}</title></head><body style="margin:14px;background:#fff">
+    w.document.write(`<html><head><title>Labels — ${bizName}</title></head><body style="margin:14px;background:#fff">
       <div style="display:grid;grid-template-columns:repeat(${perRow},1fr);gap:8px">${labels.map(cell).join('')}</div>
       <script>window.onload=function(){setTimeout(function(){window.print()},250)}<\/script>
       </body></html>`);
@@ -679,7 +683,7 @@ function PrintLabels({ T, onClose, initial }: any) {
               <div style={{ display: 'grid', gridTemplateColumns: `repeat(${perRow}, 1fr)`, gap: 8 }}>
                 {labels.slice(0, 24).map((p: any, i: number) => (
                   <div key={i} style={{ border: '1px dashed #cbb', borderRadius: 6, padding: '8px 8px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, textAlign: 'center' } as React.CSSProperties}>
-                    {opts.business && <div style={{ fontSize: 8, color: '#888', fontWeight: 700 }}>{BUSINESS.name}</div>}
+                    {opts.business && <div style={{ fontSize: 8, color: '#888', fontWeight: 700 }}>{bizName}</div>}
                     {opts.name && <div style={{ fontSize: 10, fontWeight: 700, color: '#111', lineHeight: 1.1 }}>{p.name}</div>}
                     <Barcode code={p.sku} height={26} />
                     {opts.sku && <div style={{ fontSize: 8, fontFamily: 'monospace', color: '#444', letterSpacing: 1 }}>{p.sku}</div>}

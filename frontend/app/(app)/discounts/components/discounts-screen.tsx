@@ -17,15 +17,16 @@ const { useState: useStateDc, useEffect: useEffectDc } = React;
 export function Discounts({ T }: { T: Theme }) {
   const [rows, setRows] = useStateDc<any[]>([]);
   const [loading, setLoading] = useStateDc(true);
-  const [refs, setRefs] = useStateDc<any>({ brands: [], locs: [] });
+  const [refs, setRefs] = useStateDc<any>({ brands: [], locs: [], cats: [] });
   const [edit, setEdit] = useStateDc<any>(null);
   const [confirmDel, setConfirmDel] = useStateDc<any>(null);
   const [show, node] = useToast();
-  const cats = CATEGORIES.filter((c: any) => c.id !== 'all');
+  // Live categories in real mode; the seed list is the mock fallback.
+  const cats = (refs.cats && refs.cats.length) ? refs.cats : CATEGORIES.filter((c: any) => c.id !== 'all');
 
   const reload = React.useCallback(() => { setLoading(true); API.discount.list().then(setRows).catch(() => setRows([])).finally(() => setLoading(false)); }, []);
   useEffectDc(() => { reload(); }, [reload]);
-  useEffectDc(() => { Promise.all([API.brand.list(), API.location.list()]).then(([brands, locs]: any) => setRefs({ brands, locs })).catch(() => {}); }, []);
+  useEffectDc(() => { Promise.all([API.brand.list(), API.location.list(), API.category.list()]).then(([brands, locs, cats]: any) => setRefs({ brands, locs, cats })).catch(() => {}); }, []);
 
   const now = new Date().toISOString().slice(0, 10);
   const live = (d: any) => d.is_active && (!d.ends_at || d.ends_at >= now) && (!d.starts_at || d.starts_at <= now);

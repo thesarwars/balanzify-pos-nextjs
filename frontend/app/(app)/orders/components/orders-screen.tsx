@@ -112,7 +112,10 @@ function OrderEditor({ T, isPO, parties, locs, onClose, onSaved }: { T: Theme; i
   const [lines, setLines] = useStateOr<any[]>([{ product_id: '', qty: '', price: '' }]);
   const [busy, setBusy] = useStateOr<any>(false);
   const [err, setErr] = useStateOr<any>(null);
-  const products = PRODUCTS.filter((p: any) => p.type !== 'combo');
+  // Live catalog in real mode; seed PRODUCTS is the mock fallback.
+  const [catalog, setCatalog] = useStateOr<any[]>(PRODUCTS);
+  useEffectOr(() => { if (API.config?.isReal?.()) API.product.list({ per_page: 200 }).then((r: any) => setCatalog(r.items || [])).catch(() => {}); }, []);
+  const products = catalog.filter((p: any) => p.type !== 'combo');
   const setLine = (i: number, k: string, v: any) => setLines((ls: any[]) => ls.map((l, j) => j === i ? { ...l, [k]: v } : l));
   const onPick = (i: number, pid: any) => { const p = products.find((p: any) => p.id === pid); setLines((ls: any[]) => ls.map((l, j) => j === i ? { ...l, product_id: pid, price: l.price || (p ? String(isPO ? p.cost : p.price) : '') } : l)); };
   const total = lines.reduce((s: number, l: any) => s + (Number(l.qty) || 0) * (Number(l.price) || 0), 0);
@@ -163,7 +166,7 @@ function OrderView({ T, order, isPO, onClose }: { T: Theme; order: any; isPO: bo
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 60px 90px', padding: '8px 12px', background: T.paperAlt, fontSize: 10, fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase', color: T.inkSub } as React.CSSProperties}><span>Product</span><span style={{ textAlign: 'right' }}>Qty</span><span style={{ textAlign: 'right' }}>Total</span></div>
         {(order.lines || []).map((l: any, i: number) => { const p: any = PRODUCTS.find((x: any) => parseInt(String(x.id).replace(/\D/g, ''), 10) === l.product_id) || {}; const unit = l.unit_cost != null ? l.unit_cost : l.unit_price; return (
           <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 60px 90px', padding: '9px 12px', borderTop: `1px solid ${T.line}`, fontSize: 12.5 }}>
-            <span style={{ fontWeight: 600, color: T.ink }}>{p.name || 'Product #' + l.product_id}</span>
+            <span style={{ fontWeight: 600, color: T.ink }}>{l.product_name || p.name || 'Product #' + l.product_id}</span>
             <span style={{ textAlign: 'right', fontFamily: T.fMono, color: T.inkSub }}>{l.qty}</span>
             <span style={{ textAlign: 'right', fontFamily: T.fMono, color: T.ink }}>{money(l.qty * unit)}</span>
           </div>
