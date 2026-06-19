@@ -38,6 +38,9 @@ export function Hotel({ T }: { T: Theme }) {
   const [newRoom, setNewRoom] = useS(false);
   const [roomAct, setRoomAct] = useS<any>(null);   // room awaiting a status change
   const [folioId, setFolioId] = useS<any>(null);   // open folio
+  const [corporate, setCorporate] = useS<any[]>([]);
+  const [newCorp, setNewCorp] = useS(false);
+  const [invoiceAcct, setInvoiceAcct] = useS<any>(null);
   const [show, node] = useToast();
 
   useE(() => { API.module.list().then((ms: any) => setEnabled(!!(ms.find((m: any) => m.key === 'hotel') || {}).enabled)).catch(() => setEnabled(false)); }, []);
@@ -47,10 +50,12 @@ export function Hotel({ T }: { T: Theme }) {
   const reloadRes = useCb(() => API.hotel.reservations(resFilter ? { status: resFilter } : undefined).then(setRes).catch(() => {}), [resFilter]);
   const reloadTasks = useCb(() => API.hotel.housekeeping().then(setTasks).catch(() => {}), []);
   const reloadTypes = useCb(() => API.hotel.roomTypes().then(setRoomTypes).catch(() => {}), []);
+  const reloadCorporate = useCb(() => API.hotel.corporate().then(setCorporate).catch(() => {}), []);
 
   useE(() => { if (!enabled) return; reloadDash(); reloadRooms(); reloadTypes(); }, [enabled, reloadDash, reloadRooms, reloadTypes]);
   useE(() => { if (enabled && tab === 'reservations') reloadRes(); }, [enabled, tab, reloadRes]);
   useE(() => { if (enabled && tab === 'housekeeping') reloadTasks(); }, [enabled, tab, reloadTasks]);
+  useE(() => { if (enabled && tab === 'corporate') reloadCorporate(); }, [enabled, tab, reloadCorporate]);
 
   async function enableModule() { try { await API.module.setEnabled('hotel', true); setEnabled(true); show('Hotel module enabled'); } catch (e: any) { show(e.message); } }
   const refreshAll = () => { reloadDash(); reloadRooms(); reloadRes(); reloadTasks(); };
@@ -86,7 +91,7 @@ export function Hotel({ T }: { T: Theme }) {
     </div>
   );
 
-  const tabs = [['dashboard', 'Dashboard'], ['rooms', 'Rooms', (rooms.stats || {}).total], ['reservations', 'Reservations'], ['housekeeping', 'Housekeeping'], ['setup', 'Setup']];
+  const tabs = [['dashboard', 'Dashboard'], ['rooms', 'Rooms', (rooms.stats || {}).total], ['reservations', 'Reservations'], ['housekeeping', 'Housekeeping'], ['corporate', 'Corporate'], ['setup', 'Setup']];
 
   // group rooms by floor for the grid
   const byFloor: any = {};
@@ -190,6 +195,23 @@ export function Hotel({ T }: { T: Theme }) {
             </Panel>
           )}
 
+          {tab === 'corporate' && (<>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}><Btn T={T} kind="ghost" onClick={() => setNewCorp(true)}>+ Corporate account</Btn></div>
+            <Panel T={T} pad={false}>
+              <table style={tbl}><thead><tr>{['Company', 'Contact', 'Credit limit', 'Terms', 'Rate', ''].map((h, i) => <th key={i} style={th(T, i >= 2 && i <= 4)}>{h}</th>)}</tr></thead>
+                <tbody>{corporate.map((a: any) => (
+                  <tr key={a.id}>
+                    <td style={td(T)}><b style={{ color: T.ink }}>{a.companyName}</b></td>
+                    <td style={td(T)}>{a.contactPerson || '—'}{a.phone ? <span style={{ display: 'block', fontSize: 11, color: T.inkSub, fontFamily: T.fMono }}>{a.phone}</span> : null}</td>
+                    <td style={{ ...td(T), textAlign: 'right', fontFamily: T.fMono }}>{money(a.creditLimit || 0)}</td>
+                    <td style={{ ...td(T), textAlign: 'right', fontFamily: T.fMono, color: T.inkSub }}>{a.paymentTermsDays}d</td>
+                    <td style={{ ...td(T), textAlign: 'right', fontFamily: T.fMono, color: T.inkSub }}>{a.negotiatedRate ? money(a.negotiatedRate) : '—'}</td>
+                    <td style={{ ...td(T), textAlign: 'right' }}><button onClick={() => setInvoiceAcct(a)} style={mini(T)}>Invoice</button></td>
+                  </tr>
+                ))}{corporate.length === 0 && <tr><td colSpan={6} style={empty(T)}>No corporate accounts yet.</td></tr>}</tbody></table>
+            </Panel>
+          </>)}
+
           {tab === 'setup' && (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 16 }}>
               <Panel T={T} title="Room types" action={<Btn T={T} kind="ghost" onClick={() => setNewType(true)}>+ Add</Btn>} pad={false}>
@@ -224,6 +246,8 @@ export function Hotel({ T }: { T: Theme }) {
       {newRoom && <RoomModal T={T} roomTypes={roomTypes} onClose={() => setNewRoom(false)} onSaved={() => { setNewRoom(false); show('Room added'); reloadRooms(); reloadTypes(); }} />}
       {roomAct && <RoomActionModal T={T} room={roomAct} onClose={() => setRoomAct(null)} onPick={(s: any) => changeRoomStatus(roomAct, s)} />}
       {folioId && <FolioModal T={T} folioId={folioId} onClose={() => setFolioId(null)} onChanged={() => { reloadRes(); reloadDash(); }} show={show} />}
+      {newCorp && <CorporateModal T={T} onClose={() => setNewCorp(false)} onSaved={() => { setNewCorp(false); show('Corporate account added'); reloadCorporate(); }} />}
+      {invoiceAcct && <InvoiceModal T={T} account={invoiceAcct} onClose={() => setInvoiceAcct(null)} />}
       {node}
     </div>
   );
@@ -388,6 +412,83 @@ function RoomActionModal({ T, room, onClose, onPick }: { T: Theme; room: any; on
         ))}
       </div>
       <div style={{ fontSize: 11, color: T.inkMute, marginTop: 12 }}>Setting a room to cleaning or checkout opens a housekeeping task automatically.</div>
+    </Modal>
+  );
+}
+
+// ── Corporate account + month-end invoice ─────────────────────────
+function CorporateModal({ T, onClose, onSaved }: { T: Theme; onClose: () => void; onSaved: () => void }) {
+  const [f, setF] = useS<any>({ companyName: '', contactPerson: '', phone: '', email: '', creditLimit: '', paymentTermsDays: 30, negotiatedRate: '' });
+  const [busy, setBusy] = useS(false); const [err, setErr] = useS<any>(null);
+  const set = (k: string, v: any) => setF((s: any) => ({ ...s, [k]: v }));
+  async function save() {
+    if (!f.companyName.trim()) { setErr('Company name is required.'); return; }
+    setBusy(true); setErr(null);
+    try {
+      await API.hotel.createCorporate({
+        companyName: f.companyName.trim(), contactPerson: f.contactPerson || undefined, phone: f.phone || undefined, email: f.email || undefined,
+        creditLimit: Number(f.creditLimit) || 0, paymentTermsDays: Number(f.paymentTermsDays) || 30,
+        negotiatedRate: Number(f.negotiatedRate) > 0 ? Number(f.negotiatedRate) : undefined,
+      });
+      onSaved();
+    } catch (e: any) { setErr(e.message || 'Could not save.'); } finally { setBusy(false); }
+  }
+  return (
+    <Modal T={T} title="New corporate account" subtitle="Negotiated-rate company billing" width={520} onClose={onClose}
+      footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Cancel</Btn><Btn T={T} kind="accent" onClick={save} disabled={busy}>{busy ? 'Saving…' : 'Add account'}</Btn></>}>
+      <FormGrid>
+        <Field T={T} label="Company name" full><TextField T={T} value={f.companyName} onChange={(v: any) => set('companyName', v)} placeholder="e.g. Dahabshiil Group" /></Field>
+        <Field T={T} label="Contact person"><TextField T={T} value={f.contactPerson} onChange={(v: any) => set('contactPerson', v)} placeholder="optional" /></Field>
+        <Field T={T} label="Phone"><TextField T={T} value={f.phone} onChange={(v: any) => set('phone', v)} placeholder="optional" /></Field>
+        <Field T={T} label="Email"><TextField T={T} type="email" value={f.email} onChange={(v: any) => set('email', v)} placeholder="optional" /></Field>
+        <Field T={T} label="Credit limit"><TextField T={T} type="number" value={f.creditLimit} onChange={(v: any) => set('creditLimit', v)} placeholder="0" /></Field>
+        <Field T={T} label="Payment terms (days)"><TextField T={T} type="number" value={f.paymentTermsDays} onChange={(v: any) => set('paymentTermsDays', v)} /></Field>
+        <Field T={T} label="Negotiated nightly rate"><TextField T={T} type="number" value={f.negotiatedRate} onChange={(v: any) => set('negotiatedRate', v)} placeholder="optional" /></Field>
+      </FormGrid>
+      {err && <div style={{ marginTop: 12, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}>⚠ {err}</div>}
+    </Modal>
+  );
+}
+
+function InvoiceModal({ T, account, onClose }: { T: Theme; account: any; onClose: () => void }) {
+  const now = new Date();
+  const [month, setMonth] = useS(String(now.getMonth() + 1));
+  const [year, setYear] = useS(String(now.getFullYear()));
+  const [inv, setInv] = useS<any>(null);
+  const [busy, setBusy] = useS(false); const [err, setErr] = useS<any>(null);
+  const run = useCb(() => { setBusy(true); setErr(null); API.hotel.corporateInvoice(account.id, { month, year }).then(setInv).catch((e: any) => setErr(e.message)).finally(() => setBusy(false)); }, [account.id, month, year]);
+  useE(() => { run(); }, [run]);
+  return (
+    <Modal T={T} title={`Invoice · ${account.companyName}`} subtitle="Month-end statement of stays" width={600} onClose={onClose}
+      footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Close</Btn></>}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', marginBottom: 14 }}>
+        <div style={{ width: 110 }}><Field T={T} label="Month"><TextField T={T} type="number" value={month} onChange={setMonth} /></Field></div>
+        <div style={{ width: 120 }}><Field T={T} label="Year"><TextField T={T} type="number" value={year} onChange={setYear} /></Field></div>
+        <Btn T={T} kind="ghost" onClick={run} disabled={busy}>{busy ? '…' : 'Run'}</Btn>
+      </div>
+      {err && <div style={{ padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}>⚠ {err}</div>}
+      {inv && (<>
+        <div style={{ display: 'flex', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
+          {[['Charges', money(inv.total_charges || 0)], ['Payments', money(inv.total_payments || 0)], ['Balance due', money(inv.balance_due || 0)]].map(([k, v]: any, i: number) => (
+            <div key={i} style={{ flex: 1, minWidth: 120, background: T.card, border: `1px solid ${T.line}`, borderRadius: T.rLg, padding: '12px 14px' }}>
+              <div style={{ fontSize: 10.5, color: T.inkSub, textTransform: 'uppercase', letterSpacing: 0.6, fontWeight: 700 }}>{k}</div>
+              <div style={{ fontFamily: T.fMono, fontSize: 18, color: k === 'Balance due' && Number(inv.balance_due) > 0 ? T.redText : T.ink, marginTop: 4 }}>{v}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{ fontSize: 11.5, color: T.inkSub, marginBottom: 8 }}>{(inv.reservations || []).length} stay(s) · {inv.period && `${inv.period.from} → ${inv.period.to}`}</div>
+        <Panel T={T} pad={false}>
+          <table style={tbl}><thead><tr>{['Guest', 'Room', 'Stay', 'Charge'].map((h, i) => <th key={i} style={th(T, i === 3)}>{h}</th>)}</tr></thead>
+            <tbody>{(inv.reservations || []).map((r: any) => (
+              <tr key={r.id}>
+                <td style={td(T)}>{(r.guest && r.guest.name) || '—'}</td>
+                <td style={td(T)}>{(r.room && r.room.number) || '—'}</td>
+                <td style={td(T)}><span style={{ fontFamily: T.fMono, fontSize: 11.5 }}>{dstr(r.checkInDate)} → {dstr(r.checkOutDate)}</span></td>
+                <td style={{ ...td(T), textAlign: 'right', fontFamily: T.fMono }}>{money(r.totalRoomCharge || 0)}</td>
+              </tr>
+            ))}{(inv.reservations || []).length === 0 && <tr><td colSpan={4} style={empty(T)}>No stays in this period.</td></tr>}</tbody></table>
+        </Panel>
+      </>)}
     </Modal>
   );
 }

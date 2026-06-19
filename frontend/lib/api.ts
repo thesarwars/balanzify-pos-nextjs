@@ -2790,6 +2790,10 @@ const API: any = {
     async folio(id: any) { if (REAL_MODE) return await realReq('GET', '/hotel/folios/' + id); throw new ApiError(501, 'Hotel needs the live backend.'); },
     async addCharge(id: any, body: any) { if (REAL_MODE) return await realReq('POST', '/hotel/folios/' + id + '/charges', { body }); throw new ApiError(501, 'Hotel needs the live backend.'); },
     async folioPayment(id: any, body: any) { if (REAL_MODE) return await realReq('POST', '/hotel/folios/' + id + '/payments', { body }); throw new ApiError(501, 'Hotel needs the live backend.'); },
+    // Corporate accounts (negotiated-rate company billing) + month-end invoice.
+    async corporate() { if (REAL_MODE) { const r = await realReq('GET', '/hotel/corporate'); return (r && r.accounts) || []; } return []; },
+    async createCorporate(body: any) { if (REAL_MODE) return await realReq('POST', '/hotel/corporate', { body }); throw new ApiError(501, 'Hotel needs the live backend.'); },
+    async corporateInvoice(id: any, params: any) { if (REAL_MODE) return await realReq('GET', '/hotel/corporate/' + id + '/invoice', { query: params }); throw new ApiError(501, 'Hotel needs the live backend.'); },
   },
 
   // Construction (/api/v1/construction) — project-centric job costing, gated by
