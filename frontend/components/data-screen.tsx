@@ -620,8 +620,9 @@ export function Settings({ T }: { T: Theme }) {
   });
   const [dirty, setDirty] = useStateD(false);
   const [toast, toastNode] = useToast();
-  const [sec, setSec] = useStateD<any>(null);   // open security modal: 'password' | 'mfa'
-  const mfaEnabled = !!(session && session.mfa_enabled);
+  const [sec, setSec] = useStateD<any>(null);   // open security modal: 'password' | 'mfa' | 'mfa-off'
+  const [mfaOn, setMfaOn] = useStateD(false);
+  React.useEffect(() => { setMfaOn(!!(session && session.mfa_enabled)); }, [session]);
   const set = (k: any, v: any) => { setS((p: any) => ({ ...p, [k]: v })); setDirty(true); };
 
   // Hydrate the Business group from the live business record (real mode).
@@ -671,7 +672,7 @@ export function Settings({ T }: { T: Theme }) {
     ] },
     { title: 'Security', rows: [
       { label: 'Password', help: 'Change your account password', ctrl: <Btn T={T} kind="ghost" onClick={() => setSec('password')}>Change</Btn> },
-      { label: 'Two-factor authentication', help: mfaEnabled ? 'Enabled — required at sign-in' : 'Protect your account with an authenticator app', ctrl: mfaEnabled ? <Badge T={T} tone="green">On</Badge> : <Btn T={T} kind="ghost" onClick={() => setSec('mfa')}>Set up</Btn> },
+      { label: 'Two-factor authentication', help: mfaOn ? 'Enabled — required at sign-in' : 'Protect your account with an authenticator app', ctrl: mfaOn ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}><Badge T={T} tone="green">On</Badge><Btn T={T} kind="ghost" onClick={() => setSec('mfa-off')}>Disable</Btn></span> : <Btn T={T} kind="ghost" onClick={() => setSec('mfa')}>Set up</Btn> },
     ] },
   ];
 
@@ -704,7 +705,8 @@ export function Settings({ T }: { T: Theme }) {
         </div>
       </div>
       {sec === 'password' && <ChangePasswordModal T={T} onClose={() => setSec(null)} />}
-      {sec === 'mfa' && <MfaSetupModal T={T} onClose={() => setSec(null)} onDone={() => { setSec(null); toast('Two-factor authentication enabled'); }} />}
+      {sec === 'mfa' && <MfaSetupModal T={T} onClose={() => setSec(null)} onDone={() => { setSec(null); setMfaOn(true); toast('Two-factor authentication enabled'); }} />}
+      {sec === 'mfa-off' && <MfaDisableModal T={T} onClose={() => setSec(null)} onDone={() => { setSec(null); setMfaOn(false); toast('Two-factor authentication disabled'); }} />}
       {toastNode}
     </div>
   );
@@ -771,6 +773,26 @@ function MfaSetupModal({ T, onClose, onDone }: { T: Theme; onClose: () => void; 
           </FormGrid>
         </div>
       )}
+      {err && <div style={{ marginTop: 12, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}>⚠ {err}</div>}
+    </Modal>
+  );
+}
+
+// Turn off 2FA — re-auth with the account password.
+function MfaDisableModal({ T, onClose, onDone }: { T: Theme; onClose: () => void; onDone: () => void }) {
+  const [pw, setPw] = React.useState('');
+  const [busy, setBusy] = React.useState(false); const [err, setErr] = React.useState<any>(null);
+  async function disable() {
+    if (!pw) { setErr('Enter your password.'); return; }
+    setBusy(true); setErr(null);
+    try { await API.auth.mfaDisable(pw); onDone(); }
+    catch (e: any) { setErr(e.message || 'Could not disable 2FA.'); setBusy(false); }
+  }
+  return (
+    <Modal T={T} title="Disable two-factor auth" subtitle="Confirm your password to turn 2FA off" width={440} onClose={onClose}
+      footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Cancel</Btn><Btn T={T} kind="accent" onClick={disable} disabled={busy}>{busy ? 'Disabling…' : 'Disable 2FA'}</Btn></>}>
+      <div style={{ fontSize: 12.5, color: T.inkSub, marginBottom: 12, lineHeight: 1.55 }}>Your account will no longer require a code at sign-in. You can re-enable it any time.</div>
+      <FormGrid><Field T={T} label="Account password" full><TextField T={T} type="password" value={pw} onChange={(v: any) => { setPw(v); setErr(null); }} /></Field></FormGrid>
       {err && <div style={{ marginTop: 12, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}>⚠ {err}</div>}
     </Modal>
   );

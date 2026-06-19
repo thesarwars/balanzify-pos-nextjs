@@ -385,6 +385,13 @@ describe('auth depth (MFA, password change & recovery)', () => {
       .send({ token: speakeasy.totp({ secret, encoding: 'base32' }) });
     expect(verify.status).toBe(200);
     expect(verify.body.access_token).toBeTruthy();
+
+    // disable requires the correct password; afterwards login no longer challenges
+    expect((await request(app).post('/api/v1/auth/mfa/disable').set(auth(token)).send({ password: 'wrong' })).status).toBe(400);
+    expect((await request(app).post('/api/v1/auth/mfa/disable').set(auth(token)).send({ password: 'SecureTestPass123!' })).status).toBe(200);
+    const after = await request(app).post('/api/v1/auth/login').send({ email, password: 'SecureTestPass123!' });
+    expect(after.body.mfa_required).toBeUndefined();
+    expect(after.body.access_token).toBeTruthy();
   });
 });
 
