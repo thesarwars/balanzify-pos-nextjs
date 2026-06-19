@@ -1,7 +1,8 @@
 'use client';
 import { useTheme } from '@/components/shell';
-import { DataScreen } from '@/components/data-screen';
+import { Tasks } from './components/tasks-screen';
+
 export default function TasksPage() {
   const T = useTheme();
-  return <DataScreen T={T} id="tasks" />;
+  return <Tasks T={T} />;
 }
