@@ -3401,6 +3401,12 @@ const API: any = {
     },
   },
   report: {
+    // Revenue by product category for the Reports overview chart. Null in mock
+    // mode so the screen keeps its seed chart.
+    async byCategory(params: any = {}) {
+      if (REAL_MODE) { const r = await realReq('GET', '/reports/sales-by-category', { query: params }); return (r && r.categories) || []; }
+      return null;
+    },
     // Live KPIs from the backend; null in mock mode so screens keep their seed data.
     async dashboard() {
       if (REAL_MODE) return adaptRealDashboard(await realReq('GET', '/reports/dashboard'));

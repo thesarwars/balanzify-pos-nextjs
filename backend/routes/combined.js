@@ -733,6 +733,26 @@ reportsRouter.get('/dashboard', auth, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// Revenue by product category for a period (defaults to the current month).
+reportsRouter.get('/sales-by-category', auth, async (req, res, next) => {
+  try {
+    const bizId = req.user.business_id;
+    const now = new Date();
+    const fromDate = req.query.from ? new Date(req.query.from) : new Date(now.getFullYear(), now.getMonth(), 1);
+    const rows = await prisma.$queryRaw`
+      SELECT COALESCE(c.name, 'Uncategorized') AS name, COALESCE(SUM(si.total_price), 0)::float AS revenue
+      FROM sale_items si
+      JOIN sales s    ON si.sale_id = s.id
+      JOIN products p ON si.product_id = p.id
+      LEFT JOIN categories c ON p.category_id = c.id
+      WHERE s.business_id = ${bizId}::uuid AND s.status = 'completed' AND s.created_at >= ${fromDate}
+      GROUP BY 1
+      ORDER BY revenue DESC
+    `;
+    res.json({ categories: rows.map(r => ({ name: r.name, revenue: parseFloat(r.revenue || 0) })) });
+  } catch (err) { next(err); }
+});
+
 reportsRouter.get('/low-stock', auth, async (req, res, next) => {
   try {
     const { location_id } = req.query;

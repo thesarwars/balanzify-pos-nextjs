@@ -86,6 +86,12 @@ describe('reports after a sale (regression: BigInt + $queryRaw)', () => {
     expect(hist.body.sales.length).toBeGreaterThan(0);
     expect(hist.body.sales[0]._count.items).toBe(1);
 
+    // revenue-by-category report reflects the sale
+    const byCat = await request(app).get('/api/v1/reports/sales-by-category').set(auth(token));
+    expect(byCat.status).toBe(200);
+    expect(Array.isArray(byCat.body.categories)).toBe(true);
+    expect(byCat.body.categories.reduce((s, c) => s + c.revenue, 0)).toBeGreaterThan(0);
+
     const sales = await request(app).get('/api/v1/reports/sales').set(auth(token));
     expect(sales.status).toBe(200);
     expect(sales.body.totals._count.id).toBe(1);
