@@ -9,7 +9,6 @@ import { useRouter } from 'next/navigation';
 import { useTheme } from '@/components/shell';
 import { AuthBrand } from '@/components/auth-brand';
 import { API } from '@/lib/api';
-import { BUSINESS } from '@/lib/data';
 
 const { useState: useStateM } = React;
 
@@ -35,17 +34,37 @@ function Login({ T, onLogin, onRegister, prefillUser }: { T: Theme; onLogin: () 
   const [pw, setPw] = useStateM(prefillUser ? '' : 'demo1234');
   const [busy, setBusy] = useStateM(false);
   const [err, setErr] = useStateM<any>(null);
+  const [stage, setStage] = useStateM<'login' | 'mfa' | 'forgot' | 'sent'>('login');
+  const [preToken, setPreToken] = useStateM<any>(null);
+  const [code, setCode] = useStateM('');
+  const [fgEmail, setFgEmail] = useStateM('');
 
   async function submit(e: any) {
     e.preventDefault();
     setErr(null); setBusy(true);
     try {
-      await API.auth.login(email, pw);   // POST /oauth/token
+      const res: any = await API.auth.login(email, pw);
+      if (res && res.mfa_required) { setPreToken(res.pre_token); setStage('mfa'); setBusy(false); return; }
       onLogin();
     } catch (ex: any) {
       setErr(ex.message || 'Sign in failed. Check your credentials.');
-    } finally { setBusy(false); }
+      setBusy(false);
+    }
   }
+  async function submitMfa(e: any) {
+    e.preventDefault();
+    if (!code.trim()) return;
+    setErr(null); setBusy(true);
+    try { await API.auth.mfaVerify(preToken, code.trim()); onLogin(); }
+    catch (ex: any) { setErr(ex.message || 'Invalid code. Try again.'); setBusy(false); }
+  }
+  async function submitForgot(e: any) {
+    e.preventDefault();
+    setErr(null); setBusy(true);
+    try { await API.auth.forgotPassword((fgEmail.trim() || email)); setStage('sent'); setBusy(false); }
+    catch (ex: any) { setErr(ex.message || 'Could not send the reset link.'); setBusy(false); }
+  }
+  function backToLogin() { setStage('login'); setErr(null); setCode(''); setBusy(false); }
 
   const features = [
     ['◈', 'Zaad, EVC Plus & M-Pesa', 'Mobile money built into every sale'],
@@ -100,60 +119,77 @@ function Login({ T, onLogin, onRegister, prefillUser }: { T: Theme; onLogin: () 
             <span style={{ color: T.ink, fontSize: 19, fontWeight: 700, letterSpacing: '-0.3px' }}>Balanzify</span>
           </div>
 
-          <div style={{ marginBottom: 28 }}>
-            <div style={{ fontFamily: T.fDisplay, fontSize: 30, fontWeight: T.dispWeight, color: T.ink, letterSpacing: '-0.8px' }}>Welcome back</div>
-            <div style={{ fontSize: 13.5, color: T.inkSub, marginTop: 5 }}>Sign in to {BUSINESS.name}</div>
-          </div>
-
-          <form onSubmit={submit}>
-            <Lbl T={T}>Email address</Lbl>
-            <IconInp T={T} icon="✉" type="email" placeholder="you@business.com" value={email} onChange={(e: any) => { setEmail(e.target.value); setErr(null); }} />
-            <div style={{ height: 16 }} />
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-              <Lbl T={T} noMargin>Password</Lbl>
-              <span style={{ fontSize: 12, fontWeight: 600, color: T.accent.text, cursor: 'pointer' }}>Forgot?</span>
+          {stage === 'login' && (<>
+            <div style={{ marginBottom: 28 }}>
+              <div style={{ fontFamily: T.fDisplay, fontSize: 30, fontWeight: T.dispWeight, color: T.ink, letterSpacing: '-0.8px' }}>Welcome back</div>
+              <div style={{ fontSize: 13.5, color: T.inkSub, marginTop: 5 }}>Sign in to your Balanzify account</div>
             </div>
-            <IconInp T={T} icon="⚿" type={show ? 'text' : 'password'} placeholder="••••••••" value={pw} onChange={(e: any) => { setPw(e.target.value); setErr(null); }}
-              trailing={<button type="button" onClick={() => setShow(!show)} style={{ background: 'none', border: 'none', color: T.inkMute, cursor: 'pointer', fontSize: 13, padding: 0 }}>{show ? '◯' : '●'}</button>} />
-
-            {err && (
-              <div style={{ marginTop: 14, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5, fontWeight: 500, display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: 14 }}>⚠</span>{err}
+            <form onSubmit={submit}>
+              <Lbl T={T}>Email address</Lbl>
+              <IconInp T={T} icon="✉" type="email" placeholder="you@business.com" value={email} onChange={(e: any) => { setEmail(e.target.value); setErr(null); }} />
+              <div style={{ height: 16 }} />
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                <Lbl T={T} noMargin>Password</Lbl>
+                <button type="button" onClick={() => { setFgEmail(email); setStage('forgot'); setErr(null); }} style={{ background: 'none', border: 'none', padding: 0, fontSize: 12, fontWeight: 600, color: T.accent.text, cursor: 'pointer' }}>Forgot?</button>
               </div>
-            )}
+              <IconInp T={T} icon="⚿" type={show ? 'text' : 'password'} placeholder="••••••••" value={pw} onChange={(e: any) => { setPw(e.target.value); setErr(null); }}
+                trailing={<button type="button" onClick={() => setShow(!show)} style={{ background: 'none', border: 'none', color: T.inkMute, cursor: 'pointer', fontSize: 13, padding: 0 }}>{show ? '◯' : '●'}</button>} />
+              <ErrBox T={T} err={err} />
+              <SubmitBtn T={T} busy={busy} busyLabel="Authorizing…" label="Sign in →" marginTop={err ? 16 : 24} />
+            </form>
 
-            <button type="submit" disabled={busy}
-              onMouseDown={(e: any) => (e.currentTarget.style.transform = 'scale(0.99)')}
-              onMouseUp={(e: any) => (e.currentTarget.style.transform = 'none')}
-              onMouseLeave={(e: any) => (e.currentTarget.style.transform = 'none')}
-              style={{
-                width: '100%', marginTop: err ? 16 : 24, padding: '14px', borderRadius: T.r, border: 'none', cursor: busy ? 'wait' : 'pointer',
-                fontFamily: T.fBody, fontSize: 15, fontWeight: 700, color: '#fff', opacity: busy ? 0.8 : 1,
-                background: `linear-gradient(135deg, ${T.navyLight}, ${T.navy})`, boxShadow: '0 4px 14px rgba(15,31,61,0.35)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, transition: 'transform .08s',
-              } as React.CSSProperties}>
-              {busy && <span style={{ width: 15, height: 15, borderRadius: '50%', border: '2px solid rgba(255,255,255,0.4)', borderTopColor: '#fff', animation: 'spin .7s linear infinite' }} />}
-              {busy ? 'Authorizing…' : 'Sign in →'}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '24px 0 18px' }}>
+              <span style={{ flex: 1, height: 1, background: T.line }} />
+              <span style={{ fontSize: 12, color: T.inkSub }}>New to Balanzify?</span>
+              <span style={{ flex: 1, height: 1, background: T.line }} />
+            </div>
+            <button type="button" onClick={onRegister}
+              onMouseEnter={(e: any) => (e.currentTarget.style.borderColor = T.accent.base)}
+              onMouseLeave={(e: any) => (e.currentTarget.style.borderColor = T.line)}
+              style={{ width: '100%', padding: '13px', borderRadius: T.r, background: T.paper, border: `1.5px solid ${T.line}`, cursor: 'pointer', fontFamily: T.fBody, fontSize: 14, fontWeight: 600, color: T.ink, transition: 'border-color .15s' } as React.CSSProperties}>
+              Register a business
             </button>
-          </form>
+          </>)}
 
-          {/* divider */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '24px 0 18px' }}>
-            <span style={{ flex: 1, height: 1, background: T.line }} />
-            <span style={{ fontSize: 12, color: T.inkSub }}>New to Balanzify?</span>
-            <span style={{ flex: 1, height: 1, background: T.line }} />
-          </div>
-          {/* register outline button */}
-          <button type="button" onClick={onRegister}
-            onMouseEnter={(e: any) => (e.currentTarget.style.borderColor = T.accent.base)}
-            onMouseLeave={(e: any) => (e.currentTarget.style.borderColor = T.line)}
-            style={{ width: '100%', padding: '13px', borderRadius: T.r, background: T.paper, border: `1.5px solid ${T.line}`, cursor: 'pointer', fontFamily: T.fBody, fontSize: 14, fontWeight: 600, color: T.ink, transition: 'border-color .15s' } as React.CSSProperties}>
-            Register a business
-          </button>
+          {stage === 'mfa' && (<>
+            <div style={{ marginBottom: 28 }}>
+              <div style={{ fontFamily: T.fDisplay, fontSize: 30, fontWeight: T.dispWeight, color: T.ink, letterSpacing: '-0.8px' }}>Two-factor auth</div>
+              <div style={{ fontSize: 13.5, color: T.inkSub, marginTop: 5 }}>Enter the 6-digit code from your authenticator app.</div>
+            </div>
+            <form onSubmit={submitMfa}>
+              <Lbl T={T}>Authentication code</Lbl>
+              <IconInp T={T} icon="🔐" inputMode="numeric" autoFocus placeholder="123456" maxLength={6} value={code}
+                onChange={(e: any) => { setCode(e.target.value.replace(/\D/g, '').slice(0, 6)); setErr(null); }}
+                style={{ fontFamily: T.fMono, letterSpacing: 4, fontSize: 17 }} />
+              <ErrBox T={T} err={err} />
+              <SubmitBtn T={T} busy={busy} busyLabel="Verifying…" label="Verify →" marginTop={err ? 16 : 24} />
+            </form>
+            <BackLink T={T} onClick={backToLogin} />
+          </>)}
 
-          <div style={{ marginTop: 22, padding: '11px 14px', borderRadius: T.r, background: T.accent.soft, fontSize: 11.5, color: T.accent.text, textAlign: 'center', lineHeight: 1.5 } as React.CSSProperties}>
-            Demo — credentials are pre-filled. Just press <b>Sign in</b>. Authorizes via <span style={{ fontFamily: T.fMono }}>POST /oauth/token</span>.
-          </div>
+          {stage === 'forgot' && (<>
+            <div style={{ marginBottom: 28 }}>
+              <div style={{ fontFamily: T.fDisplay, fontSize: 30, fontWeight: T.dispWeight, color: T.ink, letterSpacing: '-0.8px' }}>Reset password</div>
+              <div style={{ fontSize: 13.5, color: T.inkSub, marginTop: 5 }}>Enter your email and we’ll send a reset link.</div>
+            </div>
+            <form onSubmit={submitForgot}>
+              <Lbl T={T}>Email address</Lbl>
+              <IconInp T={T} icon="✉" type="email" autoFocus placeholder="you@business.com" value={fgEmail} onChange={(e: any) => { setFgEmail(e.target.value); setErr(null); }} />
+              <ErrBox T={T} err={err} />
+              <SubmitBtn T={T} busy={busy} busyLabel="Sending…" label="Send reset link" marginTop={err ? 16 : 24} />
+            </form>
+            <BackLink T={T} onClick={backToLogin} />
+          </>)}
+
+          {stage === 'sent' && (<>
+            <div style={{ marginBottom: 20 }}>
+              <div style={{ fontFamily: T.fDisplay, fontSize: 30, fontWeight: T.dispWeight, color: T.ink, letterSpacing: '-0.8px' }}>Check your email</div>
+            </div>
+            <div style={{ padding: '14px 16px', borderRadius: T.r, background: T.accent.soft, color: T.accent.text, fontSize: 13, lineHeight: 1.55 }}>
+              If <b>{fgEmail.trim() || email}</b> is registered, a password-reset link is on its way. The link expires in 30 minutes.
+            </div>
+            <BackLink T={T} onClick={backToLogin} />
+          </>)}
         </div>
       </div>
 
@@ -162,6 +198,37 @@ function Login({ T, onLogin, onRegister, prefillUser }: { T: Theme; onLogin: () 
       `}</style>
     </div>
   );
+}
+
+function SubmitBtn({ T, busy, busyLabel, label, marginTop = 24 }: { T: Theme; busy: boolean; busyLabel: string; label: string; marginTop?: number }) {
+  return (
+    <button type="submit" disabled={busy}
+      onMouseDown={(e: any) => (e.currentTarget.style.transform = 'scale(0.99)')}
+      onMouseUp={(e: any) => (e.currentTarget.style.transform = 'none')}
+      onMouseLeave={(e: any) => (e.currentTarget.style.transform = 'none')}
+      style={{
+        width: '100%', marginTop, padding: '14px', borderRadius: T.r, border: 'none', cursor: busy ? 'wait' : 'pointer',
+        fontFamily: T.fBody, fontSize: 15, fontWeight: 700, color: '#fff', opacity: busy ? 0.8 : 1,
+        background: `linear-gradient(135deg, ${T.navyLight}, ${T.navy})`, boxShadow: '0 4px 14px rgba(15,31,61,0.35)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, transition: 'transform .08s',
+      } as React.CSSProperties}>
+      {busy && <span style={{ width: 15, height: 15, borderRadius: '50%', border: '2px solid rgba(255,255,255,0.4)', borderTopColor: '#fff', animation: 'spin .7s linear infinite' }} />}
+      {busy ? busyLabel : label}
+    </button>
+  );
+}
+
+function ErrBox({ T, err }: { T: Theme; err: any }) {
+  if (!err) return null;
+  return (
+    <div style={{ marginTop: 14, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5, fontWeight: 500, display: 'flex', alignItems: 'center', gap: 8 }}>
+      <span style={{ fontSize: 14 }}>⚠</span>{err}
+    </div>
+  );
+}
+
+function BackLink({ T, onClick }: { T: Theme; onClick: () => void }) {
+  return <button type="button" onClick={onClick} style={{ width: '100%', marginTop: 16, background: 'none', border: 'none', cursor: 'pointer', fontFamily: T.fBody, fontSize: 13, fontWeight: 600, color: T.inkSub }}>← Back to sign in</button>;
 }
 
 function Lbl({ T, children, noMargin }: { T: Theme; children: React.ReactNode; noMargin?: boolean }) {

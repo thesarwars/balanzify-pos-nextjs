@@ -219,7 +219,9 @@ router.post('/forgot-password', validate(z.object({ email: z.string().email() })
     });
 
     const { sendPasswordReset } = require('../lib/email');
-    await sendPasswordReset(user.email, user.name, rawToken).catch(() => {});
+    const base = (process.env.FRONTEND_URL || '').replace(/\/$/, '');
+    const resetUrl = `${base}/reset-password?token=${rawToken}`;
+    await sendPasswordReset(user.email, user.name, resetUrl).catch(() => {});
     res.json({ message: 'If that email is registered, a reset link has been sent.' });
   } catch (err) { next(err); }
 });
