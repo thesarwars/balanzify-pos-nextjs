@@ -484,6 +484,34 @@ describe('hotel (PMS)', () => {
     expect(dash.status).toBe(200);
     expect(dash.body).toHaveProperty('occupancy_pct');
   });
+
+  test('folio: charge raises balance, blocks checkout until paid', async () => {
+    const rt = await request(app).post('/api/v1/hotel/room-types').set(auth(token)).send({ name: 'Deluxe', baseRate: 80, maxOccupancy: 2 });
+    const room = await request(app).post('/api/v1/hotel/rooms').set(auth(token)).send({ roomTypeId: rt.body.id, number: '201' });
+    const resv = await request(app).post('/api/v1/hotel/reservations').set(auth(token)).send({ roomId: room.body.id, guestName: 'Folio Guest', checkInDate: '2026-08-01', checkOutDate: '2026-08-02', ratePerNight: 80 });
+    const resId = resv.body.id;
+    expect((await request(app).post(`/api/v1/hotel/reservations/${resId}/checkin`).set(auth(token))).status).toBe(200);
+
+    const r = (await request(app).get('/api/v1/hotel/reservations').set(auth(token))).body.reservations.find(x => x.id === resId);
+    const folioId = r.folio.id;
+
+    const ch = await request(app).post(`/api/v1/hotel/folios/${folioId}/charges`).set(auth(token)).send({ type: 'restaurant', description: 'Dinner', quantity: 2, unitAmount: 15, chargeDate: '2026-08-01' });
+    expect(ch.status).toBe(201);
+    let folio = (await request(app).get(`/api/v1/hotel/folios/${folioId}`).set(auth(token))).body;
+    expect(Number(folio.totalCharges)).toBe(30);
+    expect(Number(folio.balance)).toBe(30);
+
+    // outstanding balance blocks checkout
+    expect((await request(app).post(`/api/v1/hotel/reservations/${resId}/checkout`).set(auth(token))).status).toBe(400);
+
+    const pay = await request(app).post(`/api/v1/hotel/folios/${folioId}/payments`).set(auth(token)).send({ provider: 'cash', amount: 30 });
+    expect(pay.status).toBe(201);
+    folio = (await request(app).get(`/api/v1/hotel/folios/${folioId}`).set(auth(token))).body;
+    expect(Number(folio.balance)).toBe(0);
+
+    // settled → checkout succeeds
+    expect((await request(app).post(`/api/v1/hotel/reservations/${resId}/checkout`).set(auth(token))).status).toBe(200);
+  });
 });
 
 describe('construction (job costing)', () => {
