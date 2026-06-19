@@ -2794,6 +2794,12 @@ const API: any = {
     async corporate() { if (REAL_MODE) { const r = await realReq('GET', '/hotel/corporate'); return (r && r.accounts) || []; } return []; },
     async createCorporate(body: any) { if (REAL_MODE) return await realReq('POST', '/hotel/corporate', { body }); throw new ApiError(501, 'Hotel needs the live backend.'); },
     async corporateInvoice(id: any, params: any) { if (REAL_MODE) return await realReq('GET', '/hotel/corporate/' + id + '/invoice', { query: params }); throw new ApiError(501, 'Hotel needs the live backend.'); },
+    // Group bookings (a block of rooms under one organiser).
+    async groups(params?: any) { if (REAL_MODE) { const r = await realReq('GET', '/hotel/groups', { query: params }); return (r && r.groups) || []; } return []; },
+    async createGroup(body: any) { if (REAL_MODE) return await realReq('POST', '/hotel/groups', { body }); throw new ApiError(501, 'Hotel needs the live backend.'); },
+    async group(id: any) { if (REAL_MODE) return await realReq('GET', '/hotel/groups/' + id); throw new ApiError(501, 'Hotel needs the live backend.'); },
+    async addToGroup(id: any, reservationId: any) { if (REAL_MODE) return await realReq('POST', '/hotel/groups/' + id + '/reservations', { body: { reservationId } }); throw new ApiError(501, 'Hotel needs the live backend.'); },
+    async groupCheckin(id: any) { if (REAL_MODE) return await realReq('POST', '/hotel/groups/' + id + '/checkin', { body: {} }); throw new ApiError(501, 'Hotel needs the live backend.'); },
   },
 
   // Construction (/api/v1/construction) — project-centric job costing, gated by
