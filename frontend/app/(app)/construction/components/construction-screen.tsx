@@ -59,6 +59,10 @@ export function Construction({ T }: { T: Theme }) {
     const next = MS_NEXT[m.status]; if (!next) return;
     try { await API.construction.setMilestoneStatus(m.id, next); show(`Milestone → ${next.replace('_', ' ')}`); reloadMs(); } catch (e: any) { show(e.message); }
   }
+  async function delLine(l: any) {
+    if (typeof window !== 'undefined' && !window.confirm(`Remove budget line "${l.description || l.category}"?`)) return;
+    try { await API.construction.deleteBudgetLine(l.id); show('Budget line removed'); reloadCosting(); } catch (e: any) { show(e.message); }
+  }
 
   if (enabled === null) return <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: T.paperAlt, fontFamily: T.fMono, fontSize: 12.5, color: T.inkSub }}>Loading…</div>;
   if (enabled === false) return (
@@ -131,7 +135,11 @@ export function Construction({ T }: { T: Theme }) {
                         <td style={{ ...td(T), textAlign: 'right', fontFamily: T.fMono }}>{money(l.budgeted)}</td>
                         <td style={{ ...td(T), textAlign: 'right', fontFamily: T.fMono }}>{money(l.actual)}</td>
                         <td style={{ ...td(T), textAlign: 'right', fontFamily: T.fMono, color: variance < 0 ? T.redText : T.green }}>{money(variance)}</td>
-                        <td style={{ ...td(T), textAlign: 'right' }}>{l.category === 'labor' ? <span style={{ fontSize: 11, color: T.inkMute }}>auto from labor log</span> : <button onClick={() => setModal({ cost: l })} style={mini(T)}>Record cost</button>}</td>
+                        <td style={{ ...td(T), textAlign: 'right', whiteSpace: 'nowrap' }}>
+                          {l.category === 'labor' ? <span style={{ fontSize: 11, color: T.inkMute }}>auto from labor</span> : <button onClick={() => setModal({ cost: l })} style={mini(T)}>Record cost</button>}
+                          <button onClick={() => setModal({ editLine: l })} title="Edit line" style={{ ...mini(T), marginLeft: 6 }}>✎</button>
+                          <button onClick={() => delLine(l)} title="Remove line" style={{ ...mini(T), marginLeft: 6, color: T.redText }}>×</button>
+                        </td>
                       </tr>
                     );
                   })}{(!costing || costing.lines.length === 0) && <tr><td colSpan={6} style={empty(T)}>No budget lines yet.</td></tr>}</tbody></table>
@@ -215,6 +223,7 @@ export function Construction({ T }: { T: Theme }) {
       {modal === 'project' && <ProjectModal T={T} onClose={() => setModal(null)} onSaved={(p: any) => { setModal(null); show('Project created'); reloadProjects(); if (p && p.id) setPid(p.id); }} />}
       {modal === 'line' && <BudgetLineModal T={T} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Budget line added'); reloadCosting(); }} pid={pid} />}
       {modal && modal.cost && <RecordCostModal T={T} line={modal.cost} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Cost recorded'); reloadCosting(); }} />}
+      {modal && modal.editLine && <EditBudgetLineModal T={T} line={modal.editLine} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Budget line updated'); reloadCosting(); }} />}
       {modal === 'labor' && <LaborModal T={T} pid={pid} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Labor logged'); reloadLabor(); reloadCosting(); }} />}
       {modal === 'log' && <SiteLogModal T={T} pid={pid} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Diary entry added'); reloadLogs(); }} />}
       {modal === 'milestone' && <MilestoneModal T={T} pid={pid} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Milestone added'); reloadMs(); }} />}
@@ -273,6 +282,28 @@ function BudgetLineModal({ T, pid, onClose, onSaved }: { T: Theme; pid: any; onC
         <Field T={T} label="Description" full><TextField T={T} value={f.description} onChange={(v: any) => set('description', v)} placeholder="optional" /></Field>
       </FormGrid>
       {f.category === 'labor' && <div style={{ marginTop: 12, fontSize: 12, color: T.inkSub }}>Labor actuals roll up automatically from the daily labor log.</div>}
+      {err && <div style={errBox(T)}>⚠ {err}</div>}
+    </Modal>
+  );
+}
+
+function EditBudgetLineModal({ T, line, onClose, onSaved }: { T: Theme; line: any; onClose: () => void; onSaved: () => void }) {
+  const [f, setF] = useS<any>({ description: line.description || '', budgeted: String(line.budgeted ?? '') });
+  const [busy, setBusy] = useS(false); const [err, setErr] = useS<any>(null);
+  async function save() {
+    if (!(Number(f.budgeted) >= 0)) { setErr('Enter a budget amount.'); return; }
+    setBusy(true); setErr(null);
+    try { await API.construction.updateBudgetLine(line.id, { description: f.description || null, budgeted: Number(f.budgeted) || 0 }); onSaved(); }
+    catch (e: any) { setErr(e.message || 'Could not save.'); } finally { setBusy(false); }
+  }
+  return (
+    <Modal T={T} title={`Edit ${line.category} line`} width={440} onClose={onClose}
+      footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Cancel</Btn><Btn T={T} kind="accent" onClick={save} disabled={busy}>{busy ? 'Saving…' : 'Save'}</Btn></>}>
+      <FormGrid>
+        <Field T={T} label="Budgeted amount"><TextField T={T} type="number" value={f.budgeted} onChange={(v: any) => setF((s: any) => ({ ...s, budgeted: v }))} /></Field>
+        <Field T={T} label="Description" full><TextField T={T} value={f.description} onChange={(v: any) => setF((s: any) => ({ ...s, description: v }))} placeholder="optional" /></Field>
+      </FormGrid>
+      <div style={{ marginTop: 10, fontSize: 11.5, color: T.inkSub }}>Actual spend ({money(line.actual)}) is unaffected.</div>
       {err && <div style={errBox(T)}>⚠ {err}</div>}
     </Modal>
   );

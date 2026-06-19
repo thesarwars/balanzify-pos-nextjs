@@ -2810,6 +2810,8 @@ const API: any = {
     async costing(pid: any) { if (REAL_MODE) return await realReq('GET', '/construction/' + pid + '/costing'); throw new ApiError(501, 'Construction needs the live backend.'); },
     async addBudgetLine(pid: any, body: any) { if (REAL_MODE) return await realReq('POST', '/construction/' + pid + '/budget-lines', { body }); throw new ApiError(501, 'Construction needs the live backend.'); },
     async recordCost(lineId: any, amount: any) { if (REAL_MODE) return await realReq('POST', '/construction/budget-lines/' + lineId + '/cost', { body: { amount: Number(amount || 0) } }); throw new ApiError(501, 'Construction needs the live backend.'); },
+    async updateBudgetLine(lineId: any, body: any) { if (REAL_MODE) return await realReq('PUT', '/construction/budget-lines/' + lineId, { body }); throw new ApiError(501, 'Construction needs the live backend.'); },
+    async deleteBudgetLine(lineId: any) { if (REAL_MODE) return await realReq('DELETE', '/construction/budget-lines/' + lineId); throw new ApiError(501, 'Construction needs the live backend.'); },
     async labor(pid: any) { if (REAL_MODE) return await realReq('GET', '/construction/' + pid + '/labor'); return { entries: [], total: 0 }; },
     async logLabor(pid: any, body: any) { if (REAL_MODE) return await realReq('POST', '/construction/' + pid + '/labor', { body }); throw new ApiError(501, 'Construction needs the live backend.'); },
     async siteLogs(pid: any) { if (REAL_MODE) { const r = await realReq('GET', '/construction/' + pid + '/site-log'); return (r && r.logs) || []; } return []; },
