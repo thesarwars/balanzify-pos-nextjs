@@ -444,6 +444,24 @@ describe('PIN till-login', () => {
   });
 });
 
+describe('module billing', () => {
+  let token;
+  beforeAll(async () => { token = await register(); });
+  test('status not-configured without keys; checkout gated; non-paid module rejected', async () => {
+    const st = await request(app).get('/api/v1/billing/status').set(auth(token));
+    expect(st.status).toBe(200);
+    expect(st.body.configured).toBe(false);   // no STRIPE_SECRET_KEY in the test env
+    expect(Array.isArray(st.body.providers)).toBe(true);
+    // paid add-on with no provider configured → 503
+    expect((await request(app).post('/api/v1/billing/checkout').set(auth(token)).send({ module: 'hotel' })).status).toBe(503);
+    // base/non-paid module is never billable → 400
+    expect((await request(app).post('/api/v1/billing/checkout').set(auth(token)).send({ module: 'pos' })).status).toBe(400);
+    // unknown provider → 501
+    expect((await request(app).post('/api/v1/billing/checkout').set(auth(token)).send({ module: 'hotel', provider: 'zaad' })).status).toBe(501);
+    expect((await request(app).get('/api/v1/billing/subscriptions').set(auth(token))).body.subscriptions).toEqual([]);
+  });
+});
+
 describe('business profile (settings)', () => {
   let token;
   beforeAll(async () => { token = await register(); });

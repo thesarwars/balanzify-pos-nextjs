@@ -335,8 +335,28 @@ model Business {
   // ── Commission report settings ──
   commissionCalc      String @default("invoice_value") @map("commission_calc") @db.VarChar(30)
   commissionAgentType String @default("logged_in_user") @map("commission_agent_type") @db.VarChar(30)
+  moduleSubscriptions ModuleSubscription[]
 
   @@map("businesses")
+}
+
+model ModuleSubscription {
+  id                   String    @id @default(uuid()) @db.Uuid
+  businessId           String    @map("business_id") @db.Uuid
+  module               String    @db.VarChar(50)
+  stripeCustomerId     String?   @map("stripe_customer_id") @db.VarChar(255)
+  stripeSubscriptionId String?   @unique @map("stripe_subscription_id") @db.VarChar(255)
+  status               String    @default("active") @db.VarChar(30)   // active | canceled | past_due | incomplete
+  priceMonthly         Decimal   @default(0) @map("price_monthly") @db.Decimal(10, 2)
+  currentPeriodEnd     DateTime? @map("current_period_end")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  business             Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, module])
+  @@index([businessId])
+  @@map("module_subscriptions")
 }
 
 model ExpenseCategory {

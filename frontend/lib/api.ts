@@ -3129,6 +3129,13 @@ const API: any = {
       return (await transport('PUT', '/connector/api/module/' + key, { body: { enabled } })).data;
     },
   },
+  // Module billing (/api/v1/billing) — pluggable providers (Stripe first).
+  billing: {
+    async status() { if (REAL_MODE) { try { return await realReq('GET', '/billing/status'); } catch (e) { return { providers: [], configured: false }; } } return { providers: [], configured: false }; },
+    async subscriptions() { if (REAL_MODE) { const r = await realReq('GET', '/billing/subscriptions'); return (r && r.subscriptions) || []; } return []; },
+    async checkout(module: any, provider?: any) { if (REAL_MODE) return await realReq('POST', '/billing/checkout', { body: { module, provider: provider || 'stripe' } }); throw new ApiError(501, 'Billing needs the live backend.'); },
+    async cancel(module: any) { if (REAL_MODE) return await realReq('POST', '/billing/cancel', { body: { module } }); throw new ApiError(501, 'Billing needs the live backend.'); },
+  },
   expense: {
     async list() {
       if (REAL_MODE) {
