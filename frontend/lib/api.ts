@@ -2723,6 +2723,23 @@ const API: any = {
     async updateHousekeeping(id: any, status: any) { if (REAL_MODE) return await realReq('PUT', '/hotel/housekeeping/' + id, { body: { status } }); throw new ApiError(501, 'Hotel needs the live backend.'); },
   },
 
+  // Construction (/api/v1/construction) — project-centric job costing, gated by
+  // the construction module. Projects come from the ungated /projects router.
+  construction: {
+    async projects() { if (REAL_MODE) { const r = await realReq('GET', '/projects'); return ((r && (r.projects || r.data)) || []); } return []; },
+    async createProject(body: any) { if (REAL_MODE) return await realReq('POST', '/projects', { body }); throw new ApiError(501, 'Construction needs the live backend.'); },
+    async costing(pid: any) { if (REAL_MODE) return await realReq('GET', '/construction/' + pid + '/costing'); throw new ApiError(501, 'Construction needs the live backend.'); },
+    async addBudgetLine(pid: any, body: any) { if (REAL_MODE) return await realReq('POST', '/construction/' + pid + '/budget-lines', { body }); throw new ApiError(501, 'Construction needs the live backend.'); },
+    async recordCost(lineId: any, amount: any) { if (REAL_MODE) return await realReq('POST', '/construction/budget-lines/' + lineId + '/cost', { body: { amount: Number(amount || 0) } }); throw new ApiError(501, 'Construction needs the live backend.'); },
+    async labor(pid: any) { if (REAL_MODE) return await realReq('GET', '/construction/' + pid + '/labor'); return { entries: [], total: 0 }; },
+    async logLabor(pid: any, body: any) { if (REAL_MODE) return await realReq('POST', '/construction/' + pid + '/labor', { body }); throw new ApiError(501, 'Construction needs the live backend.'); },
+    async siteLogs(pid: any) { if (REAL_MODE) { const r = await realReq('GET', '/construction/' + pid + '/site-log'); return (r && r.logs) || []; } return []; },
+    async addSiteLog(pid: any, body: any) { if (REAL_MODE) return await realReq('POST', '/construction/' + pid + '/site-log', { body }); throw new ApiError(501, 'Construction needs the live backend.'); },
+    async milestones(pid: any) { if (REAL_MODE) { const r = await realReq('GET', '/construction/' + pid + '/milestones'); return (r && r.milestones) || []; } return []; },
+    async addMilestone(pid: any, body: any) { if (REAL_MODE) return await realReq('POST', '/construction/' + pid + '/milestones', { body }); throw new ApiError(501, 'Construction needs the live backend.'); },
+    async setMilestoneStatus(msId: any, status: any) { if (REAL_MODE) return await realReq('PUT', '/construction/milestones/' + msId + '/status', { body: { status } }); throw new ApiError(501, 'Construction needs the live backend.'); },
+  },
+
   // Receipts (/api/v1/checkout) — real backend only; mock mode is a no-op.
   receipt: {
     async pdf(saleId: any) {

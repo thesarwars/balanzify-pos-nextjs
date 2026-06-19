@@ -363,6 +363,49 @@ describe('hotel (PMS)', () => {
   });
 });
 
+describe('construction (job costing)', () => {
+  let token, pid;
+  beforeAll(async () => {
+    token = await register();
+    await enableModule(token, 'construction');
+    const p = await request(app).post('/api/v1/projects').set(auth(token)).send({ name: 'Block A', start_date: '2026-07-01', target_date: '2026-12-31', budget: 1500, status: 'active' });
+    expect(p.status).toBe(201);
+    pid = p.body.id;
+  });
+
+  test('gated off by default', async () => {
+    const other = await register();
+    expect((await request(app).get(`/api/v1/construction/${pid}/costing`).set(auth(other))).status).toBe(403);
+  });
+
+  test('budget vs actual rolls up material cost + labor log; milestones bill with retention', async () => {
+    const mat = await request(app).post(`/api/v1/construction/${pid}/budget-lines`).set(auth(token)).send({ category: 'materials', description: 'Cement', budgeted: 1000 });
+    expect(mat.status).toBe(201);
+    await request(app).post(`/api/v1/construction/${pid}/budget-lines`).set(auth(token)).send({ category: 'labor', budgeted: 500 });
+    // record a material cost
+    expect((await request(app).post(`/api/v1/construction/budget-lines/${mat.body.id}/cost`).set(auth(token)).send({ amount: 300 })).status).toBe(200);
+    // log a labor day: 5 workers x 10 = 50
+    const lab = await request(app).post(`/api/v1/construction/${pid}/labor`).set(auth(token)).send({ work_date: '2026-07-02', workers: 5, daily_rate: 10 });
+    expect(lab.status).toBe(201);
+    expect(Number(lab.body.total)).toBe(50);
+
+    const costing = await request(app).get(`/api/v1/construction/${pid}/costing`).set(auth(token));
+    expect(costing.status).toBe(200);
+    expect(costing.body.totals.budgeted).toBe(1500);
+    expect(costing.body.totals.actual).toBe(350); // 300 materials + 50 labor (rolled up)
+
+    // milestone with 5% retention: held = 100, billable only once complete
+    const ms = await request(app).post(`/api/v1/construction/${pid}/milestones`).set(auth(token)).send({ name: 'Foundation', amount: 2000, retention_pct: 5 });
+    expect(ms.status).toBe(201);
+    let list = (await request(app).get(`/api/v1/construction/${pid}/milestones`).set(auth(token))).body.milestones;
+    expect(list[0].retention_held).toBe(100);
+    expect(list[0].billable_now).toBeNull();
+    expect((await request(app).put(`/api/v1/construction/milestones/${ms.body.id}/status`).set(auth(token)).send({ status: 'complete' })).status).toBe(200);
+    list = (await request(app).get(`/api/v1/construction/${pid}/milestones`).set(auth(token))).body.milestones;
+    expect(list[0].billable_now).toBe(1900); // 2000 * (1 - 0.05)
+  });
+});
+
 describe('wholesale', () => {
   let token, loc, prod, customerId;
   beforeAll(async () => {
