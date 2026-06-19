@@ -77,6 +77,9 @@ describe('reports after a sale (regression: BigInt + $queryRaw)', () => {
     const dash = await request(app).get('/api/v1/reports/dashboard').set(auth(token));
     expect(dash.status).toBe(200);
     expect(dash.body.transactions_today).toBe(1);
+    // real hourly breakdown: 14 buckets (8:00–21:00) for the dashboard chart
+    expect(Array.isArray(dash.body.hourly)).toBe(true);
+    expect(dash.body.hourly.length).toBe(14);
     const sales = await request(app).get('/api/v1/reports/sales').set(auth(token));
     expect(sales.status).toBe(200);
     expect(sales.body.totals._count.id).toBe(1);

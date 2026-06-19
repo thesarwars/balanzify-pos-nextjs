@@ -629,7 +629,7 @@ reportsRouter.get('/dashboard', auth, async (req, res, next) => {
     const [
       todaySales, monthSales, stockValue, lowStockCount,
       expiringBatches, openTasks, activeProjects,
-      todayByMethod, recentSales, topProducts,
+      todayByMethod, recentSales, topProducts, hourlyRows,
     ] = await Promise.all([
       // Today totals
       prisma.sale.aggregate({
@@ -695,7 +695,19 @@ reportsRouter.get('/dashboard', auth, async (req, res, next) => {
         ORDER BY revenue DESC
         LIMIT 5
       `,
+      // Today's revenue by hour (drives the 8:00–21:00 chart)
+      prisma.$queryRaw`
+        SELECT EXTRACT(HOUR FROM created_at)::int AS hour, COALESCE(SUM(total_amount), 0)::float AS revenue
+        FROM sales
+        WHERE business_id = ${bizId}::uuid AND status = 'completed' AND created_at >= ${todayStart}
+        GROUP BY 1
+      `,
     ]);
+
+    // 14 buckets for hours 8..21 to match the dashboard chart
+    const hourMap = {};
+    hourlyRows.forEach(r => { hourMap[Number(r.hour)] = parseFloat(r.revenue || 0); });
+    const hourly = Array.from({ length: 14 }, (_, i) => Math.round(hourMap[8 + i] || 0));
 
     const todayByMethodMap = {};
     todayByMethod.forEach(r => { todayByMethodMap[r.paymentMethod] = parseFloat(r._sum.totalAmount || 0); });
@@ -716,6 +728,7 @@ reportsRouter.get('/dashboard', auth, async (req, res, next) => {
       by_method:         todayByMethod,
       recent_sales:      recentSales,
       top_products:      topProducts,
+      hourly,
     });
   } catch (err) { next(err); }
 });

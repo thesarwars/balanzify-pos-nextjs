@@ -71,6 +71,13 @@ export const NAV = [
 export function Sidebar({ T, screen, setScreen, collapsed, setCollapsed, onLogout, mobile }: any) {
   const W = collapsed ? 68 : 244;
   const S = T.side;
+  const session = useSession();
+  const bizName = (session && session.business_name) || BUSINESS.name;
+  const userName = (session && session.name) || CASHIER.name;
+  const userRole = (session && session.role) || CASHIER.role;
+  const userInitials = (session && session.name)
+    ? session.name.trim().split(/\s+/).map((w: string) => w[0]).slice(0, 2).join('').toUpperCase()
+    : CASHIER.initials;
   return (
     <aside style={{
       width: W, minWidth: W, height: mobile ? '100vh' : undefined, background: S.bg, color: S.brand,
@@ -94,7 +101,7 @@ export function Sidebar({ T, screen, setScreen, collapsed, setCollapsed, onLogou
         {!collapsed && (
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 15.5, fontWeight: 700, letterSpacing: '-0.2px', lineHeight: 1.1, color: S.brand }}>Balanzify</div>
-            <div style={{ fontSize: 10.5, color: S.brandSub, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{BUSINESS.name}</div>
+            <div style={{ fontSize: 10.5, color: S.brandSub, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{bizName}</div>
           </div>
         )}
       </div>
@@ -155,11 +162,11 @@ export function Sidebar({ T, screen, setScreen, collapsed, setCollapsed, onLogou
             width: 33, height: 33, borderRadius: 9, flexShrink: 0,
             background: S.avatarBg, display: 'flex', alignItems: 'center', justifyContent: 'center',
             fontSize: 12, fontWeight: 700, color: S.avatarText,
-          }}>{CASHIER.initials}</div>
+          }}>{userInitials}</div>
           {!collapsed && (
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 12.5, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: S.footerText }}>{CASHIER.name}</div>
-              <div style={{ fontSize: 10, color: S.footerSub }}>{CASHIER.role}</div>
+              <div style={{ fontSize: 12.5, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: S.footerText }}>{userName}</div>
+              <div style={{ fontSize: 10, color: S.footerSub, textTransform: 'capitalize' }}>{userRole}</div>
             </div>
           )}
           {!collapsed && (
@@ -224,6 +231,10 @@ export const useTheme = () => React.useContext(ThemeCtx);
 const TweaksCtx = React.createContext<[any, (key: string, value: any) => void]>([TWEAK_DEFAULTS, () => {}]);
 export function useTweaks() { return React.useContext(TweaksCtx); }
 
+// The signed-in identity (real mode) — null until loaded / in mock mode.
+const SessionCtx = React.createContext<any>(null);
+export function useSession() { return React.useContext(SessionCtx); }
+
 // Themed confirm dialog used by the navigation guard (replaces the native confirm()).
 function ConfirmDialog({ T, onCancel, onConfirm }: { T: Theme; onCancel: () => void; onConfirm: () => void }) {
   React.useEffect(() => {
@@ -261,11 +272,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // checking (render nothing to avoid flashing protected content); `false` =
   // redirecting to /login; `true` = authorized.
   const [authed, setAuthed] = React.useState<boolean | null>(null);
+  const [session, setSession] = React.useState<any>(null);
   React.useEffect(() => {
     let ok = false;
     try { ok = localStorage.getItem('bz_authed') === '1'; } catch {}
     if (!ok) { router.replace('/login'); setAuthed(false); }
-    else setAuthed(true);
+    else { setAuthed(true); API.auth.me().then(setSession).catch(() => {}); }
   }, [router]);
 
   const [tweaks, setTweaks] = React.useState<any>(() => {
@@ -336,6 +348,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <ThemeCtx.Provider value={T}>
+     <SessionCtx.Provider value={session}>
       <TweaksCtx.Provider value={[tweaks, setTweak]}>
         <div style={{ display: 'flex', height: '100vh', overflow: 'hidden', background: T.paperAlt, fontFamily: T.fBody } as React.CSSProperties}>
           {isMobile ? (
@@ -353,6 +366,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           {pendingNav && <ConfirmDialog T={T} onCancel={() => setPendingNav(null)} onConfirm={confirmPendingNav} />}
         </div>
       </TweaksCtx.Provider>
+     </SessionCtx.Provider>
     </ThemeCtx.Provider>
   );
 }
