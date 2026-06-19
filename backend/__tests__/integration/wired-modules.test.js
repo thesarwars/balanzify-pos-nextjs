@@ -512,6 +512,17 @@ describe('hotel (PMS)', () => {
     // settled → checkout succeeds
     expect((await request(app).post(`/api/v1/hotel/reservations/${resId}/checkout`).set(auth(token))).status).toBe(200);
   });
+
+  test('corporate account: create + list + month-end invoice', async () => {
+    const c = await request(app).post('/api/v1/hotel/corporate').set(auth(token)).send({ companyName: 'Acme Corp', creditLimit: 5000, paymentTermsDays: 30 });
+    expect(c.status).toBe(201);
+    const list = await request(app).get('/api/v1/hotel/corporate').set(auth(token));
+    expect(list.body.accounts.find(a => a.id === c.body.id)).toBeTruthy();
+    const inv = await request(app).get(`/api/v1/hotel/corporate/${c.body.id}/invoice`).set(auth(token)).query({ month: '7', year: '2026' });
+    expect(inv.status).toBe(200);
+    expect(inv.body).toHaveProperty('balance_due');
+    expect(Array.isArray(inv.body.reservations)).toBe(true);
+  });
 });
 
 describe('construction (job costing)', () => {
