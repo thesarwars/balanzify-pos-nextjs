@@ -2105,6 +2105,7 @@ function toRealCreateUserBody(f: any): any {
     password: f.password,
     role: roleKeyById(f.role_id),
     commission_percent: commissionVal(f.commission_percent),
+    ...(f.pin ? { pin: String(f.pin) } : {}),
   };
 }
 function toRealUpdateUserBody(f: any): any {
@@ -2113,6 +2114,8 @@ function toRealUpdateUserBody(f: any): any {
     role: roleKeyById(f.role_id),
     is_active: f.is_active !== false,
     commission_percent: commissionVal(f.commission_percent),
+    // Only touch the PIN when the form provides one — blank leaves it unchanged.
+    ...(f.pin ? { pin: String(f.pin) } : {}),
   };
 }
 
@@ -2430,6 +2433,15 @@ const API: any = {
     async mfaDisable(password: any) {
       if (REAL_MODE) return await realReq('POST', '/auth/mfa/disable', { body: { password } });
       throw new ApiError(501, 'Two-factor auth needs the live backend.');
+    },
+    // Switch/unlock the till by PIN within the current business → new tokens.
+    async pinLogin(pin: any, businessId: any) {
+      if (REAL_MODE) {
+        const res = await realReq('POST', '/auth/pin-login', { auth: false, body: { pin: String(pin), business_id: businessId } });
+        if (res && res.access_token) setTokens(res.access_token, res.refresh_token);
+        return res;
+      }
+      throw new ApiError(501, 'PIN sign-in needs the live backend.');
     },
     // The signed-in identity (business + user). Null in mock mode so the shell
     // falls back to the seed BUSINESS/CASHIER.

@@ -138,6 +138,7 @@ function UserEditor({ T, user, roles, locs, onClose, onSaved }: { T: any; user: 
     allLoc: user.location_access ? user.location_access === 'all' : true,
     location_access: Array.isArray(user.location_access) ? user.location_access : [],
     commission_percent: user.commission_percent || '', max_discount: user.max_discount ?? '',
+    pin: '',
     is_active: user.is_active !== false, allow_login: user.allow_login !== false,
   });
   const [busy, setBusy] = useStateUR(false);
@@ -183,6 +184,7 @@ function UserEditor({ T, user, roles, locs, onClose, onSaved }: { T: any; user: 
         <FormGrid>
           <Field T={T} label="Sales commission %"><TextField T={T} type="number" value={f.commission_percent} onChange={(v: any) => set('commission_percent', v)} placeholder="0" /></Field>
           <Field T={T} label="Max sales discount %" hint="Blank = no limit."><TextField T={T} type="number" value={f.max_discount} onChange={(v: any) => set('max_discount', v)} placeholder="Blank = unlimited" /></Field>
+          <Field T={T} label="Till PIN" hint={editing ? '4–10 digits. Blank = keep current.' : '4–10 digits for quick till sign-in.'}><TextField T={T} value={f.pin} onChange={(v: any) => set('pin', String(v).replace(/\D/g, '').slice(0, 10))} placeholder="e.g. 4821" /></Field>
         </FormGrid>
         <div style={{ display: 'flex', gap: 28, marginTop: 14 }}>
           <URToggle T={T} on={f.is_active} onChange={(v: any) => set('is_active', v)} label="Is active" hint="Deactivated users can't be used" />
