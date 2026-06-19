@@ -1,60 +1,400 @@
 'use client';
 // ─────────────────────────────────────────────────────────────────
-// Hotel — room-grid landing screen (KPI strip + room status grid).
-// Static mockup vertical; colocated under its route.
+// Hotel / PMS — the real vertical (replaces the static room-grid mockup).
+// Module-gated. Tabs: Dashboard, Rooms (live grid + status), Reservations
+// (book → check-in → check-out / cancel), Housekeeping, and Setup (room
+// types + rooms). Wired through API.hotel (/api/v1/hotel).
 // ─────────────────────────────────────────────────────────────────
 import React from 'react';
 import type { Theme } from '@/lib/theme';
-import { money } from '@/lib/theme';
-import { Btn, Badge, Panel } from '@/components/kit';
+import { money, money0 } from '@/lib/theme';
+import { Btn, Badge, Panel, Modal, Field, TextField, SelectField, FormGrid, useToast } from '@/components/kit';
 import { Topbar } from '@/components/shell';
+import { API } from '@/lib/api';
 
-function VerticalShell({ T, title, subtitle, action, kpis, children }: any) {
-  return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: T.paperAlt }}>
-      <Topbar T={T} title={title} subtitle={subtitle} right={action && <Btn T={T} kind="accent">{action}</Btn>} />
-      <div style={{ flex: 1, overflowY: 'auto', padding: 28 }}>
-        <div style={{ maxWidth: 1280, margin: '0 auto' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: `repeat(${kpis.length}, 1fr)`, gap: 14, marginBottom: 18 }}>
-            {kpis.map(([label, value, sub, accent]: any, i: number) => (
-              <div key={i} style={{ background: T.card, border: `1px solid ${T.line}`, borderRadius: T.rLg, padding: '16px 18px', boxShadow: T.sh1, position: 'relative', overflow: 'hidden' }}>
-                {accent && <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3, background: accent }} />}
-                <div style={{ fontSize: 10.5, color: T.inkSub, textTransform: 'uppercase', letterSpacing: 0.7, fontWeight: 700 }}>{label}</div>
-                <div style={{ fontFamily: T.fMono, fontWeight: 500, fontSize: 25, color: T.ink, marginTop: 7, letterSpacing: '-0.8px' }}>{value}</div>
-                {sub && <div style={{ fontSize: 11.5, color: T.inkSub, marginTop: 6 }}>{sub}</div>}
-              </div>
-            ))}
-          </div>
-          {children}
+const { useState: useS, useEffect: useE, useCallback: useCb } = React;
+
+const ROOM_TONE: any = { available: 'green', occupied: 'red', reserved: 'blue', cleaning: 'amber', checkout: 'violet', maintenance: 'gray', blocked: 'gray' };
+const RES_TONE: any = { confirmed: 'blue', checked_in: 'green', checked_out: 'gray', cancelled: 'red', no_show: 'red' };
+const HK_TONE: any = { pending: 'amber', in_progress: 'blue', done: 'green', inspected: 'green' };
+const ROOM_STATUSES = ['available', 'cleaning', 'maintenance', 'blocked', 'occupied', 'reserved'];
+
+const today = () => new Date().toISOString().slice(0, 10);
+const addDays = (d: string, n: number) => { const x = new Date(d); x.setDate(x.getDate() + n); return x.toISOString().slice(0, 10); };
+const dstr = (d: any) => (d ? String(d).slice(0, 10) : '—');
+
+export function Hotel({ T }: { T: Theme }) {
+  const [enabled, setEnabled] = useS<any>(null);   // null = loading
+  const [tab, setTab] = useS<any>('dashboard');
+  const [dash, setDash] = useS<any>(null);
+  const [rooms, setRooms] = useS<any>({ rooms: [], stats: {} });
+  const [res, setRes] = useS<any>({ reservations: [], summary: {} });
+  const [resFilter, setResFilter] = useS('');
+  const [tasks, setTasks] = useS<any[]>([]);
+  const [roomTypes, setRoomTypes] = useS<any[]>([]);
+  const [newRes, setNewRes] = useS(false);
+  const [newType, setNewType] = useS(false);
+  const [newRoom, setNewRoom] = useS(false);
+  const [roomAct, setRoomAct] = useS<any>(null);   // room awaiting a status change
+  const [show, node] = useToast();
+
+  useE(() => { API.module.list().then((ms: any) => setEnabled(!!(ms.find((m: any) => m.key === 'hotel') || {}).enabled)).catch(() => setEnabled(false)); }, []);
+
+  const reloadDash = useCb(() => API.hotel.dashboard().then(setDash).catch(() => {}), []);
+  const reloadRooms = useCb(() => API.hotel.rooms().then(setRooms).catch(() => {}), []);
+  const reloadRes = useCb(() => API.hotel.reservations(resFilter ? { status: resFilter } : undefined).then(setRes).catch(() => {}), [resFilter]);
+  const reloadTasks = useCb(() => API.hotel.housekeeping().then(setTasks).catch(() => {}), []);
+  const reloadTypes = useCb(() => API.hotel.roomTypes().then(setRoomTypes).catch(() => {}), []);
+
+  useE(() => { if (!enabled) return; reloadDash(); reloadRooms(); reloadTypes(); }, [enabled, reloadDash, reloadRooms, reloadTypes]);
+  useE(() => { if (enabled && tab === 'reservations') reloadRes(); }, [enabled, tab, reloadRes]);
+  useE(() => { if (enabled && tab === 'housekeeping') reloadTasks(); }, [enabled, tab, reloadTasks]);
+
+  async function enableModule() { try { await API.module.setEnabled('hotel', true); setEnabled(true); show('Hotel module enabled'); } catch (e: any) { show(e.message); } }
+  const refreshAll = () => { reloadDash(); reloadRooms(); reloadRes(); reloadTasks(); };
+
+  async function changeRoomStatus(room: any, status: any) {
+    try { await API.hotel.setRoomStatus(room.id, status); setRoomAct(null); show(`Room ${room.number} → ${status}`); reloadRooms(); reloadDash(); }
+    catch (e: any) { show(e.message); }
+  }
+  async function checkin(r: any) { try { const m: any = await API.hotel.checkin(r.id); show(m.message || 'Checked in'); refreshAll(); } catch (e: any) { show(e.message); } }
+  async function checkout(r: any) {
+    try { const m: any = await API.hotel.checkout(r.id); show(m.message || 'Checked out'); refreshAll(); }
+    catch (e: any) { show(e.message || 'Settle the folio balance first'); }
+  }
+  async function cancelRes(r: any) {
+    if (typeof window !== 'undefined' && !window.confirm(`Cancel reservation ${r.reservationNumber}?`)) return;
+    try { const m: any = await API.hotel.cancelReservation(r.id); show(m.message || 'Cancelled'); refreshAll(); } catch (e: any) { show(e.message); }
+  }
+  async function hkAdvance(t: any, status: any) { try { await API.hotel.updateHousekeeping(t.id, status); show('Task updated'); reloadTasks(); reloadRooms(); } catch (e: any) { show(e.message); } }
+
+  if (enabled === null) return <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: T.paperAlt, fontFamily: T.fMono, fontSize: 12.5, color: T.inkSub }}>Loading…</div>;
+  if (enabled === false) return (
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: T.paperAlt }}>
+      <Topbar T={T} title="Hotel" subtitle="Property management" />
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+        <div style={{ textAlign: 'center', maxWidth: 440 }}>
+          <div style={{ width: 76, height: 76, borderRadius: 20, background: T.accent.soft, color: T.accent.base, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 34, margin: '0 auto 20px' }}>🏨</div>
+          <div style={{ fontFamily: T.fDisplay, fontSize: 24, fontWeight: T.dispWeight, color: T.ink, marginBottom: 8 }}>Hotel module</div>
+          <div style={{ fontSize: 13.5, color: T.inkSub, lineHeight: 1.6, marginBottom: 22 }}>A full property-management front desk: live room grid, reservations with check-in / check-out, guest folios, and housekeeping. Paid add-on ($29/mo).</div>
+          <Btn T={T} kind="accent" onClick={enableModule}>Enable Hotel · $29/mo</Btn>
         </div>
       </div>
+      {node}
+    </div>
+  );
+
+  const tabs = [['dashboard', 'Dashboard'], ['rooms', 'Rooms', (rooms.stats || {}).total], ['reservations', 'Reservations'], ['housekeeping', 'Housekeeping'], ['setup', 'Setup']];
+
+  // group rooms by floor for the grid
+  const byFloor: any = {};
+  for (const r of (rooms.rooms || [])) { const f = r.floor == null ? '—' : r.floor; (byFloor[f] = byFloor[f] || []).push(r); }
+  const floors = Object.keys(byFloor).sort();
+
+  return (
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: T.paperAlt }}>
+      <Topbar T={T} title="Hotel" subtitle="Front desk & property management"
+        right={<Btn T={T} kind="accent" onClick={() => setNewRes(true)}>+ New reservation</Btn>} />
+      <div style={{ flex: 1, overflowY: 'auto', padding: 28 }}>
+        <div style={{ maxWidth: 1240, margin: '0 auto' }}>
+          <div style={{ display: 'flex', gap: 4, marginBottom: 18, background: T.paper, padding: 4, borderRadius: 10, width: 'fit-content', border: `1px solid ${T.line}` }}>
+            {tabs.map(([id, lbl, n]: any) => (
+              <button key={id} onClick={() => setTab(id)} style={{ padding: '8px 16px', borderRadius: 7, border: 'none', cursor: 'pointer', fontFamily: T.fBody, fontSize: 13, fontWeight: tab === id ? 700 : 500, background: tab === id ? T.accent.base : 'transparent', color: tab === id ? T.accent.on : T.inkMid }}>{lbl}{n ? <span style={{ opacity: 0.7 }}> · {n}</span> : ''}</button>
+            ))}
+          </div>
+
+          {tab === 'dashboard' && (
+            <Dashboard T={T} dash={dash} />
+          )}
+
+          {tab === 'rooms' && (<>
+            <div style={{ display: 'flex', gap: 14, marginBottom: 16, flexWrap: 'wrap', fontSize: 12 }}>
+              {[['Total', rooms.stats.total, T.ink], ['Occupied', rooms.stats.occupied, T.red], ['Available', rooms.stats.available, T.green], ['Cleaning', rooms.stats.cleaning, T.amber], ['Reserved', rooms.stats.reserved, T.blue]].map(([k, v, c]: any) => (
+                <span key={k} style={{ display: 'flex', alignItems: 'center', gap: 6, color: T.inkSub }}><span style={{ width: 9, height: 9, borderRadius: 3, background: c }} />{k}: <b style={{ color: T.ink, fontFamily: T.fMono }}>{v ?? 0}</b></span>
+              ))}
+            </div>
+            {floors.length === 0 && <Panel T={T}><div style={empty(T)}>No rooms yet — add room types and rooms in the <b>Setup</b> tab.</div></Panel>}
+            {floors.map((f) => (
+              <div key={f} style={{ marginBottom: 18 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.6, textTransform: 'uppercase', color: T.inkSub, marginBottom: 8 }}>Floor {f}</div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(132px, 1fr))', gap: 10 }}>
+                  {byFloor[f].map((rm: any) => {
+                    const guest = (rm.reservations && rm.reservations[0] && rm.reservations[0].guest) || null;
+                    return (
+                      <button key={rm.id} onClick={() => setRoomAct(rm)} style={{ textAlign: 'left', background: T.card, border: `1px solid ${T.line}`, borderLeft: `3px solid ${toneColor(T, ROOM_TONE[rm.status])}`, borderRadius: T.r, padding: '11px 13px', cursor: 'pointer', boxShadow: T.sh1 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontFamily: T.fMono, fontSize: 16, fontWeight: 700, color: T.ink }}>{rm.number}</span>
+                          <Badge T={T} tone={ROOM_TONE[rm.status] || 'gray'}>{rm.status}</Badge>
+                        </div>
+                        <div style={{ fontSize: 11, color: T.inkSub, marginTop: 4 }}>{(rm.roomType && rm.roomType.name) || '—'}</div>
+                        {guest ? <div style={{ fontSize: 11, color: T.inkMid, marginTop: 3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>👤 {guest.name}</div> : null}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </>)}
+
+          {tab === 'reservations' && (<>
+            <div style={{ display: 'flex', gap: 14, marginBottom: 14, flexWrap: 'wrap', fontSize: 12.5, color: T.inkSub }}>
+              <span>Arrivals today: <b style={{ color: T.ink, fontFamily: T.fMono }}>{(res.summary || {}).arrivals_today ?? 0}</b></span>
+              <span>Departures: <b style={{ color: T.ink, fontFamily: T.fMono }}>{(res.summary || {}).departures_today ?? 0}</b></span>
+              <span>In-house: <b style={{ color: T.green, fontFamily: T.fMono }}>{(res.summary || {}).in_house ?? 0}</b></span>
+            </div>
+            <div style={{ display: 'flex', gap: 6, marginBottom: 14, flexWrap: 'wrap' }}>
+              {[['', 'All'], ['confirmed', 'Confirmed'], ['checked_in', 'In-house'], ['checked_out', 'Departed'], ['cancelled', 'Cancelled']].map(([id, lbl]) => (
+                <button key={id} onClick={() => setResFilter(id)} style={{ padding: '6px 13px', borderRadius: 99, border: `1px solid ${resFilter === id ? T.accent.base : T.line}`, cursor: 'pointer', fontFamily: T.fBody, fontSize: 12, fontWeight: resFilter === id ? 700 : 500, background: resFilter === id ? T.accent.soft : T.paper, color: resFilter === id ? T.accent.text : T.inkMid }}>{lbl}</button>
+              ))}
+            </div>
+            <Panel T={T} pad={false}>
+              <table style={tbl}><thead><tr>{['Reservation', 'Guest', 'Room', 'Stay', 'Total', 'Balance', 'Status', ''].map((h, i) => <th key={i} style={th(T, i >= 4 && i <= 5)}>{h}</th>)}</tr></thead>
+                <tbody>{(res.reservations || []).map((r: any) => (
+                  <tr key={r.id}>
+                    <td style={td(T)}><b style={{ fontFamily: T.fMono, fontSize: 12.5, color: T.ink }}>{r.reservationNumber}</b><span style={{ display: 'block', fontSize: 10.5, color: T.inkMute }}>{r.nights}n · {(r.bookingSource || '').replace('_', ' ')}</span></td>
+                    <td style={td(T)}><b style={{ color: T.ink }}>{(r.guest && r.guest.name) || '—'}</b>{r.guest && r.guest.phone ? <span style={{ display: 'block', fontSize: 11, color: T.inkSub, fontFamily: T.fMono }}>{r.guest.phone}</span> : null}</td>
+                    <td style={td(T)}>{r.room ? <>{r.room.number}<span style={{ color: T.inkMute, fontSize: 11 }}> · {r.room.roomType && r.room.roomType.name}</span></> : '—'}</td>
+                    <td style={td(T)}><span style={{ fontFamily: T.fMono, fontSize: 11.5 }}>{dstr(r.checkInDate)} → {dstr(r.checkOutDate)}</span></td>
+                    <td style={{ ...td(T), textAlign: 'right', fontFamily: T.fMono }}>{money(r.totalRoomCharge)}</td>
+                    <td style={{ ...td(T), textAlign: 'right', fontFamily: T.fMono, color: Number((r.folio && r.folio.balance) || 0) > 0 ? T.redText : T.inkSub }}>{r.folio ? money(r.folio.balance) : '—'}</td>
+                    <td style={td(T)}><Badge T={T} tone={RES_TONE[r.status] || 'gray'}>{(r.status || '').replace('_', ' ')}</Badge></td>
+                    <td style={{ ...td(T), textAlign: 'right', whiteSpace: 'nowrap' }}>
+                      {r.status === 'confirmed' && <button onClick={() => checkin(r)} style={mini(T)}>Check in</button>}
+                      {r.status === 'checked_in' && <button onClick={() => checkout(r)} style={mini(T)}>Check out</button>}
+                      {r.status === 'confirmed' && <button onClick={() => cancelRes(r)} style={{ ...mini(T), marginLeft: 6, color: T.redText }}>Cancel</button>}
+                    </td>
+                  </tr>
+                ))}{(res.reservations || []).length === 0 && <tr><td colSpan={8} style={empty(T)}>No reservations{resFilter ? ' in this status' : ''}.</td></tr>}</tbody></table>
+            </Panel>
+          </>)}
+
+          {tab === 'housekeeping' && (
+            <Panel T={T} pad={false}>
+              <table style={tbl}><thead><tr>{['Room', 'Task', 'Assigned', 'Status', ''].map((h, i) => <th key={i} style={th(T)}>{h}</th>)}</tr></thead>
+                <tbody>{tasks.map((t: any) => (
+                  <tr key={t.id}>
+                    <td style={td(T)}><b style={{ color: T.ink, fontFamily: T.fMono }}>{t.room && t.room.number}</b><span style={{ color: T.inkMute, fontSize: 11 }}> {t.room && t.room.roomType && t.room.roomType.name}</span></td>
+                    <td style={td(T)}>{(t.type || '').replace('_', ' ')}</td>
+                    <td style={td(T)}><span style={{ color: T.inkSub }}>{(t.assignedTo && t.assignedTo.name) || 'Unassigned'}</span></td>
+                    <td style={td(T)}><Badge T={T} tone={HK_TONE[t.status] || 'gray'}>{(t.status || '').replace('_', ' ')}</Badge></td>
+                    <td style={{ ...td(T), textAlign: 'right', whiteSpace: 'nowrap' }}>
+                      {t.status === 'pending' && <button onClick={() => hkAdvance(t, 'in_progress')} style={mini(T)}>Start</button>}
+                      {t.status === 'in_progress' && <button onClick={() => hkAdvance(t, 'done')} style={mini(T)}>Mark done</button>}
+                      {(t.status === 'done' || t.status === 'inspected') && <span style={{ fontSize: 12, color: T.green }}>✓ clean</span>}
+                    </td>
+                  </tr>
+                ))}{tasks.length === 0 && <tr><td colSpan={5} style={empty(T)}>No housekeeping tasks 🎉</td></tr>}</tbody></table>
+            </Panel>
+          )}
+
+          {tab === 'setup' && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 16 }}>
+              <Panel T={T} title="Room types" action={<Btn T={T} kind="ghost" onClick={() => setNewType(true)}>+ Add</Btn>} pad={false}>
+                <table style={tbl}><thead><tr>{['Name', 'Rooms', 'Max', 'Base rate'].map((h, i) => <th key={i} style={th(T, i >= 1)}>{h}</th>)}</tr></thead>
+                  <tbody>{roomTypes.map((rt: any) => (
+                    <tr key={rt.id}>
+                      <td style={td(T)}><b style={{ color: T.ink }}>{rt.name}</b></td>
+                      <td style={{ ...td(T), textAlign: 'right', fontFamily: T.fMono }}>{(rt._count && rt._count.rooms) ?? 0}</td>
+                      <td style={{ ...td(T), textAlign: 'right', fontFamily: T.fMono }}>{rt.maxOccupancy}</td>
+                      <td style={{ ...td(T), textAlign: 'right', fontFamily: T.fMono }}>{money(rt.baseRate)}</td>
+                    </tr>
+                  ))}{roomTypes.length === 0 && <tr><td colSpan={4} style={empty(T)}>No room types yet.</td></tr>}</tbody></table>
+              </Panel>
+              <Panel T={T} title="Rooms" action={<Btn T={T} kind="ghost" onClick={() => setNewRoom(true)} >+ Add</Btn>} pad={false}>
+                <table style={tbl}><thead><tr>{['Room', 'Type', 'Floor', 'Status'].map((h, i) => <th key={i} style={th(T, i === 2)}>{h}</th>)}</tr></thead>
+                  <tbody>{(rooms.rooms || []).map((rm: any) => (
+                    <tr key={rm.id}>
+                      <td style={td(T)}><b style={{ color: T.ink, fontFamily: T.fMono }}>{rm.number}</b></td>
+                      <td style={td(T)}>{(rm.roomType && rm.roomType.name) || '—'}</td>
+                      <td style={{ ...td(T), textAlign: 'right', fontFamily: T.fMono }}>{rm.floor ?? '—'}</td>
+                      <td style={td(T)}><Badge T={T} tone={ROOM_TONE[rm.status] || 'gray'}>{rm.status}</Badge></td>
+                    </tr>
+                  ))}{(rooms.rooms || []).length === 0 && <tr><td colSpan={4} style={empty(T)}>No rooms yet.</td></tr>}</tbody></table>
+              </Panel>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {newRes && <ReservationModal T={T} rooms={rooms.rooms || []} onClose={() => setNewRes(false)} onSaved={() => { setNewRes(false); show('Reservation created'); refreshAll(); }} />}
+      {newType && <RoomTypeModal T={T} onClose={() => setNewType(false)} onSaved={() => { setNewType(false); show('Room type added'); reloadTypes(); }} />}
+      {newRoom && <RoomModal T={T} roomTypes={roomTypes} onClose={() => setNewRoom(false)} onSaved={() => { setNewRoom(false); show('Room added'); reloadRooms(); reloadTypes(); }} />}
+      {roomAct && <RoomActionModal T={T} room={roomAct} onClose={() => setRoomAct(null)} onPick={(s: any) => changeRoomStatus(roomAct, s)} />}
+      {node}
     </div>
   );
 }
 
-// Hotel — room grid
-export function Hotel({ T }: { T: Theme }) {
-  const rooms = Array.from({ length: 24 }).map((_, i) => {
-    // Deterministic pattern (not Math.random) to avoid SSR/client hydration mismatch.
-    const r = ((i * 2654435761) % 100) / 100;
-    const status = r < 0.5 ? 'occupied' : r < 0.7 ? 'available' : r < 0.85 ? 'cleaning' : 'reserved';
-    return { no: (101 + i + (i >= 12 ? 88 : 0)), status, type: i % 4 === 0 ? 'Suite' : i % 3 === 0 ? 'Double' : 'Single' };
-  });
-  const tone: any = { occupied: ['#FBE3E1', '#961717', 'Occupied'], available: ['#D8F3E6', '#066043', 'Available'], cleaning: ['#FCEFD3', '#8A4B08', 'Cleaning'], reserved: ['#DEE9FD', '#1A45B0', 'Reserved'] };
-  return (
-    <VerticalShell T={T} title="Hotel" subtitle="Maka Suites · 24 rooms" action="+ New Booking"
-      kpis={[['Occupancy', '67%', '16 of 24 rooms', T.accent.base], ['ADR', money(38), 'avg daily rate', T.green], ['Check-ins today', '5', '2 pending', T.blue], ['Available', '6', 'ready now', T.violet]]}>
-      <Panel T={T} title="Rooms" action={<span style={{ display: 'flex', gap: 12, fontSize: 11 }}>{Object.entries(tone).map(([k, [bg, fg, lbl]]: any) => <span key={k} style={{ display: 'flex', alignItems: 'center', gap: 5, color: T.inkSub }}><span style={{ width: 9, height: 9, borderRadius: 3, background: fg }} />{lbl}</span>)}</span>}>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(96px, 1fr))', gap: 10 }}>
-          {rooms.map(rm => { const [bg, fg, lbl] = tone[rm.status]; return (
-            <div key={rm.no} style={{ background: bg, borderRadius: T.r, padding: '12px 12px 11px', cursor: 'pointer', border: `1px solid ${fg}22` }}>
-              <div style={{ fontFamily: T.fMono, fontSize: 17, fontWeight: 600, color: fg }}>{rm.no}</div>
-              <div style={{ fontSize: 10.5, color: fg, opacity: 0.8, marginTop: 1 }}>{rm.type}</div>
-              <div style={{ fontSize: 9.5, fontWeight: 700, color: fg, textTransform: 'uppercase', letterSpacing: 0.4, marginTop: 8 }}>{lbl}</div>
-            </div>
-          ); })}
+// ── Dashboard ─────────────────────────────────────────────────────
+function Dashboard({ T, dash }: { T: Theme; dash: any }) {
+  if (!dash) return <Panel T={T}><div style={empty(T)}>Loading dashboard…</div></Panel>;
+  const cards = [
+    ['Occupancy', (dash.occupancy_pct ?? 0) + '%', T.accent.base],
+    ['In-house', dash.in_house ?? 0, T.green],
+    ['Arrivals today', dash.arrivals_today ?? 0, T.blue],
+    ['Departures today', dash.departures_today ?? 0, T.violet],
+    ['Revenue today', money0(dash.room_revenue_today || 0), T.green],
+    ['Revenue (month)', money0(dash.room_revenue_month || 0), T.accent.base],
+    ['Housekeeping', dash.pending_housekeeping ?? 0, T.amber],
+    ['Unpaid folios', dash.unpaid_folios ?? 0, dash.unpaid_folios ? T.red : T.green],
+  ];
+  return (<>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 14, marginBottom: 18 }}>
+      {cards.map(([k, v, c]: any, i: number) => (
+        <div key={i} style={{ background: T.card, border: `1px solid ${T.line}`, borderRadius: T.rLg, padding: '15px 18px', boxShadow: T.sh1, position: 'relative', overflow: 'hidden' }}>
+          <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3, background: c }} />
+          <div style={{ fontSize: 10.5, color: T.inkSub, textTransform: 'uppercase', letterSpacing: 0.7, fontWeight: 700 }}>{k}</div>
+          <div style={{ fontFamily: T.fMono, fontWeight: 500, fontSize: 24, color: T.ink, marginTop: 7 }}>{v}</div>
         </div>
-      </Panel>
-    </VerticalShell>
+      ))}
+    </div>
+    <Panel T={T} title="Recent reservations" pad={false}>
+      <table style={tbl}><thead><tr>{['Reservation', 'Guest', 'Room', 'Status'].map((h, i) => <th key={i} style={th(T)}>{h}</th>)}</tr></thead>
+        <tbody>{(dash.recent_reservations || []).map((r: any) => (
+          <tr key={r.id}>
+            <td style={td(T)}><b style={{ fontFamily: T.fMono, fontSize: 12.5, color: T.ink }}>{r.reservationNumber}</b></td>
+            <td style={td(T)}>{(r.guest && r.guest.name) || '—'}</td>
+            <td style={td(T)}>{(r.room && r.room.number) || '—'}</td>
+            <td style={td(T)}><Badge T={T} tone={RES_TONE[r.status] || 'gray'}>{(r.status || '').replace('_', ' ')}</Badge></td>
+          </tr>
+        ))}{(dash.recent_reservations || []).length === 0 && <tr><td colSpan={4} style={empty(T)}>No reservations yet.</td></tr>}</tbody></table>
+    </Panel>
+  </>);
+}
+
+// ── New reservation ───────────────────────────────────────────────
+function ReservationModal({ T, rooms, onClose, onSaved }: { T: Theme; rooms: any[]; onClose: () => void; onSaved: () => void }) {
+  const free = rooms.filter((r: any) => r.status === 'available');
+  const [f, setF] = useS<any>({ roomId: '', guestName: '', guestPhone: '', checkInDate: today(), checkOutDate: addDays(today(), 1), adults: 1, children: 0, ratePerNight: '', depositPaid: '', specialRequests: '' });
+  const [busy, setBusy] = useS(false); const [err, setErr] = useS<any>(null);
+  const set = (k: string, v: any) => setF((s: any) => ({ ...s, [k]: v }));
+  const room = rooms.find((r: any) => r.id === f.roomId);
+  const baseRate = room && room.roomType ? Number(room.roomType.baseRate) : 0;
+  const nights = Math.max(0, Math.round((new Date(f.checkOutDate).getTime() - new Date(f.checkInDate).getTime()) / 86400000));
+  const rate = Number(f.ratePerNight) > 0 ? Number(f.ratePerNight) : baseRate;
+  const est = rate * nights;
+
+  async function save() {
+    if (!f.roomId) { setErr('Select a room.'); return; }
+    if (!f.guestName.trim()) { setErr('Guest name is required.'); return; }
+    if (nights < 1) { setErr('Check-out must be after check-in.'); return; }
+    setBusy(true); setErr(null);
+    try {
+      await API.hotel.createReservation({
+        roomId: f.roomId, guestName: f.guestName.trim(), guestPhone: f.guestPhone || undefined,
+        checkInDate: f.checkInDate, checkOutDate: f.checkOutDate,
+        adults: Number(f.adults) || 1, children: Number(f.children) || 0,
+        ratePerNight: Number(f.ratePerNight) > 0 ? Number(f.ratePerNight) : undefined,
+        depositPaid: Number(f.depositPaid) > 0 ? Number(f.depositPaid) : 0,
+        specialRequests: f.specialRequests || undefined,
+      });
+      onSaved();
+    } catch (e: any) { setErr(e.message || 'Could not create reservation.'); } finally { setBusy(false); }
+  }
+
+  return (
+    <Modal T={T} title="New reservation" subtitle="Book a room for a guest" width={600} onClose={onClose}
+      footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Cancel</Btn><Btn T={T} kind="accent" onClick={save} disabled={busy}>{busy ? 'Booking…' : `Book${est > 0 ? ' · ' + money(est) : ''}`}</Btn></>}>
+      <FormGrid>
+        <Field T={T} label="Room" full>
+          <SelectField T={T} value={f.roomId} options={['', ...free.map((r: any) => r.id)]} onChange={(v: any) => set('roomId', v)}
+            render={(v: any) => { if (!v) return free.length ? 'Select an available room…' : 'No available rooms'; const r = rooms.find((x: any) => x.id === v); return r ? `${r.number} · ${(r.roomType && r.roomType.name) || ''} · ${money(r.roomType ? r.roomType.baseRate : 0)}/night` : v; }} />
+        </Field>
+        <Field T={T} label="Guest name"><TextField T={T} value={f.guestName} onChange={(v: any) => set('guestName', v)} placeholder="Full name" /></Field>
+        <Field T={T} label="Guest phone"><TextField T={T} value={f.guestPhone} onChange={(v: any) => set('guestPhone', v)} placeholder="optional" /></Field>
+        <Field T={T} label="Check-in"><TextField T={T} type="date" value={f.checkInDate} onChange={(v: any) => set('checkInDate', v)} /></Field>
+        <Field T={T} label="Check-out"><TextField T={T} type="date" value={f.checkOutDate} onChange={(v: any) => set('checkOutDate', v)} /></Field>
+        <Field T={T} label="Adults"><TextField T={T} type="number" value={f.adults} onChange={(v: any) => set('adults', v)} /></Field>
+        <Field T={T} label="Children"><TextField T={T} type="number" value={f.children} onChange={(v: any) => set('children', v)} /></Field>
+        <Field T={T} label={`Rate / night${baseRate ? ' (base ' + money(baseRate) + ')' : ''}`}><TextField T={T} type="number" value={f.ratePerNight} onChange={(v: any) => set('ratePerNight', v)} placeholder={baseRate ? String(baseRate) : '0'} /></Field>
+        <Field T={T} label="Deposit paid"><TextField T={T} type="number" value={f.depositPaid} onChange={(v: any) => set('depositPaid', v)} placeholder="0" /></Field>
+        <Field T={T} label="Special requests" full><TextField T={T} value={f.specialRequests} onChange={(v: any) => set('specialRequests', v)} placeholder="optional" /></Field>
+      </FormGrid>
+      <div style={{ marginTop: 12, display: 'flex', justifyContent: 'space-between', fontSize: 12.5, color: T.inkSub }}>
+        <span>{nights} night{nights === 1 ? '' : 's'} × {money(rate)}</span><b style={{ fontFamily: T.fMono, color: T.ink }}>{money(est)}</b>
+      </div>
+      {err && <div style={{ marginTop: 12, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}>⚠ {err}</div>}
+    </Modal>
   );
 }
+
+// ── Room type / room creation ─────────────────────────────────────
+function RoomTypeModal({ T, onClose, onSaved }: { T: Theme; onClose: () => void; onSaved: () => void }) {
+  const [f, setF] = useS<any>({ name: '', baseRate: '', maxOccupancy: 2, bedConfiguration: '' });
+  const [busy, setBusy] = useS(false); const [err, setErr] = useS<any>(null);
+  const set = (k: string, v: any) => setF((s: any) => ({ ...s, [k]: v }));
+  async function save() {
+    if (!f.name.trim()) { setErr('Name is required.'); return; }
+    if (!(Number(f.baseRate) >= 0)) { setErr('Enter a base rate.'); return; }
+    setBusy(true); setErr(null);
+    try { await API.hotel.createRoomType({ name: f.name.trim(), baseRate: Number(f.baseRate) || 0, maxOccupancy: Number(f.maxOccupancy) || 2, bedConfiguration: f.bedConfiguration || undefined }); onSaved(); }
+    catch (e: any) { setErr(e.message || 'Could not save.'); } finally { setBusy(false); }
+  }
+  return (
+    <Modal T={T} title="New room type" width={480} onClose={onClose}
+      footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Cancel</Btn><Btn T={T} kind="accent" onClick={save} disabled={busy}>{busy ? 'Saving…' : 'Add room type'}</Btn></>}>
+      <FormGrid>
+        <Field T={T} label="Name" full><TextField T={T} value={f.name} onChange={(v: any) => set('name', v)} placeholder="e.g. Deluxe Double" /></Field>
+        <Field T={T} label="Base rate / night"><TextField T={T} type="number" value={f.baseRate} onChange={(v: any) => set('baseRate', v)} placeholder="0" /></Field>
+        <Field T={T} label="Max occupancy"><TextField T={T} type="number" value={f.maxOccupancy} onChange={(v: any) => set('maxOccupancy', v)} /></Field>
+        <Field T={T} label="Bed configuration" full><TextField T={T} value={f.bedConfiguration} onChange={(v: any) => set('bedConfiguration', v)} placeholder="e.g. 1 queen + 1 sofa" /></Field>
+      </FormGrid>
+      {err && <div style={{ marginTop: 12, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}>⚠ {err}</div>}
+    </Modal>
+  );
+}
+
+function RoomModal({ T, roomTypes, onClose, onSaved }: { T: Theme; roomTypes: any[]; onClose: () => void; onSaved: () => void }) {
+  const [f, setF] = useS<any>({ roomTypeId: '', number: '', floor: '' });
+  const [busy, setBusy] = useS(false); const [err, setErr] = useS<any>(null);
+  const set = (k: string, v: any) => setF((s: any) => ({ ...s, [k]: v }));
+  async function save() {
+    if (!f.roomTypeId) { setErr('Pick a room type.'); return; }
+    if (!f.number.trim()) { setErr('Room number is required.'); return; }
+    setBusy(true); setErr(null);
+    try { await API.hotel.createRoom({ roomTypeId: f.roomTypeId, number: f.number.trim(), floor: f.floor !== '' ? Number(f.floor) : undefined }); onSaved(); }
+    catch (e: any) { setErr(e.message || 'Could not save.'); } finally { setBusy(false); }
+  }
+  return (
+    <Modal T={T} title="New room" width={460} onClose={onClose}
+      footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Cancel</Btn><Btn T={T} kind="accent" onClick={save} disabled={busy || roomTypes.length === 0}>{busy ? 'Saving…' : 'Add room'}</Btn></>}>
+      {roomTypes.length === 0
+        ? <div style={{ fontSize: 13, color: T.inkSub }}>Add a room type first.</div>
+        : <FormGrid>
+            <Field T={T} label="Room type" full><SelectField T={T} value={f.roomTypeId} options={['', ...roomTypes.map((rt: any) => rt.id)]} onChange={(v: any) => set('roomTypeId', v)} render={(v: any) => v ? (roomTypes.find((rt: any) => rt.id === v) || {}).name : 'Select type…'} /></Field>
+            <Field T={T} label="Room number"><TextField T={T} value={f.number} onChange={(v: any) => set('number', v)} placeholder="e.g. 101" /></Field>
+            <Field T={T} label="Floor"><TextField T={T} type="number" value={f.floor} onChange={(v: any) => set('floor', v)} placeholder="optional" /></Field>
+          </FormGrid>}
+      {err && <div style={{ marginTop: 12, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}>⚠ {err}</div>}
+    </Modal>
+  );
+}
+
+function RoomActionModal({ T, room, onClose, onPick }: { T: Theme; room: any; onClose: () => void; onPick: (s: string) => void }) {
+  const guest = (room.reservations && room.reservations[0] && room.reservations[0].guest) || null;
+  return (
+    <Modal T={T} title={`Room ${room.number}`} subtitle={`${(room.roomType && room.roomType.name) || ''}${guest ? ' · ' + guest.name : ''}`} width={420} onClose={onClose}
+      footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Close</Btn></>}>
+      <div style={{ fontSize: 12, color: T.inkSub, marginBottom: 10 }}>Current status: <Badge T={T} tone={ROOM_TONE[room.status] || 'gray'}>{room.status}</Badge></div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8 }}>
+        {ROOM_STATUSES.filter((s) => s !== room.status).map((s) => (
+          <button key={s} onClick={() => onPick(s)} style={{ padding: '10px 12px', borderRadius: T.r, border: `1px solid ${T.line}`, background: T.paper, color: T.inkMid, cursor: 'pointer', fontFamily: T.fBody, fontSize: 13, fontWeight: 600, textAlign: 'left', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ width: 9, height: 9, borderRadius: 3, background: toneColor(T, ROOM_TONE[s]) }} />{s}
+          </button>
+        ))}
+      </div>
+      <div style={{ fontSize: 11, color: T.inkMute, marginTop: 12 }}>Setting a room to cleaning or checkout opens a housekeeping task automatically.</div>
+    </Modal>
+  );
+}
+
+function toneColor(T: Theme, tone: string): string {
+  const map: any = { green: T.green, red: T.red, blue: T.blue, amber: T.amber, violet: T.violet, gray: T.lineMid };
+  return map[tone] || T.lineMid;
+}
+
+const tbl: React.CSSProperties = { width: '100%', borderCollapse: 'collapse' };
+const th = (T: Theme, right?: boolean): React.CSSProperties => ({ textAlign: right ? 'right' : 'left', padding: '11px 18px', fontSize: 10, fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', color: T.inkSub, background: T.paperAlt, borderBottom: `1px solid ${T.line}` });
+const td = (T: Theme): React.CSSProperties => ({ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 13, color: T.inkMid });
+const empty = (T: Theme): React.CSSProperties => ({ padding: 40, textAlign: 'center', color: T.inkMute, fontSize: 13 });
+function mini(T: Theme): React.CSSProperties { return { padding: '5px 11px', borderRadius: 7, cursor: 'pointer', fontFamily: T.fBody, fontSize: 12, fontWeight: 600, border: `1px solid ${T.line}`, background: T.paper, color: T.inkMid }; }
