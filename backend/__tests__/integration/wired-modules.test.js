@@ -8,6 +8,8 @@
  * business so they're independent.
  */
 const request = require('supertest');
+const crypto = require('crypto');
+const speakeasy = require('speakeasy');
 const { app } = require('../../server');
 const prisma = require('../../lib/prisma');
 
@@ -331,6 +333,58 @@ describe('service-type packing charge on a sale', () => {
     expect(Number(r.body.packingCharge)).toBe(3);
     // total = subtotal + tax + packing (no discount/coupon on this sale)
     expect(Number(r.body.totalAmount)).toBe(Number(r.body.subtotal) + Number(r.body.taxAmount) + 3);
+  });
+});
+
+describe('auth depth (MFA, password change & recovery)', () => {
+  async function registerFull() {
+    const s = `${Date.now()}_${SEQ++}`;
+    const email = `auth_${s}@balanzify.test`;
+    const res = await request(app).post('/api/v1/auth/register').send({ businessName: `Auth ${s}`, email, password: 'SecureTestPass123!' });
+    expect(res.status).toBe(201);
+    return { token: res.body.access_token, email };
+  }
+
+  test('change-password: new password works, old is rejected', async () => {
+    const { token, email } = await registerFull();
+    const ch = await request(app).post('/api/v1/auth/change-password').set(auth(token)).send({ currentPassword: 'SecureTestPass123!', newPassword: 'BrandNewPass456!' });
+    expect(ch.status).toBe(200);
+    expect((await request(app).post('/api/v1/auth/login').send({ email, password: 'BrandNewPass456!' })).body.access_token).toBeTruthy();
+    expect((await request(app).post('/api/v1/auth/login').send({ email, password: 'SecureTestPass123!' })).status).toBe(401);
+  });
+
+  test('forgot is generic; reset rejects bad tokens and accepts a valid one', async () => {
+    const { token, email } = await registerFull();
+    const userId = (await request(app).get('/api/v1/auth/me').set(auth(token))).body.id;
+    expect((await request(app).post('/api/v1/auth/forgot-password').send({ email })).status).toBe(200);
+    expect((await request(app).post('/api/v1/auth/forgot-password').send({ email: 'nobody@nowhere.test' })).status).toBe(200);
+    expect((await request(app).post('/api/v1/auth/reset-password').send({ token: 'a'.repeat(64), newPassword: 'ResetPass789!' })).status).toBe(400);
+    // create a real reset token (the raw value is normally emailed)
+    const raw = crypto.randomBytes(32).toString('hex');
+    const hash = crypto.createHash('sha256').update(raw).digest('hex');
+    await prisma.passwordResetToken.create({ data: { userId, tokenHash: hash, expiresAt: new Date(Date.now() + 600000) } });
+    expect((await request(app).post('/api/v1/auth/reset-password').send({ token: raw, newPassword: 'ResetPass789!' })).status).toBe(200);
+    expect((await request(app).post('/api/v1/auth/login').send({ email, password: 'ResetPass789!' })).body.access_token).toBeTruthy();
+  });
+
+  test('MFA: enrol → login challenge → verify', async () => {
+    const { token, email } = await registerFull();
+    const setup = await request(app).post('/api/v1/auth/mfa/setup').set(auth(token)).send({});
+    expect(setup.status).toBe(200);
+    const secret = setup.body.secret;
+    expect(secret).toBeTruthy();
+    const enable = await request(app).post('/api/v1/auth/mfa/enable').set(auth(token)).send({ token: speakeasy.totp({ secret, encoding: 'base32' }) });
+    expect(enable.status).toBe(200);
+    // login now returns an MFA challenge instead of tokens
+    const login = await request(app).post('/api/v1/auth/login').send({ email, password: 'SecureTestPass123!' });
+    expect(login.body.mfa_required).toBe(true);
+    expect(login.body.access_token).toBeUndefined();
+    // exchange the pre-token + a fresh code for real tokens
+    const verify = await request(app).post('/api/v1/auth/mfa/verify')
+      .set({ Authorization: `Bearer ${login.body.pre_token}` })
+      .send({ token: speakeasy.totp({ secret, encoding: 'base32' }) });
+    expect(verify.status).toBe(200);
+    expect(verify.body.access_token).toBeTruthy();
   });
 });
 

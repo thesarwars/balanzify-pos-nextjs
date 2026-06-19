@@ -184,13 +184,15 @@ function setTokens(access?: string | null, refresh?: string | null): void {
 }
 function clearTokens(): void { if (hasWindow()) { window.localStorage.removeItem(ACCESS_KEY); window.localStorage.removeItem(REFRESH_KEY); } }
 
-async function realReq(method: string, path: string, { query, body, auth = true }: any = {}): Promise<any> {
+async function realReq(method: string, path: string, { query, body, auth = true, bearer }: any = {}): Promise<any> {
   const qs = query ? '?' + Object.entries(query)
     .filter(([, v]) => v !== undefined && v !== null && v !== '')
     .map(([k, v]) => `${k}=${encodeURIComponent(v as any)}`).join('&') : '';
   const headers: any = { 'Content-Type': 'application/json', Accept: 'application/json' };
   const tok = getAccessToken();
-  if (auth && tok) headers.Authorization = 'Bearer ' + tok;
+  // `bearer` overrides the stored token for one call (e.g. the MFA pre-auth token).
+  if (bearer) headers.Authorization = 'Bearer ' + bearer;
+  else if (auth && tok) headers.Authorization = 'Bearer ' + tok;
   const started = (typeof performance !== 'undefined' ? performance.now() : Date.now());
   const stamp = () => Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - started);
   const fullPath = '/api/v1' + path;
@@ -206,7 +208,7 @@ async function realReq(method: string, path: string, { query, body, auth = true 
   if (!res.ok) {
     const msg = (json && (json.title || json.message || json.detail)) || ('HTTP ' + res.status);
     const field = json && (json.field || (json.errors && typeof json.errors === 'object' && Object.keys(json.errors)[0]));
-    if (res.status === 401 && auth) clearTokens();
+    if (res.status === 401 && auth && !bearer) clearTokens();
     throw new ApiError(res.status, msg, { ...(json || {}), field });
   }
   return json;
@@ -2373,9 +2375,10 @@ const API: any = {
   auth: {
     async login(username: any, password: any) {
       if (REAL_MODE) {
-        // backend: POST /api/v1/auth/login { email, password } → { user, access_token, refresh_token }
+        // backend: POST /api/v1/auth/login { email, password }
+        //  → { user, access_token, refresh_token }  OR  { mfa_required: true, pre_token }
         const res = await realReq('POST', '/auth/login', { auth: false, body: { email: username, password } });
-        setTokens(res.access_token, res.refresh_token);
+        if (res && res.access_token) setTokens(res.access_token, res.refresh_token);
         return res;
       }
       const res = await transport('POST', '/oauth/token', {
@@ -2394,6 +2397,35 @@ const API: any = {
     logout() {
       if (REAL_MODE) { try { realReq('POST', '/auth/logout', {}); } catch (e) {} clearTokens(); return; }
       API.config.set({ token: null });
+    },
+    // Complete an MFA challenge: exchange the pre-auth token + TOTP code for real
+    // tokens. Returns the same shape as a normal login.
+    async mfaVerify(preToken: any, code: any) {
+      const res = await realReq('POST', '/auth/mfa/verify', { auth: false, bearer: preToken, body: { token: String(code) } });
+      if (res && res.access_token) setTokens(res.access_token, res.refresh_token);
+      return res;
+    },
+    // Password recovery (real backend only; mock returns a friendly no-op).
+    async forgotPassword(email: any) {
+      if (REAL_MODE) return await realReq('POST', '/auth/forgot-password', { auth: false, body: { email } });
+      return { message: 'If that email is registered, a reset link has been sent.' };
+    },
+    async resetPassword(token: any, newPassword: any) {
+      if (REAL_MODE) return await realReq('POST', '/auth/reset-password', { auth: false, body: { token, newPassword } });
+      return { message: 'Password reset successfully.' };
+    },
+    async changePassword(currentPassword: any, newPassword: any) {
+      if (REAL_MODE) return await realReq('POST', '/auth/change-password', { body: { currentPassword, newPassword } });
+      throw new ApiError(501, 'Changing your password needs the live backend.');
+    },
+    // MFA enrolment: setup() returns { secret, qr_code }; enable(code) confirms it.
+    async mfaSetup() {
+      if (REAL_MODE) return await realReq('POST', '/auth/mfa/setup', { body: {} });
+      throw new ApiError(501, 'Two-factor auth needs the live backend.');
+    },
+    async mfaEnable(code: any) {
+      if (REAL_MODE) return await realReq('POST', '/auth/mfa/enable', { body: { token: String(code) } });
+      throw new ApiError(501, 'Two-factor auth needs the live backend.');
     },
     // The signed-in identity (business + user). Null in mock mode so the shell
     // falls back to the seed BUSINESS/CASHIER.
