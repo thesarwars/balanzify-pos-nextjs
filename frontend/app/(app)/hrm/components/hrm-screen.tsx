@@ -7,13 +7,15 @@
 import React from 'react';
 import { money, money0 } from '@/lib/theme';
 import { Btn, Badge, Panel, Modal, Field, TextField, SelectField, FormGrid, useToast } from '@/components/kit';
-import { Topbar } from '@/components/shell';
+import { Topbar, useSession } from '@/components/shell';
 import { API } from '@/lib/api';
 import { BUSINESS } from '@/lib/data';
 
 const { useState: useStateHr, useEffect: useEffectHr } = React;
 
 export function HRM({ T }: { T: any }) {
+  const session = useSession();
+  const bizName = (session && session.business_name) || BUSINESS.name;
   const [enabled, setEnabled] = useStateHr<any>(null);
   const [tab, setTab] = useStateHr('overview');
   const [summary, setSummary] = useStateHr<any>(null);
@@ -114,7 +116,7 @@ export function HRM({ T }: { T: any }) {
     const esc = (v: any) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
     const csv = [cols, ...rows].map((r: any) => r.map(esc).join(',')).join('\n');
     const blob = new Blob([csv], { type: 'text/csv' }); const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href = url; a.download = `${BUSINESS.name}-${title}.csv`.replace(/\s+/g, '-'); document.body.appendChild(a); a.click();
+    const a = document.createElement('a'); a.href = url; a.download = `${bizName}-${title}.csv`.replace(/\s+/g, '-'); document.body.appendChild(a); a.click();
     setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
     show('Exported ' + title);
   }
@@ -126,9 +128,9 @@ export function HRM({ T }: { T: any }) {
       const cells = r.map(function (c: any) { return '<td style="padding:7px 10px;border-bottom:1px solid #eee">' + (c == null ? '' : c) + '</td>'; }).join('');
       return '<tr>' + cells + '</tr>';
     }).join('');
-    const html = '<html><head><title>' + title + ' — ' + BUSINESS.name + '</title></head>'
+    const html = '<html><head><title>' + title + ' — ' + bizName + '</title></head>'
       + '<body style="font-family:system-ui,sans-serif;margin:32px;color:#1a1a1a">'
-      + '<div style="display:flex;justify-content:space-between;align-items:baseline;border-bottom:2px solid #1a1a1a;padding-bottom:10px;margin-bottom:14px"><div style="font-size:20px;font-weight:800">' + BUSINESS.name + '</div><div style="font-size:13px;color:#666">' + title + ' · ' + new Date().toLocaleDateString() + '</div></div>'
+      + '<div style="display:flex;justify-content:space-between;align-items:baseline;border-bottom:2px solid #1a1a1a;padding-bottom:10px;margin-bottom:14px"><div style="font-size:20px;font-weight:800">' + bizName + '</div><div style="font-size:13px;color:#666">' + title + ' · ' + new Date().toLocaleDateString() + '</div></div>'
       + '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr>' + thead + '</tr></thead><tbody>' + tbody + '</tbody></table>'
       + '<div style="text-align:center;font-size:10px;color:#999;margin-top:24px">' + rows.length + ' rows · Balanzify POS</div>'
       + '<scr' + 'ipt>window.onload=function(){setTimeout(function(){window.print()},300)}</scr' + 'ipt></body></html>';
@@ -716,6 +718,8 @@ function ShiftModal({ T, emps, locs, onClose, onSaved }: { T: any; emps: any[]; 
 }
 
 function EmployeeProfile({ T, profile: p, onClose }: { T: any; profile: any; onClose: () => void }) {
+  const session = useSession();
+  const bizName = (session && session.business_name) || BUSINESS.name;
   const atone: any = { present: 'green', late: 'amber', absent: 'red' };
   const ltone: any = { approved: 'green', pending: 'amber', rejected: 'red' };
   async function printPayslip(row: any) {
@@ -745,7 +749,7 @@ function EmployeeProfile({ T, profile: p, onClose }: { T: any; profile: any; onC
       <table style="width:100%;font-size:12.5px;line-height:1.9">${lv.map((l: any) => `<tr><td style="color:#555">${l.type}</td><td style="text-align:right;font-family:monospace">${l.days} day(s)</td></tr>`).join('')}</table></div>` : '';
     w.document.write(`<html><head><title>Payslip ${p.name} ${row.month}</title></head><body style="font-family:Georgia,serif;margin:40px;color:#1a1a1a">
       <div style="text-align:center;border-bottom:2px solid #1a1a1a;padding-bottom:14px;margin-bottom:16px">
-        <div style="font-size:22px;font-weight:800">${BUSINESS.name}</div><div style="font-size:12px;color:#666">Payslip · ${row.month}</div></div>
+        <div style="font-size:22px;font-weight:800">${bizName}</div><div style="font-size:12px;color:#666">Payslip · ${row.month}</div></div>
       <table style="width:100%;font-size:13px;line-height:2"><tr><td style="color:#666">Employee</td><td style="text-align:right;font-weight:700">${p.name}</td></tr>
       <tr><td style="color:#666">Designation</td><td style="text-align:right">${p.designation}</td></tr>
       <tr><td style="color:#666">Location</td><td style="text-align:right">${p.location_name}</td></tr></table>
@@ -755,7 +759,7 @@ function EmployeeProfile({ T, profile: p, onClose }: { T: any; profile: any; onC
       <table style="width:100%;font-size:13px;line-height:1.6">${dedRows || '<tr><td style="color:#999;padding:3px 0">None</td><td></td></tr>'}</table></div>
       ${attBlock}${leaveBlock}
       <div style="display:flex;justify-content:space-between;border-top:2px solid #1a1a1a;margin-top:16px;padding-top:10px;font-size:18px;font-weight:800"><span>NET PAY</span><span style="font-family:monospace">$${row.net.toFixed(2)}</span></div>
-      <div style="text-align:center;font-size:11px;color:#888;margin-top:30px">Generated by Balanzify POS · ${BUSINESS.name}</div>
+      <div style="text-align:center;font-size:11px;color:#888;margin-top:30px">Generated by Balanzify POS · ${bizName}</div>
       <script>window.onload=function(){setTimeout(function(){window.print()},300)}<\/script></body></html>`);
     w.document.close();
   }
