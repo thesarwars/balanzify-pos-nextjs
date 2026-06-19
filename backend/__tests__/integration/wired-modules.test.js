@@ -215,6 +215,25 @@ describe('superadmin (opt-in, cross-tenant)', () => {
     expect(Array.isArray(biz.body)).toBe(true);
     expect((await request(app).get('/api/v1/superadmin/package').set(auth(token))).body.length).toBeGreaterThanOrEqual(3);
   });
+
+  test('can enable/disable a module for a specific business (base preserved)', async () => {
+    await enableModule(token, 'superadmin');   // operator
+    const targetToken = await register();
+    const targetId = (await request(app).get('/api/v1/auth/me').set(auth(targetToken))).body.business_id;
+    // target has no hotel yet
+    expect((await request(app).get('/api/v1/hotel/rooms').set(auth(targetToken))).status).toBe(403);
+    const cat = await request(app).get('/api/v1/superadmin/module-catalog').set(auth(token));
+    expect(cat.body.modules.find(m => m.key === 'hotel' && m.addon)).toBeTruthy();
+    // operator turns hotel on for the target
+    const upd = await request(app).put(`/api/v1/superadmin/business/${targetId}/modules`).set(auth(token)).send({ enabled_modules: ['hotel'] });
+    expect(upd.status).toBe(200);
+    expect(upd.body.enabled_modules).toContain('hotel');
+    expect(upd.body.enabled_modules).toContain('pos');   // base plan preserved
+    expect((await request(app).get('/api/v1/hotel/rooms').set(auth(targetToken))).status).toBe(200);
+    // and can turn it back off
+    expect((await request(app).put(`/api/v1/superadmin/business/${targetId}/modules`).set(auth(token)).send({ enabled_modules: [] })).status).toBe(200);
+    expect((await request(app).get('/api/v1/hotel/rooms').set(auth(targetToken))).status).toBe(403);
+  });
 });
 
 describe('service types (restaurant-gated)', () => {

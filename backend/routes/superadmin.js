@@ -11,6 +11,8 @@ const prisma = require('../lib/prisma');
 const { auth, requireRole } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { PackageSchema } = require('../validation/schemas');
+const { MODULES } = require('../lib/modules');
+const { requireModule } = require('../lib/moduleGate');
 
 const router = express.Router();
 
@@ -74,7 +76,32 @@ router.get('/business', async (req, res, next) => {
       status: b.subscription?.status || 'active', users: b._count.users,
       created: b.createdAt.toISOString().slice(0, 10),
       expires: b.subscription?.expiresAt ? b.subscription.expiresAt.toISOString().slice(0, 10) : '',
+      enabled_modules: b.enabledModules || [],
     })));
+  } catch (err) { next(err); }
+});
+
+// The module catalog (so the console can render per-business toggles).
+router.get('/module-catalog', async (req, res, next) => {
+  try {
+    res.json({ modules: Object.values(MODULES).map(m => ({ key: m.key, name: m.name, addon: m.default === false, description: m.description || '' })) });
+  } catch (err) { next(err); }
+});
+
+// Enable/disable modules for a specific business (platform override).
+const { z } = require('zod');
+router.put('/business/:id/modules', validate(z.object({ enabled_modules: z.array(z.string()).default([]) })), async (req, res, next) => {
+  try {
+    const biz = await prisma.business.findUnique({ where: { id: req.params.id } });
+    if (!biz) return res.status(404).json({ title: 'Not found', status: 404 });
+    // Always persist the base plan (default modules) + whatever add-ons are chosen,
+    // so a business never loses its core POS/inventory/operations.
+    const base = Object.keys(MODULES).filter(k => MODULES[k].default !== false);
+    const addons = req.body.enabled_modules.filter(k => MODULES[k] && MODULES[k].default === false);
+    const enabledModules = [...new Set([...base, ...addons])];
+    const updated = await prisma.business.update({ where: { id: req.params.id }, data: { enabledModules } });
+    requireModule.invalidate(req.params.id);   // clear the 60s gate cache so it takes effect now
+    res.json({ id: updated.id, enabled_modules: updated.enabledModules });
   } catch (err) { next(err); }
 });
 
