@@ -3578,6 +3578,9 @@ const API: any = {
   business: {
     async currencies() { return (await transport('GET', '/business/currencies', { auth: false })).data; },
     async timezones() { return (await transport('GET', '/business/timezones', { auth: false })).data; },
+    // Live business profile (/api/v1/settings → the Business record). Null in mock.
+    async get() { if (REAL_MODE) { try { return await realReq('GET', '/settings'); } catch (e) { return null; } } return null; },
+    async update(body: any) { if (REAL_MODE) return await realReq('PUT', '/settings', { body }); throw new ApiError(501, 'Editing the business profile needs the live backend.'); },
     async register(payload: any) {
       if (REAL_MODE) {
         // The wizard sends { business, tax, user }; the backend expects a flat

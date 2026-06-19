@@ -7,7 +7,7 @@ import React from 'react';
 import type { Theme } from '@/lib/theme';
 import { money, money0 } from '@/lib/theme';
 import { Btn, Badge, Panel, Modal, Field, TextField, FormGrid, useToast } from '@/components/kit';
-import { Topbar } from '@/components/shell';
+import { Topbar, useSession } from '@/components/shell';
 import { API } from '@/lib/api';
 import { BUSINESS, CATEGORIES, DASH, DATA } from '@/lib/data';
 
@@ -607,24 +607,41 @@ function SetSelect({ T, value, onChange, options }: { T: Theme; value: any; onCh
   );
 }
 
+const CCY_MAP: [string, string][] = [['US Dollar ($)', 'USD'], ['Somali Shilling (Sh)', 'SOS'], ['Euro (€)', 'EUR'], ['Kenyan Shilling (KSh)', 'KES'], ['UAE Dirham (AED)', 'AED']];
+const ccyToCode = (disp: string) => (CCY_MAP.find(([d]) => d === disp) || ([] as any))[1] || 'USD';
+const codeToCcy = (code: string) => (CCY_MAP.find(([, c]) => c === code) || CCY_MAP[0])[0];
+
 export function Settings({ T }: { T: Theme }) {
+  const session = useSession();
   const [s, setS] = useStateD(() => {
     let saved: any = {};
     try { if (typeof window !== 'undefined') saved = JSON.parse(localStorage.getItem('bz_settings') || '{}'); } catch (e) {}
-    return { ...SETTINGS_DEFAULTS, bizName: BUSINESS.name, branch: BUSINESS.branch, ...saved };
+    return { ...SETTINGS_DEFAULTS, bizName: (session && session.business_name) || BUSINESS.name, branch: BUSINESS.branch, ...saved };
   });
   const [dirty, setDirty] = useStateD(false);
   const [toast, toastNode] = useToast();
   const set = (k: any, v: any) => { setS((p: any) => ({ ...p, [k]: v })); setDirty(true); };
 
-  function save() {
+  // Hydrate the Business group from the live business record (real mode).
+  React.useEffect(() => {
+    API.business.get().then((b: any) => {
+      if (!b) return;
+      setS((p: any) => ({ ...p, bizName: b.name || p.bizName, currency: b.currency ? codeToCcy(b.currency) : p.currency }));
+    }).catch(() => {});
+  }, []);
+
+  async function save() {
     if (typeof window !== 'undefined') localStorage.setItem('bz_settings', JSON.stringify(s));
+    if (API.config?.isReal?.()) {
+      try { await API.business.update({ name: s.bizName.trim(), currency: ccyToCode(s.currency) }); }
+      catch (e: any) { toast(e.message || 'Could not save business profile.'); return; }
+    }
     if (s.bizName.trim()) BUSINESS.name = s.bizName.trim();
     if (s.branch.trim()) BUSINESS.branch = s.branch.trim();
     setDirty(false);
     toast('Settings saved');
   }
-  function reset() { setS({ ...SETTINGS_DEFAULTS, bizName: BUSINESS.name, branch: BUSINESS.branch }); setDirty(true); }
+  function reset() { setS({ ...SETTINGS_DEFAULTS, bizName: (session && session.business_name) || BUSINESS.name, branch: BUSINESS.branch }); setDirty(true); }
 
   const groups = [
     { title: 'Business', rows: [
