@@ -68,6 +68,10 @@ export function POS({ T, tweaks }: { T: any; tweaks: any }) {
   const [discounts, setDiscounts] = useStateP<any[]>([]);
   const [serviceTypes, setServiceTypes] = useStateP<any[]>([]);
   const [serviceTypeId, setServiceTypeId] = useStateP<any>('');
+  const [couponCode, setCouponCode] = useStateP('');
+  const [coupon, setCoupon] = useStateP<any>(null);     // applied coupon {id, code, type, value, applied, min_purchase}
+  const [couponBusy, setCouponBusy] = useStateP(false);
+  const [couponErr, setCouponErr] = useStateP<any>(null);
   const [payMode, setPayMode] = useStateP('quick'); // 'quick' | 'split'
   const [tenders, setTenders] = useStateP<any[]>([]);      // split-payment lines [{method, amount}]
   const [changeDue, setChangeDue] = useStateP(0);
@@ -161,9 +165,15 @@ export function POS({ T, tweaks }: { T: any; tweaks: any }) {
   const redeemDiscount = Math.min(subtotal, +(redeemPts * (rw ? rw.redeem_amount_per_point : 0)).toFixed(2));
   const pointsEarned = rw && subtotal >= rw.min_order_total_earn ? Math.min(rw.max_points_per_order || Infinity, Math.floor(subtotal / rw.amount_per_unit_point)) : 0;
   const discount = +(redeemDiscount + autoDiscount).toFixed(2);
+  // coupon — discount recomputed against the live subtotal so it stays correct as
+  // the cart changes; min-purchase re-checked client-side (backend re-checks too).
+  const couponOk = !!(coupon && subtotal >= Number(coupon.min_purchase || 0));
+  const couponDiscount = !couponOk ? 0
+    : coupon.type === 'pct' ? +(subtotal * Number(coupon.value) / 100).toFixed(2)
+    : Math.min(Number(coupon.applied || 0), subtotal);
   const svcType = serviceTypes.find((s: any) => String(s.id) === String(serviceTypeId)) || null;
   const packing = svcType ? (svcType.packing_charge_type === 'percentage' ? Math.round(subtotal * svcType.packing_charge) / 100 : svcType.packing_charge) : 0;
-  const total = subtotal + tax - discount + packing;
+  const total = +Math.max(0, subtotal + tax - discount - couponDiscount + packing).toFixed(2);
   const count = cart.reduce((s: number, c: any) => s + c.qty, 0);
   // warn before leaving/refreshing if there's an unsaved order in the cart
   useEffectP(() => {
@@ -195,7 +205,20 @@ export function POS({ T, tweaks }: { T: any; tweaks: any }) {
   function setQty(key: any, d: number) {
     setCart((prev: any[]) => prev.flatMap((c: any) => c.key !== key ? [c] : (c.qty + d <= 0 ? [] : [{ ...c, qty: c.qty + d }])));
   }
-  function clear() { setCart([]); setCharged(null); setInvoice(null); setSaleId(null); setReceiptMsg(null); setPostErr(null); setRedeem(false); setPayMode('quick'); setTenders([]); setChangeDue(0); }
+  function clear() { setCart([]); setCharged(null); setInvoice(null); setSaleId(null); setReceiptMsg(null); setPostErr(null); setRedeem(false); setPayMode('quick'); setTenders([]); setChangeDue(0); setCoupon(null); setCouponCode(''); setCouponErr(null); }
+  async function applyCoupon() {
+    const code = couponCode.trim();
+    if (!code || couponBusy) return;
+    setCouponBusy(true); setCouponErr(null);
+    try {
+      const r: any = await API.coupon.validate(code, subtotal);
+      const c = r.coupon || {};
+      setCoupon({ id: c.id, code: c.code || code.toUpperCase(), type: c.type, value: Number(c.value || 0), applied: Number(r.discount || 0), min_purchase: Number(c.min_purchase || 0) });
+      setCouponCode('');
+    } catch (e: any) { setCoupon(null); setCouponErr(e.message || 'Invalid coupon'); }
+    finally { setCouponBusy(false); }
+  }
+  function removeCoupon() { setCoupon(null); setCouponCode(''); setCouponErr(null); }
   async function doReceipt(kind: string) {
     if (!saleId) return;
     try {
@@ -233,6 +256,8 @@ export function POS({ T, tweaks }: { T: any; tweaks: any }) {
         location_id: (register && register.location_id) || 1, shift_id: register ? register.id : undefined, contact_id: customer ? customer.id : 1, customer_name: customer ? customer.name : 'Walk-in',
         method: payments[0] ? payments[0].method : 'cash', amount: total, discount_amount: discount, discount_type: 'fixed', tax_amount: tax,
         redeem_points: redeemPts,
+        coupon_id: couponOk && couponDiscount > 0 ? coupon.id : undefined,
+        coupon_discount: couponOk && couponDiscount > 0 ? couponDiscount : undefined,
         payments: payments.filter((p: any) => Number(p.amount) > 0).map((p: any) => ({ method: p.method, amount: Number(p.amount) })),
         lines: lines.map((l: any) => ({ product_id: l.id, variation: l.varName, quantity: l.qty, unit_price: l.price })),
       });
@@ -456,6 +481,24 @@ export function POS({ T, tweaks }: { T: any; tweaks: any }) {
           <span>Discount{autoDiscountName ? ` (${autoDiscountName})` : ''}</span><span style={{ fontFamily: T.fMono }}>−{money(autoDiscount)}</span>
         </div>
       )}
+      {API.config?.isReal?.() && (coupon ? (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12.5, color: couponOk ? T.green : T.amber, marginBottom: 6 }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ fontFamily: T.fMono, fontWeight: 700 }}>{coupon.code}</span>
+            {!couponOk && <span style={{ fontSize: 11 }}>· min {money(coupon.min_purchase)}</span>}
+            <button onClick={removeCoupon} title="Remove coupon" style={{ border: 'none', background: 'none', cursor: 'pointer', color: T.redText, fontSize: 14, lineHeight: 1, padding: 0 }}>×</button>
+          </span>
+          <span style={{ fontFamily: T.fMono }}>{couponOk ? '−' + money(couponDiscount) : '—'}</span>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+          <input value={couponCode} onChange={(e: any) => setCouponCode(e.target.value.toUpperCase())} onKeyDown={(e: any) => { if (e.key === 'Enter') applyCoupon(); }}
+            placeholder="Coupon code" disabled={!lines.length}
+            style={{ flex: 1, padding: '7px 10px', fontSize: 12.5, fontFamily: T.fMono, color: D.ink, background: dark ? '#0E1A2B' : T.paper, border: `1px solid ${D.tileLine}`, borderRadius: 8, outline: 'none' }} />
+          <button onClick={applyCoupon} disabled={couponBusy || !couponCode.trim()} style={{ padding: '7px 12px', borderRadius: 8, border: `1px solid ${D.tileLine}`, background: 'transparent', color: D.sub, cursor: couponCode.trim() ? 'pointer' : 'not-allowed', fontFamily: T.fBody, fontSize: 12, fontWeight: 600 }}>{couponBusy ? '…' : 'Apply'}</button>
+        </div>
+      ))}
+      {couponErr && <div style={{ fontSize: 11.5, color: T.redText, marginBottom: 8 }}>⚠ {couponErr}</div>}
       {packing > 0 && (
         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, color: D.sub, marginBottom: 6 }}>
           <span>Packing ({svcType.name})</span><span style={{ fontFamily: T.fMono, color: D.ink }}>{money(packing)}</span>

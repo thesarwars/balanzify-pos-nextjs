@@ -276,6 +276,30 @@ describe('coupons', () => {
     const upd = await request(app).put(`/api/v1/coupons/${c.body.id}`).set(auth(token)).send({ is_active: false });
     expect(upd.status).toBe(200);
   });
+
+  test('redeems at checkout — sale applies coupon_discount and increments uses_count', async () => {
+    const loc = await location(token);
+    const prod = await stockedProduct(token, loc, 10, 100);
+    const c = await request(app).post('/api/v1/coupons').set(auth(token)).send({ code: 'CHECKOUT5', type: 'flat', value: 5 });
+    expect(c.status).toBe(201);
+    const v = await request(app).post('/api/v1/coupons/validate').set(auth(token)).send({ code: 'CHECKOUT5', subtotal: 20 });
+    expect(v.status).toBe(200);
+    expect(v.body.discount).toBe(5);
+    const couponId = v.body.coupon.id;
+
+    await request(app).post('/api/v1/sales/shifts/open').set(auth(token)).send({ location_id: loc, opening_float: 100 });
+    const ik = (await request(app).post('/api/v1/sales/initiate').set(auth(token))).body.idempotency_key;
+    const sale = await request(app).post('/api/v1/sales').set(auth(token)).send({
+      idempotency_key: ik, items: [{ product_id: prod, quantity: 2, override_price: 10 }],
+      location_id: loc, payment_method: 'cash', coupon_id: couponId, coupon_discount: 5, cash_tendered: 100,
+    });
+    expect(sale.status).toBe(201);
+
+    // the coupon's usage counter advanced — proof it was redeemed, not just validated
+    const list = await request(app).get('/api/v1/coupons').set(auth(token));
+    const updated = list.body.coupons.find(x => x.id === couponId);
+    expect(updated.usesCount).toBe(1);
+  });
 });
 
 describe('wholesale', () => {

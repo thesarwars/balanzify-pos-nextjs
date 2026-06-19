@@ -2594,6 +2594,7 @@ const API: any = {
           payment_method: split ? 'split' : realPayMethod((pays[0] && pays[0].method) || payload.method),
           discount_type: payload.discount_type === 'percentage' ? 'pct' : 'flat',
           discount_value: Number(payload.discount_amount || 0),
+          ...(payload.coupon_id ? { coupon_id: payload.coupon_id, coupon_discount: Number(payload.coupon_discount || 0) } : {}),
           type: 'pos',
         };
         if (split) {
