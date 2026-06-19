@@ -41,6 +41,9 @@ export function Hotel({ T }: { T: Theme }) {
   const [corporate, setCorporate] = useS<any[]>([]);
   const [newCorp, setNewCorp] = useS(false);
   const [invoiceAcct, setInvoiceAcct] = useS<any>(null);
+  const [groups, setGroups] = useS<any[]>([]);
+  const [newGroup, setNewGroup] = useS(false);
+  const [groupId, setGroupId] = useS<any>(null);
   const [show, node] = useToast();
 
   useE(() => { API.module.list().then((ms: any) => setEnabled(!!(ms.find((m: any) => m.key === 'hotel') || {}).enabled)).catch(() => setEnabled(false)); }, []);
@@ -51,11 +54,13 @@ export function Hotel({ T }: { T: Theme }) {
   const reloadTasks = useCb(() => API.hotel.housekeeping().then(setTasks).catch(() => {}), []);
   const reloadTypes = useCb(() => API.hotel.roomTypes().then(setRoomTypes).catch(() => {}), []);
   const reloadCorporate = useCb(() => API.hotel.corporate().then(setCorporate).catch(() => {}), []);
+  const reloadGroups = useCb(() => API.hotel.groups().then(setGroups).catch(() => {}), []);
 
   useE(() => { if (!enabled) return; reloadDash(); reloadRooms(); reloadTypes(); }, [enabled, reloadDash, reloadRooms, reloadTypes]);
   useE(() => { if (enabled && tab === 'reservations') reloadRes(); }, [enabled, tab, reloadRes]);
   useE(() => { if (enabled && tab === 'housekeeping') reloadTasks(); }, [enabled, tab, reloadTasks]);
   useE(() => { if (enabled && tab === 'corporate') reloadCorporate(); }, [enabled, tab, reloadCorporate]);
+  useE(() => { if (enabled && tab === 'groups') { reloadGroups(); reloadRes(); } }, [enabled, tab, reloadGroups, reloadRes]);
 
   async function enableModule() { try { await API.module.setEnabled('hotel', true); setEnabled(true); show('Hotel module enabled'); } catch (e: any) { show(e.message); } }
   const refreshAll = () => { reloadDash(); reloadRooms(); reloadRes(); reloadTasks(); };
@@ -91,7 +96,7 @@ export function Hotel({ T }: { T: Theme }) {
     </div>
   );
 
-  const tabs = [['dashboard', 'Dashboard'], ['rooms', 'Rooms', (rooms.stats || {}).total], ['reservations', 'Reservations'], ['housekeeping', 'Housekeeping'], ['corporate', 'Corporate'], ['setup', 'Setup']];
+  const tabs = [['dashboard', 'Dashboard'], ['rooms', 'Rooms', (rooms.stats || {}).total], ['reservations', 'Reservations'], ['groups', 'Groups'], ['housekeeping', 'Housekeeping'], ['corporate', 'Corporate'], ['setup', 'Setup']];
 
   // group rooms by floor for the grid
   const byFloor: any = {};
@@ -195,6 +200,24 @@ export function Hotel({ T }: { T: Theme }) {
             </Panel>
           )}
 
+          {tab === 'groups' && (<>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}><Btn T={T} kind="ghost" onClick={() => setNewGroup(true)}>+ Group booking</Btn></div>
+            <Panel T={T} pad={false}>
+              <table style={tbl}><thead><tr>{['Group', 'Organiser', 'Dates', 'Rooms', 'Billing', 'Status', ''].map((h, i) => <th key={i} style={th(T, i === 3)}>{h}</th>)}</tr></thead>
+                <tbody>{groups.map((g: any) => (
+                  <tr key={g.id}>
+                    <td style={td(T)}><b style={{ color: T.ink }}>{g.name}</b><span style={{ display: 'block', fontSize: 10.5, color: T.inkMute, fontFamily: T.fMono }}>{g.groupNumber}</span></td>
+                    <td style={td(T)}>{g.organiserName || '—'}{g.organiserPhone ? <span style={{ display: 'block', fontSize: 11, color: T.inkSub, fontFamily: T.fMono }}>{g.organiserPhone}</span> : null}</td>
+                    <td style={td(T)}><span style={{ fontFamily: T.fMono, fontSize: 11.5 }}>{dstr(g.checkInDate)} → {dstr(g.checkOutDate)}</span></td>
+                    <td style={{ ...td(T), textAlign: 'right', fontFamily: T.fMono }}>{(g._count && g._count.reservations) ?? (g.reservations || []).length}/{g.roomCount}</td>
+                    <td style={td(T)}><Badge T={T} tone="gray">{g.billingType}</Badge></td>
+                    <td style={td(T)}><Badge T={T} tone={RES_TONE[g.status] || 'gray'}>{(g.status || '').replace('_', ' ')}</Badge></td>
+                    <td style={{ ...td(T), textAlign: 'right' }}><button onClick={() => setGroupId(g.id)} style={mini(T)}>Manage</button></td>
+                  </tr>
+                ))}{groups.length === 0 && <tr><td colSpan={7} style={empty(T)}>No group bookings yet.</td></tr>}</tbody></table>
+            </Panel>
+          </>)}
+
           {tab === 'corporate' && (<>
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}><Btn T={T} kind="ghost" onClick={() => setNewCorp(true)}>+ Corporate account</Btn></div>
             <Panel T={T} pad={false}>
@@ -248,6 +271,8 @@ export function Hotel({ T }: { T: Theme }) {
       {folioId && <FolioModal T={T} folioId={folioId} onClose={() => setFolioId(null)} onChanged={() => { reloadRes(); reloadDash(); }} show={show} />}
       {newCorp && <CorporateModal T={T} onClose={() => setNewCorp(false)} onSaved={() => { setNewCorp(false); show('Corporate account added'); reloadCorporate(); }} />}
       {invoiceAcct && <InvoiceModal T={T} account={invoiceAcct} onClose={() => setInvoiceAcct(null)} />}
+      {newGroup && <GroupModal T={T} onClose={() => setNewGroup(false)} onSaved={() => { setNewGroup(false); show('Group created'); reloadGroups(); }} />}
+      {groupId && <GroupDetailModal T={T} groupId={groupId} reservations={res.reservations || []} onClose={() => setGroupId(null)} onChanged={() => { reloadGroups(); reloadRes(); reloadRooms(); }} show={show} />}
       {node}
     </div>
   );
@@ -412,6 +437,91 @@ function RoomActionModal({ T, room, onClose, onPick }: { T: Theme; room: any; on
         ))}
       </div>
       <div style={{ fontSize: 11, color: T.inkMute, marginTop: 12 }}>Setting a room to cleaning or checkout opens a housekeeping task automatically.</div>
+    </Modal>
+  );
+}
+
+// ── Group bookings ────────────────────────────────────────────────
+function GroupModal({ T, onClose, onSaved }: { T: Theme; onClose: () => void; onSaved: () => void }) {
+  const [f, setF] = useS<any>({ name: '', organiserName: '', organiserPhone: '', billingType: 'individual', checkInDate: today(), checkOutDate: addDays(today(), 1), roomCount: 1, pax: 1 });
+  const [busy, setBusy] = useS(false); const [err, setErr] = useS<any>(null);
+  const set = (k: string, v: any) => setF((s: any) => ({ ...s, [k]: v }));
+  async function save() {
+    if (!f.name.trim()) { setErr('Group name is required.'); return; }
+    setBusy(true); setErr(null);
+    try {
+      await API.hotel.createGroup({
+        name: f.name.trim(), organiserName: f.organiserName || undefined, organiserPhone: f.organiserPhone || undefined,
+        billingType: f.billingType, checkInDate: f.checkInDate, checkOutDate: f.checkOutDate,
+        roomCount: Number(f.roomCount) || 1, pax: Number(f.pax) || 1,
+      });
+      onSaved();
+    } catch (e: any) { setErr(e.message || 'Could not save.'); } finally { setBusy(false); }
+  }
+  return (
+    <Modal T={T} title="New group booking" subtitle="A block of rooms under one organiser" width={560} onClose={onClose}
+      footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Cancel</Btn><Btn T={T} kind="accent" onClick={save} disabled={busy}>{busy ? 'Creating…' : 'Create group'}</Btn></>}>
+      <FormGrid>
+        <Field T={T} label="Group name" full><TextField T={T} value={f.name} onChange={(v: any) => set('name', v)} placeholder="e.g. Hargeisa Tech Summit" /></Field>
+        <Field T={T} label="Organiser"><TextField T={T} value={f.organiserName} onChange={(v: any) => set('organiserName', v)} placeholder="optional" /></Field>
+        <Field T={T} label="Organiser phone"><TextField T={T} value={f.organiserPhone} onChange={(v: any) => set('organiserPhone', v)} placeholder="optional" /></Field>
+        <Field T={T} label="Billing"><SelectField T={T} value={f.billingType} options={['individual', 'master', 'split']} onChange={(v: any) => set('billingType', v)} /></Field>
+        <Field T={T} label="Check-in"><TextField T={T} type="date" value={f.checkInDate} onChange={(v: any) => set('checkInDate', v)} /></Field>
+        <Field T={T} label="Check-out"><TextField T={T} type="date" value={f.checkOutDate} onChange={(v: any) => set('checkOutDate', v)} /></Field>
+        <Field T={T} label="Rooms"><TextField T={T} type="number" value={f.roomCount} onChange={(v: any) => set('roomCount', v)} /></Field>
+        <Field T={T} label="Guests (pax)"><TextField T={T} type="number" value={f.pax} onChange={(v: any) => set('pax', v)} /></Field>
+      </FormGrid>
+      {err && <div style={{ marginTop: 12, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}>⚠ {err}</div>}
+    </Modal>
+  );
+}
+
+function GroupDetailModal({ T, groupId, reservations, onClose, onChanged, show }: { T: Theme; groupId: any; reservations: any[]; onClose: () => void; onChanged: () => void; show: (m: string) => void }) {
+  const [group, setGroup] = useS<any>(null);
+  const [pick, setPick] = useS('');
+  const [busy, setBusy] = useS(false); const [err, setErr] = useS<any>(null);
+  const reload = useCb(() => API.hotel.group(groupId).then(setGroup).catch((e: any) => setErr(e.message)), [groupId]);
+  useE(() => { reload(); }, [reload]);
+  // confirmed reservations not already attached to this group
+  const inGroup = new Set((group && group.reservations || []).map((r: any) => r.id));
+  const addable = reservations.filter((r: any) => r.status === 'confirmed' && !inGroup.has(r.id));
+
+  async function add() {
+    if (!pick) return;
+    setBusy(true); setErr(null);
+    try { await API.hotel.addToGroup(groupId, pick); setPick(''); reload(); onChanged(); show('Reservation added to group'); }
+    catch (e: any) { setErr(e.message || 'Could not add.'); } finally { setBusy(false); }
+  }
+  async function checkinAll() {
+    setBusy(true); setErr(null);
+    try { const r: any = await API.hotel.groupCheckin(groupId); show(r.message || 'Group checked in'); reload(); onChanged(); }
+    catch (e: any) { setErr(e.message || 'Could not check in.'); } finally { setBusy(false); }
+  }
+
+  return (
+    <Modal T={T} title={group ? group.name : 'Group'} subtitle={group ? `${group.groupNumber} · ${group.billingType} billing` : ''} width={600} onClose={onClose}
+      footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Close</Btn><Btn T={T} kind="accent" onClick={checkinAll} disabled={busy || !group}>Check in all</Btn></>}>
+      {!group ? <div style={empty(T)}>Loading group…</div> : (<>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', marginBottom: 14 }}>
+          <div style={{ flex: 1 }}>
+            <SelectField T={T} value={pick} options={['', ...addable.map((r: any) => r.id)]} onChange={(v: any) => setPick(v)}
+              render={(v: any) => { if (!v) return addable.length ? 'Add a confirmed reservation…' : 'No unassigned confirmed reservations'; const r = reservations.find((x: any) => x.id === v); return r ? `${r.reservationNumber} · ${(r.guest && r.guest.name) || ''} · room ${r.room && r.room.number}` : v; }} />
+          </div>
+          <Btn T={T} kind="ghost" onClick={add} disabled={busy || !pick}>+ Add</Btn>
+        </div>
+        <Panel T={T} pad={false}>
+          <table style={tbl}><thead><tr>{['Reservation', 'Guest', 'Room', 'Status'].map((h, i) => <th key={i} style={th(T)}>{h}</th>)}</tr></thead>
+            <tbody>{(group.reservations || []).map((r: any) => (
+              <tr key={r.id}>
+                <td style={td(T)}><span style={{ fontFamily: T.fMono, fontSize: 12 }}>{r.reservationNumber}</span></td>
+                <td style={td(T)}>{(r.guest && r.guest.name) || '—'}</td>
+                <td style={td(T)}>{(r.room && r.room.number) || '—'}</td>
+                <td style={td(T)}><Badge T={T} tone={RES_TONE[r.status] || 'gray'}>{(r.status || '').replace('_', ' ')}</Badge></td>
+              </tr>
+            ))}{(group.reservations || []).length === 0 && <tr><td colSpan={4} style={empty(T)}>No reservations in this group yet.</td></tr>}</tbody></table>
+        </Panel>
+      </>)}
+      {err && <div style={{ marginTop: 12, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}>⚠ {err}</div>}
     </Modal>
   );
 }

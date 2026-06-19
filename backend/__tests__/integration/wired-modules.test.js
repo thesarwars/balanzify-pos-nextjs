@@ -523,6 +523,24 @@ describe('hotel (PMS)', () => {
     expect(inv.body).toHaveProperty('balance_due');
     expect(Array.isArray(inv.body.reservations)).toBe(true);
   });
+
+  test('group booking: create, attach a reservation, group check-in', async () => {
+    const rt = await request(app).post('/api/v1/hotel/room-types').set(auth(token)).send({ name: 'Twin', baseRate: 60, maxOccupancy: 2 });
+    const room = await request(app).post('/api/v1/hotel/rooms').set(auth(token)).send({ roomTypeId: rt.body.id, number: '301' });
+    const resv = await request(app).post('/api/v1/hotel/reservations').set(auth(token)).send({ roomId: room.body.id, guestName: 'Group Guest', checkInDate: '2026-09-01', checkOutDate: '2026-09-02', ratePerNight: 60 });
+
+    const g = await request(app).post('/api/v1/hotel/groups').set(auth(token)).send({ name: 'Summit Block', billingType: 'individual', checkInDate: '2026-09-01', checkOutDate: '2026-09-02', roomCount: 1, pax: 1 });
+    expect(g.status).toBe(201);
+    expect((await request(app).post(`/api/v1/hotel/groups/${g.body.id}/reservations`).set(auth(token)).send({ reservationId: resv.body.id })).status).toBe(200);
+    // group detail now carries the reservation
+    const detail = await request(app).get(`/api/v1/hotel/groups/${g.body.id}`).set(auth(token));
+    expect(detail.body.reservations.find(r => r.id === resv.body.id)).toBeTruthy();
+    // group check-in flips the reservation to checked_in
+    const ci = await request(app).post(`/api/v1/hotel/groups/${g.body.id}/checkin`).set(auth(token));
+    expect(ci.status).toBe(200);
+    const after = (await request(app).get('/api/v1/hotel/reservations').set(auth(token)).query({ status: 'checked_in' })).body.reservations;
+    expect(after.find(r => r.id === resv.body.id)).toBeTruthy();
+  });
 });
 
 describe('construction (job costing)', () => {
