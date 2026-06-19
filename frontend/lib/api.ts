@@ -3122,6 +3122,8 @@ const API: any = {
         const cur = new Set(cat.filter((m: any) => m.enabled).map((m: any) => m.key));
         if (cat.some((m: any) => m.key === key)) { if (enabled) cur.add(key); else cur.delete(key); }
         await realReq('PUT', '/modules', { body: { enabledModules: [...cur] } });
+        // Let the shell refresh which nav items show.
+        if (typeof window !== 'undefined') window.dispatchEvent(new Event('bz:modules-changed'));
         return { key, enabled };
       }
       return (await transport('PUT', '/connector/api/module/' + key, { body: { enabled } })).data;

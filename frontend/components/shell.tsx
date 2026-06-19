@@ -68,9 +68,28 @@ export const NAV = [
   ]},
 ];
 
-export function Sidebar({ T, screen, setScreen, collapsed, setCollapsed, onLogout, onLock, mobile }: any) {
+// Nav items that belong to a paid/optional module — hidden from the sidebar
+// unless that module is enabled for the business. Everything else is core.
+const NAV_MODULE: Record<string, string> = {
+  hotel: 'hotel', restaurant: 'restaurant',
+  pharmacy: 'pharmacy', wholesale: 'wholesale', construction: 'construction',
+  hrm: 'hrm', insights: 'insights', superadmin: 'superadmin',
+};
+
+export function Sidebar({ T, screen, setScreen, collapsed, setCollapsed, onLogout, onLock, mobile, enabledMods }: any) {
   const W = collapsed ? 68 : 244;
   const S = T.side;
+  // Show a module's nav item only when it's enabled. `enabledMods === 'all'`
+  // (mock dev / fetch failed) shows everything; a Set gates by key; null (still
+  // loading in real mode) hides the optional items until we know.
+  const showItem = (id: string) => {
+    const mod = NAV_MODULE[id];
+    if (!mod) return true;
+    if (enabledMods === 'all') return true;
+    if (!enabledMods) return false;
+    return enabledMods.has(mod);
+  };
+  const groups = NAV.map((g) => ({ ...g, items: g.items.filter((it: any) => showItem(it.id)) })).filter((g) => g.items.length > 0);
   const session = useSession();
   const bizName = (session && session.business_name) || BUSINESS.name;
   const userName = (session && session.name) || CASHIER.name;
@@ -108,7 +127,7 @@ export function Sidebar({ T, screen, setScreen, collapsed, setCollapsed, onLogou
 
       {/* Nav */}
       <nav style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', padding: '10px 0 6px' }}>
-        {NAV.map((group, gi) => (
+        {groups.map((group, gi) => (
           <div key={gi} style={{ marginBottom: 4 }}>
             {group.sect && !collapsed && (
               <div style={{
@@ -318,12 +337,30 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [authed, setAuthed] = React.useState<boolean | null>(null);
   const [session, setSession] = React.useState<any>(null);
   const [locked, setLocked] = React.useState(false);
+  const [enabledMods, setEnabledMods] = React.useState<any>(null);   // Set<key> | 'all' | null(loading)
   React.useEffect(() => {
     let ok = false;
     try { ok = localStorage.getItem('bz_authed') === '1'; } catch {}
-    if (!ok) { router.replace('/login'); setAuthed(false); }
-    else { setAuthed(true); API.auth.me().then(setSession).catch(() => {}); }
+    if (!ok) { router.replace('/login'); setAuthed(false); return; }
+    setAuthed(true);
+    API.auth.me().then(setSession).catch(() => {});
   }, [router]);
+
+  // Enabled modules drive which nav items show. Reloads when a module is
+  // toggled (the Plan & Modules screen dispatches 'bz:modules-changed').
+  React.useEffect(() => {
+    if (authed !== true) return;
+    const load = () => {
+      if (!(API.config?.isReal?.())) { setEnabledMods('all'); return; }
+      API.module.list()
+        .then((ms: any) => setEnabledMods(new Set((ms || []).filter((m: any) => m.enabled).map((m: any) => m.key))))
+        .catch(() => setEnabledMods('all'));   // fail open — never strand the user with an empty sidebar
+    };
+    load();
+    if (typeof window === 'undefined') return;
+    window.addEventListener('bz:modules-changed', load);
+    return () => window.removeEventListener('bz:modules-changed', load);
+  }, [authed]);
 
   const [tweaks, setTweaks] = React.useState<any>(() => {
     if (typeof window === 'undefined') return TWEAK_DEFAULTS;
@@ -400,11 +437,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <>
               {drawerOpen && <div onClick={() => setDrawerOpen(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(8,12,20,0.5)', backdropFilter: 'blur(2px)', zIndex: 60 } as React.CSSProperties} />}
               <div style={{ position: 'fixed', top: 0, bottom: 0, left: 0, zIndex: 70, transform: drawerOpen ? 'none' : 'translateX(-100%)', transition: 'transform .24s cubic-bezier(.4,0,.2,1)', boxShadow: drawerOpen ? '8px 0 30px rgba(0,0,0,0.3)' : 'none' } as React.CSSProperties}>
-                <Sidebar T={T} screen={active} setScreen={go} collapsed={false} setCollapsed={() => {}} onLogout={logout} onLock={() => setLocked(true)} mobile />
+                <Sidebar T={T} screen={active} setScreen={go} collapsed={false} setCollapsed={() => {}} onLogout={logout} onLock={() => setLocked(true)} enabledMods={enabledMods} mobile />
               </div>
             </>
           ) : (
-            <Sidebar T={T} screen={active} setScreen={go} collapsed={collapsed} setCollapsed={setCollapsed} onLogout={logout} onLock={() => setLocked(true)} />
+            <Sidebar T={T} screen={active} setScreen={go} collapsed={collapsed} setCollapsed={setCollapsed} onLogout={logout} onLock={() => setLocked(true)} enabledMods={enabledMods} />
           )}
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>{children}</div>
           {/* Dev/debug overlay — only in mock mode; hidden in the real (production) build. */}
