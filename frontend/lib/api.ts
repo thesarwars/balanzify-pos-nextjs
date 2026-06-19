@@ -2241,6 +2241,17 @@ function adaptRealCoupon(c: any): any {
     valid_until: c.validUntil ? String(c.validUntil).slice(0, 10) : '', is_active: c.isActive,
   };
 }
+function adaptRealTask(t: any): any {
+  if (!t) return t;
+  return {
+    id: t.id, title: t.title, description: t.description || '',
+    status: t.status, priority: t.priority, category: t.category,
+    due_date: t.dueDate ? String(t.dueDate).slice(0, 10) : '',
+    assignee: (t.assignee && t.assignee.name) || '', assignee_id: t.assigneeId || null,
+    project_id: t.projectId || null, project_name: (t.project && t.project.name) || '',
+    _real: t,
+  };
+}
 function adaptRealWholesaleOrder(o: any): any {
   if (!o) return o;
   return {
@@ -2796,6 +2807,13 @@ const API: any = {
     async milestones(pid: any) { if (REAL_MODE) { const r = await realReq('GET', '/construction/' + pid + '/milestones'); return (r && r.milestones) || []; } return []; },
     async addMilestone(pid: any, body: any) { if (REAL_MODE) return await realReq('POST', '/construction/' + pid + '/milestones', { body }); throw new ApiError(501, 'Construction needs the live backend.'); },
     async setMilestoneStatus(msId: any, status: any) { if (REAL_MODE) return await realReq('PUT', '/construction/milestones/' + msId + '/status', { body: { status } }); throw new ApiError(501, 'Construction needs the live backend.'); },
+  },
+
+  // Tasks (/api/v1/tasks) — used by the Construction per-project task board.
+  task: {
+    async list(params: any = {}) { if (REAL_MODE) { const r = await realReq('GET', '/tasks', { query: params }); return ((r && r.tasks) || []).map(adaptRealTask); } return []; },
+    async create(body: any) { if (REAL_MODE) return adaptRealTask(await realReq('POST', '/tasks', { body })); throw new ApiError(501, 'Tasks need the live backend.'); },
+    async update(id: any, body: any) { if (REAL_MODE) return adaptRealTask(await realReq('PUT', '/tasks/' + id, { body })); throw new ApiError(501, 'Tasks need the live backend.'); },
   },
 
   // Receipts (/api/v1/checkout) — real backend only; mock mode is a no-op.

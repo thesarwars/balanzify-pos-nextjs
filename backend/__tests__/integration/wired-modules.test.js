@@ -555,6 +555,19 @@ describe('construction (job costing)', () => {
     list = (await request(app).get(`/api/v1/construction/${pid}/milestones`).set(auth(token))).body.milestones;
     expect(list[0].billable_now).toBe(1900); // 2000 * (1 - 0.05)
   });
+
+  test('per-project tasks: create scoped to the project, advance status', async () => {
+    const created = await request(app).post('/api/v1/tasks').set(auth(token)).send({ title: 'Order rebar', priority: 'high', status: 'not_started', due_date: '2026-07-10', project_id: pid });
+    expect(created.status).toBe(201);
+    // scoped list returns it
+    const list = await request(app).get('/api/v1/tasks').set(auth(token)).query({ project_id: pid });
+    expect(list.status).toBe(200);
+    expect(list.body.tasks.find(t => t.id === created.body.id)).toBeTruthy();
+    // advance status
+    const upd = await request(app).put(`/api/v1/tasks/${created.body.id}`).set(auth(token)).send({ status: 'completed' });
+    expect(upd.status).toBe(200);
+    expect(upd.body.status).toBe('completed');
+  });
 });
 
 describe('wholesale', () => {
