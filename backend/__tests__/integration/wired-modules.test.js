@@ -919,6 +919,39 @@ describe('lending — underwriting from the ledger', () => {
     expect(tb.totals.balanced).toBe(true);
     expect(tb.accounts.find(a => a.code === '2200')?.balance || 0).toBeCloseTo(0, 2); // fully repaid
   });
+
+  test('auto-collection credits the mobile-money account; health reports progress', async () => {
+    const token = await register();
+    const loc = await location(token);
+    const prod = await stockedProduct(token, loc, 20, 1000);
+    expect((await makeSale(token, loc, prod, { qty: 300, price: 20 })).status).toBe(201); // qualify
+
+    const offer = (await request(app).post('/api/v1/lending/offer').set(auth(token)).send({ principal: 1000, collection_rate: 0.5 })).body;
+    expect((await request(app).post(`/api/v1/lending/advances/${offer.id}/disburse`).set(auth(token))).status).toBe(200);
+
+    // A mobile-money (Zaad) sale of 400 → auto-collect 200, credited to Mobile Money (1010), not Cash
+    const ik = (await request(app).post('/api/v1/sales/initiate').set(auth(token))).body.idempotency_key;
+    const sale = await request(app).post('/api/v1/sales').set(auth(token)).send({
+      idempotency_key: ik, items: [{ product_id: prod, quantity: 20, override_price: 20 }],
+      location_id: loc, payment_method: 'zaad',
+    });
+    expect(sale.status).toBe(201);
+
+    const repayJournal = await prisma.journalEntry.findFirst({
+      where: { sourceType: 'financing_repayment', businessId: sale.body.businessId },
+      include: { lines: { include: { account: true } } }, orderBy: { createdAt: 'desc' },
+    });
+    const by = {};
+    for (const l of repayJournal.lines) by[l.account.code] = l;
+    expect(parseFloat(by['1010'].credit)).toBeCloseTo(200, 2); // Mobile Money, not Cash
+    expect(parseFloat(by['2200'].debit)).toBeCloseTo(200, 2);
+
+    // Health endpoint reports repayment progress + a current re-score
+    const h = (await request(app).get(`/api/v1/lending/advances/${offer.id}/health`).set(auth(token))).body;
+    expect(h.outstanding).toBeCloseTo(860, 2);
+    expect(['on_track', 'behind', 'at_risk', 'settled']).toContain(h.repayment_status);
+    expect(typeof h.current_score).toBe('number');
+  });
 });
 
 describe('pharmacy prescriptions & controlled substances', () => {
