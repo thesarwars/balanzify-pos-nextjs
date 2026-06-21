@@ -278,6 +278,8 @@ model Business {
   prescriptions      Prescription[]
   dispenseRecords    DispenseRecord[]
   financingAdvances  FinancingAdvance[]
+  eightySixes        EightySix[]
+  tableReservations  TableReservation[]
   supplierCatalogs   SupplierCatalog[]
   scheduledReports   ScheduledReport[]
   whatsappLogs       WhatsappLog[]
@@ -936,6 +938,7 @@ model User {
   restaurantOrders         RestaurantOrder[]       @relation("order_staff")
 
   lostFoundFound  LostFound[]  @relation("lost_found_finder")
+  waitedTables    RestaurantTable[] @relation("table_waiter")
 
   @@map("users")
 }
@@ -1074,6 +1077,7 @@ model Product {
   recipeUses         RecipeItem[]           @relation("ingredient_recipe_items")
   prescriptions      Prescription[]         @relation("prescription_drug")
   dispenseRecords    DispenseRecord[]       @relation("dispense_drug")
+  eightySixes        EightySix[]            @relation("product_86")
 
   wholesaleOrderItems WholesaleOrderItem[] @relation("wholesale_item_product")
   @@index([businessId])
@@ -2231,6 +2235,47 @@ model FinancingRepayment {
   @@map("financing_repayments")
 }
 
+// ── Restaurant: proper records (replacing string-hacks on table.name) ───────
+// 86 = a menu item marked unavailable for a given day (optionally per location),
+// instead of globally toggling product.isActive.
+model EightySix {
+  id          String   @id @default(uuid()) @db.Uuid
+  businessId  String   @map("business_id") @db.Uuid
+  productId   String   @map("product_id") @db.Uuid
+  locationId  String?  @map("location_id") @db.Uuid // null = all locations
+  date        DateTime @db.Date
+  reason      String?
+  createdById String?  @map("created_by") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  product  Product  @relation("product_86", fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, date])
+  @@index([businessId, date])
+  @@map("eighty_six")
+}
+
+model TableReservation {
+  id          String   @id @default(uuid()) @db.Uuid
+  businessId  String   @map("business_id") @db.Uuid
+  tableId     String?  @map("table_id") @db.Uuid
+  guestName   String   @map("guest_name") @db.VarChar(255)
+  guestPhone  String?  @map("guest_phone") @db.VarChar(50)
+  reservedAt  DateTime @map("reserved_at") // date + time of the booking
+  covers      Int      @default(1)
+  status      String   @default("booked") @db.VarChar(20) // booked | seated | cancelled | no_show
+  notes       String?
+  createdById String?  @map("created_by") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  business Business         @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  table    RestaurantTable? @relation(fields: [tableId], references: [id], onDelete: SetNull)
+
+  @@index([businessId, reservedAt])
+  @@map("table_reservations")
+}
+
 // ── General Ledger (the accounting spine) ───────────────────────────────────
 // Every vertical's money posts here as balanced double-entry journals, giving
 // one set of books across all of an owner's businesses + the cashflow data the
@@ -2926,12 +2971,15 @@ model RestaurantTable {
   section      String?     @db.VarChar(50) // "Indoor", "Terrace", "Bar"
   status       TableStatus @default(available)
   mergedWithId String?     @map("merged_with_id") @db.Uuid
+  waiterId     String?     @map("waiter_id") @db.Uuid // assigned server
   isActive     Boolean     @default(true) @map("is_active")
   sortOrder    Int         @default(0) @map("sort_order")
   createdAt    DateTime    @default(now()) @map("created_at")
 
-  business Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  orders   RestaurantOrder[]
+  business     Business           @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  waiter       User?              @relation("table_waiter", fields: [waiterId], references: [id])
+  orders       RestaurantOrder[]
+  reservations TableReservation[]
 
   @@unique([businessId, number])
   @@index([businessId, status])
