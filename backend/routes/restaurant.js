@@ -354,6 +354,11 @@ router.post('/orders/:id/items', auth, validate(z.object({
     const product = await prisma.product.findUnique({ where: { id: productId }, select: { sellingPrice: true, name: true } });
     if (!product) return res.status(404).json({ error: 'Product not found.' });
 
+    // Reject items that are 86'd (marked unavailable) today.
+    const today = new Date(new Date().toISOString().slice(0, 10));
+    const eightySixed = await prisma.eightySix.findFirst({ where: { productId, date: today } });
+    if (eightySixed) return res.status(400).json({ error: `${product.name} is 86'd (unavailable) today.`, code: 'ITEM_86' });
+
     // Get variant price if applicable
     let unitPrice = parseFloat(product.sellingPrice);
     if (variantId) {
@@ -1153,45 +1158,50 @@ router.put('/tables/:id/waiter', auth, validate(z.object({
   waiter_id: uuid.optional().nullable(),
 })), async (req, res, next) => {
   try {
-    // Store waiter assignment in table notes for now
-    // (a dedicated waiter_id field on RestaurantTable would be a schema addition)
-    await prisma.restaurantTable.updateMany({
+    // If assigning, the waiter must be a user in this business.
+    if (req.body.waiter_id) {
+      const u = await prisma.user.findFirst({ where: { id: req.body.waiter_id, businessId: req.user.business_id }, select: { id: true } });
+      if (!u) return res.status(400).json({ error: 'Waiter not found.' });
+    }
+    const r = await prisma.restaurantTable.updateMany({
       where: { id: req.params.id, businessId: req.user.business_id },
-      data: { name: req.body.waiter_id ? `waiter:${req.body.waiter_id}` : null },
+      data: { waiterId: req.body.waiter_id || null },
     });
-    res.json({ message: 'Waiter assigned.' });
+    if (!r.count) return res.status(404).json({ error: 'Table not found.' });
+    res.json({ message: req.body.waiter_id ? 'Waiter assigned.' : 'Waiter cleared.' });
   } catch (err) { next(err); }
 });
 
-// ── 86 ITEM (mark out of stock on menu) ───────────────────────────
-// Quick way to mark a menu item unavailable for today
+// ── 86 ITEM (mark a menu item unavailable for the day) ────────────
+// Per-day availability (optionally per location) — does NOT deactivate the
+// product globally; it auto-clears the next day.
 
-router.post('/products/:id/86', auth, async (req, res, next) => {
+router.post('/products/:id/86', auth, validate(z.object({
+  available:   z.boolean().optional(), // false (or omitted) = 86 it; true = un-86
+  location_id: uuid.optional().nullable(),
+  reason:      z.string().max(255).optional().nullable(),
+})), async (req, res, next) => {
   try {
-    // Toggle isActive on the product for this business
-    const product = await prisma.product.findFirst({
-      where: { id: req.params.id, businessId: req.user.business_id },
-      select: { isActive: true, name: true },
-    });
+    const product = await prisma.product.findFirst({ where: { id: req.params.id, businessId: req.user.business_id }, select: { id: true, name: true } });
     if (!product) return res.status(404).json({ error: 'Product not found.' });
 
-    const newStatus = req.body.available !== undefined ? req.body.available : !product.isActive;
-    await prisma.product.update({ where: { id: req.params.id }, data: { isActive: newStatus } });
+    const today = new Date(new Date().toISOString().slice(0, 10));
+    const make86 = req.body.available === undefined ? true : !req.body.available;
 
-    // Notify kitchen via a system ticket
-    if (!newStatus) {
+    if (make86) {
+      await prisma.eightySix.upsert({
+        where:  { productId_date: { productId: product.id, date: today } },
+        update: { reason: req.body.reason || null, locationId: req.body.location_id || null },
+        create: { businessId: req.user.business_id, productId: product.id, locationId: req.body.location_id || null, date: today, reason: req.body.reason || null, createdById: req.user.id },
+      });
       await prisma.kitchenTicket.create({
-        data: {
-          businessId: req.user.business_id,
-          orderId:    req.body.order_id || null,
-          course:     0,
-          status:     'pending',
-          items:      JSON.stringify([{ name: `86: ${product.name} — OUT OF STOCK`, quantity: 0, notes: "Item marked unavailable", modifiers: [] }]),
-        },
-      }).catch(() => {}); // Non-critical
+        data: { businessId: req.user.business_id, orderId: req.body.order_id || null, course: 0, status: 'pending',
+          items: JSON.stringify([{ name: `86: ${product.name} — OUT OF STOCK`, quantity: 0, notes: 'Item marked unavailable today', modifiers: [] }]) },
+      }).catch(() => {});
+    } else {
+      await prisma.eightySix.deleteMany({ where: { productId: product.id, date: today } });
     }
-
-    res.json({ message: `${product.name} marked ${newStatus ? "available" : "unavailable (86d)"}`, available: newStatus });
+    res.json({ message: `${product.name} marked ${make86 ? 'unavailable (86d) for today' : 'available'}`, available: !make86 });
   } catch (err) { next(err); }
 });
 
@@ -1327,12 +1337,19 @@ router.post('/table-reservations', auth, validate(z.object({
     });
     if (!table) return res.status(404).json({ error: 'Table not found.' });
 
-    // Store as a reserved table with notes containing booking details
-    const reservationNote = `BOOKED: ${req.body.guest_name} | ${req.body.guest_phone} | ${req.body.date} ${req.body.time} | ${req.body.covers} covers${req.body.notes ? ` | ${req.body.notes}` : ''}`;
-
-    await prisma.restaurantTable.update({
-      where: { id: req.body.table_id },
-      data: { status: 'reserved', name: reservationNote },
+    // Create a real reservation record (does NOT clobber the table's name).
+    const reservedAt = new Date(`${req.body.date}T${req.body.time}:00`);
+    const reservation = await prisma.tableReservation.create({
+      data: {
+        businessId: req.user.business_id,
+        tableId:    req.body.table_id,
+        guestName:  req.body.guest_name,
+        guestPhone: req.body.guest_phone,
+        reservedAt,
+        covers:     req.body.covers,
+        notes:      req.body.notes || null,
+        createdById: req.user.id,
+      },
     });
 
     // Notify via WhatsApp if business has a phone
@@ -1364,10 +1381,38 @@ We look forward to seeing you!`;
     });
 
     res.status(201).json({
-      message:   'Table reserved.',
-      table:     table.number,
-      wa_url:    `https://wa.me/${guestPhone}?text=${encodeURIComponent(msg)}`,
+      message:        'Table reserved.',
+      reservation_id: reservation.id,
+      table:          table.number,
+      wa_url:         `https://wa.me/${guestPhone}?text=${encodeURIComponent(msg)}`,
     });
+  } catch (err) { next(err); }
+});
+
+// List table reservations (optionally filter by date).
+router.get('/table-reservations', auth, async (req, res, next) => {
+  try {
+    const where = { businessId: req.user.business_id };
+    if (req.query.date) {
+      const d = new Date(`${req.query.date}T00:00:00`);
+      where.reservedAt = { gte: d, lt: new Date(d.getTime() + 86400000) };
+    }
+    const reservations = await prisma.tableReservation.findMany({
+      where, include: { table: { select: { number: true } } }, orderBy: { reservedAt: 'asc' }, take: 200,
+    });
+    res.json({ reservations });
+  } catch (err) { next(err); }
+});
+
+// List items 86'd (unavailable) today.
+router.get('/eighty-six', auth, async (req, res, next) => {
+  try {
+    const today = new Date(new Date().toISOString().slice(0, 10));
+    const items = await prisma.eightySix.findMany({
+      where: { businessId: req.user.business_id, date: today },
+      include: { product: { select: { name: true } } },
+    });
+    res.json({ items: items.map(i => ({ product_id: i.productId, name: i.product.name, location_id: i.locationId, reason: i.reason })) });
   } catch (err) { next(err); }
 });
 
