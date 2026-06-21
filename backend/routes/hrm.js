@@ -56,10 +56,12 @@ async function employeeSales(businessId, userId, pct) {
 router.get('/summary', auth, async (req, res, next) => {
   try {
     const businessId = req.user.business_id;
+    const settings = await loadSettings(businessId);
+    const today = new Date(tzParts(settings.timezone).date);
     const [employees, onLeave, present, pendingLeave, openTodos, payroll] = await Promise.all([
       prisma.employee.count({ where: { businessId } }),
       prisma.employee.count({ where: { businessId, status: 'on_leave' } }),
-      prisma.attendance.count({ where: { businessId, date: new Date(serverDate()), clockIn: { not: null } } }),
+      prisma.attendance.count({ where: { businessId, date: today, clockIn: { not: null } } }),
       prisma.leave.count({ where: { businessId, status: 'pending' } }),
       prisma.hrTodo.count({ where: { businessId, status: 'pending' } }),
       prisma.payroll.aggregate({ where: { businessId, status: 'paid' }, _sum: { net: true } }),
@@ -246,19 +248,36 @@ const hm2min = (hm) => { const [h, m] = String(hm || '0:0').split(':').map(Numbe
 const pad2 = (n) => String(n).padStart(2, '0');
 function serverNowHM() { const d = new Date(); return pad2(d.getHours()) + ':' + pad2(d.getMinutes()); }
 function serverDate() { const d = new Date(); return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; }
+// Wall-clock date + HH:MM in the business's timezone. The container runs UTC,
+// but African markets (Somaliland/Somalia/Kenya/Ethiopia) are EAT (UTC+3), so a
+// 09:00 clock-in must record 09:00 — not 06:00. Falls back to server time.
+function tzParts(tz) {
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz || 'Africa/Nairobi', year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hour12: false,
+    }).formatToParts(new Date());
+    const g = (t) => parts.find(p => p.type === t)?.value;
+    let hh = g('hour'); if (hh === '24') hh = '00';
+    return { date: `${g('year')}-${g('month')}-${g('day')}`, hm: `${hh}:${g('minute')}` };
+  } catch { return { date: serverDate(), hm: serverNowHM() }; }
+}
 const hoursLabel = (h) => h > 0 ? `${Math.floor(h)}h ${Math.round((h % 1) * 60)}m` : '—';
 
-function decorateAtt(rec, empName) {
+function decorateAtt(rec, empName, nowHM = serverNowHM()) {
   const breaks = Array.isArray(rec.breaks) ? rec.breaks : [];
   let breakMin = 0, onBreak = false, openStart = null;
   for (const b of breaks) { if (b.end) breakMin += hm2min(b.end) - hm2min(b.start); else { onBreak = true; openStart = b.start; } }
   let hours = 0, status = rec.status;
+  // Span in minutes from clock-in to `end`, treating an end-before-start as an
+  // overnight shift that wrapped past midnight (e.g. 22:00 → 06:00 = 8h, not 0).
+  const spanMin = (start, end) => { let d = hm2min(end) - hm2min(start); if (d < 0) d += 1440; return d; };
   if (rec.clockIn && !rec.clockOut) {
-    const end = onBreak ? openStart : serverNowHM();
-    hours = Math.max(0, (hm2min(end) - hm2min(rec.clockIn) - breakMin) / 60);
+    const end = onBreak ? openStart : nowHM;
+    hours = Math.max(0, (spanMin(rec.clockIn, end) - breakMin) / 60);
     status = onBreak ? 'on break' : 'running';
   } else if (rec.clockIn && rec.clockOut) {
-    hours = Math.max(0, (hm2min(rec.clockOut) - hm2min(rec.clockIn) - breakMin) / 60);
+    hours = Math.max(0, (spanMin(rec.clockIn, rec.clockOut) - breakMin) / 60);
   }
   return {
     id: rec.id, employee_id: rec.employeeId, employee_name: empName,
@@ -269,10 +288,10 @@ function decorateAtt(rec, empName) {
   };
 }
 
-async function clockStatusFor(businessId, employeeId, at) {
+async function clockStatusFor(businessId, employeeId, at, settings) {
   const sh = await prisma.employeeShift.findUnique({ where: { employeeId } });
   if (sh && sh.type === 'flexible') return 'present';
-  const s = await loadSettings(businessId);
+  const s = settings || await loadSettings(businessId);
   return hm2min(at) > hm2min(s.workStart) + s.graceMinutes ? 'late' : 'present';
 }
 
@@ -292,12 +311,14 @@ router.post('/attendance/clock', auth, validate(AttendanceClockSchema), async (r
     const businessId = req.user.business_id;
     const emp = await prisma.employee.findFirst({ where: { id: req.body.employee_id, businessId }, select: { id: true, name: true } });
     if (!emp) return res.status(404).json({ title: 'Employee not found', status: 404 });
-    const at = req.body.at || serverNowHM();
-    const date = new Date(req.body.date || serverDate());
+    const settings = await loadSettings(businessId);
+    const tp = tzParts(settings.timezone);
+    const at = req.body.at || tp.hm;
+    const date = new Date(req.body.date || tp.date);
     const existing = await prisma.attendance.findUnique({ where: { employeeId_date: { employeeId: emp.id, date } } });
     let rec;
     if (!existing || (!existing.clockIn)) {
-      const status = await clockStatusFor(businessId, emp.id, at);
+      const status = await clockStatusFor(businessId, emp.id, at, settings);
       rec = existing
         ? await prisma.attendance.update({ where: { id: existing.id }, data: { clockIn: at, status } })
         : await prisma.attendance.create({ data: { businessId, employeeId: emp.id, date, clockIn: at, status } });
@@ -306,7 +327,7 @@ router.post('/attendance/clock', auth, validate(AttendanceClockSchema), async (r
     } else {
       rec = existing;
     }
-    res.json(decorateAtt(rec, emp.name));
+    res.json(decorateAtt(rec, emp.name, tp.hm));
   } catch (err) { next(err); }
 });
 
@@ -315,22 +336,25 @@ router.post('/attendance/break', auth, validate(AttendanceClockSchema), async (r
     const businessId = req.user.business_id;
     const emp = await prisma.employee.findFirst({ where: { id: req.body.employee_id, businessId }, select: { id: true, name: true } });
     if (!emp) return res.status(404).json({ title: 'Employee not found', status: 404 });
-    const at = req.body.at || serverNowHM();
-    const date = new Date(req.body.date || serverDate());
+    const settings = await loadSettings(businessId);
+    const tp = tzParts(settings.timezone);
+    const at = req.body.at || tp.hm;
+    const date = new Date(req.body.date || tp.date);
     const rec = await prisma.attendance.findUnique({ where: { employeeId_date: { employeeId: emp.id, date } } });
     if (!rec || !rec.clockIn || rec.clockOut) return res.status(400).json({ title: 'Employee must be clocked in', status: 400 });
     const breaks = Array.isArray(rec.breaks) ? rec.breaks : [];
     const open = breaks.find(b => !b.end);
     if (open) open.end = at; else breaks.push({ start: at, end: '' });
     const updated = await prisma.attendance.update({ where: { id: rec.id }, data: { breaks } });
-    res.json(decorateAtt(updated, emp.name));
+    res.json(decorateAtt(updated, emp.name, tp.hm));
   } catch (err) { next(err); }
 });
 
 router.post('/attendance/auto-absent', auth, requireRole('owner', 'manager'), async (req, res, next) => {
   try {
     const businessId = req.user.business_id;
-    const date = new Date(req.body.date || serverDate());
+    const settings = await loadSettings(businessId);
+    const date = new Date(req.body.date || tzParts(settings.timezone).date);
     const [emps, present, shifts] = await Promise.all([
       prisma.employee.findMany({ where: { businessId, status: 'active' }, select: { id: true } }),
       prisma.attendance.findMany({ where: { businessId, date }, select: { employeeId: true } }),
@@ -420,10 +444,15 @@ async function ensureLeaveTypeDefaults(businessId) {
   await prisma.leaveType.createMany({ data: DEFAULT_LEAVE_TYPES.map(t => ({ businessId, ...t })), skipDuplicates: true });
 }
 
+// Completed months of service. Accrual is earned per FULL month worked — a new
+// hire on day one has earned nothing yet, not a whole month's leave. Employees
+// with no recorded join date keep a full year's entitlement (legacy default).
 function monthsWorked(joinedAt) {
   if (!joinedAt) return 12;
   const now = new Date(), j = new Date(joinedAt);
-  return Math.max(1, (now.getFullYear() - j.getFullYear()) * 12 + (now.getMonth() - j.getMonth()) + 1);
+  let m = (now.getFullYear() - j.getFullYear()) * 12 + (now.getMonth() - j.getMonth());
+  if (now.getDate() < j.getDate()) m -= 1; // monthly anniversary not yet reached
+  return Math.max(0, Math.min(12, m));
 }
 // Balances for one employee given the type catalog, their leaves, and overrides.
 function computeBalances(emp, types, leaves, overrideMap) {
@@ -714,15 +743,20 @@ router.post('/advance', auth, requireRole('owner', 'manager'), validate(HrAdvanc
     const emp = await prisma.employee.findFirst({ where: { id: b.employee_id, businessId } });
     if (!emp) return res.status(404).json({ title: 'Employee not found', status: 404 });
     const advance = await prisma.$transaction(async (tx) => {
+      let method = 'cash';
       if (b.account_id) {
         const acc = await tx.paymentAccount.findFirst({ where: { id: b.account_id, businessId } });
         if (!acc) throw Object.assign(new Error('Account not found'), { status: 404 });
+        method = String(acc.type || 'cash').toLowerCase().replace(/\s+/g, '_');
         await tx.paymentAccount.update({ where: { id: b.account_id }, data: { balance: { decrement: b.amount } } });
       }
-      return tx.hrAdvance.create({
+      const adv = await tx.hrAdvance.create({
         data: { businessId, employeeId: emp.id, amount: b.amount, advanceDate: new Date(b.date || serverDate()), accountId: b.account_id || null, note: b.note || null, outstanding: b.amount },
         include: advanceInclude,
       });
+      // GL: a salary advance is a receivable funded out of the chosen account.
+      await accounting.postAdvance(tx, { businessId, amount: b.amount, method, sourceId: adv.id, createdById: req.user.id });
+      return adv;
     });
     res.status(201).json(serializeAdvance(advance));
   } catch (err) { if (err.status === 404) return res.status(404).json({ title: err.message, status: 404 }); next(err); }
@@ -813,7 +847,7 @@ router.post('/payroll', auth, requireRole('owner', 'manager'), validate(PayrollS
       });
       // GL: gross wages expensed, net paid in cash, deductions withheld as payable.
       const gross = b.basic + b.allowance + b.overtime + b.bonus + b.incentive;
-      await accounting.postPayroll(tx, { businessId, gross, net, deduction: b.deduction, sourceId: created.id, createdById: req.user.id });
+      await accounting.postPayroll(tx, { businessId, gross, net, deduction: b.deduction, advanceRecovered: +recovered.toFixed(2), sourceId: created.id, createdById: req.user.id });
       return created;
     });
     res.status(201).json(serializePayroll(payroll));

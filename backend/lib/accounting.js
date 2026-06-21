@@ -21,6 +21,7 @@ const CHART = [
   { code: '1010', name: 'Mobile Money',        type: 'asset',     normal: 'debit'  },
   { code: '1020', name: 'Bank / Card',         type: 'asset',     normal: 'debit'  },
   { code: '1100', name: 'Accounts Receivable', type: 'asset',     normal: 'debit'  },
+  { code: '1110', name: 'Employee Advances',   type: 'asset',     normal: 'debit'  },
   { code: '1200', name: 'Inventory',           type: 'asset',     normal: 'debit'  },
   { code: '2000', name: 'Accounts Payable',    type: 'liability', normal: 'credit' },
   { code: '2100', name: 'Tax Payable',         type: 'liability', normal: 'credit' },
@@ -49,8 +50,9 @@ function tenderAccountCode(method) {
 const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 
 async function ensureChart(tx, businessId) {
-  const count = await tx.account.count({ where: { businessId } });
-  if (count > 0) return;
+  // Idempotent: seeds the chart on first posting AND backfills any system
+  // accounts added in later releases (e.g. Employee Advances) for businesses
+  // whose chart predates them. Relies on the @@unique([businessId, code]).
   await tx.account.createMany({
     data: CHART.map(a => ({ businessId, code: a.code, name: a.name, type: a.type, normalBalance: a.normal, isSystem: true })),
     skipDuplicates: true,
@@ -162,16 +164,39 @@ async function postFolioPayment(tx, { businessId, method, amount, sourceId, crea
 }
 
 /**
- * Payroll: gross wages are an expense; net is paid in cash and the balance is
- * withheld (taxes/recoveries) as a payable. gross = net + deduction.
+ * A salary advance is a loan to the employee: an asset (we expect it back), not
+ * an expense. Cash goes out, an Employee Advances receivable goes up. It is
+ * cleared later out of payroll (see postPayroll's advanceRecovered).
  */
-async function postPayroll(tx, { businessId, gross, net, deduction, sourceId, createdById }) {
+async function postAdvance(tx, { businessId, amount, method = 'cash', sourceId, createdById }) {
+  const amt = round2(amount);
+  if (amt <= 0) return null;
+  return postJournal(tx, {
+    businessId, description: 'Salary advance', sourceType: 'hr_advance', sourceId, createdById,
+    lines: [
+      { code: '1110', debit: amt, credit: 0, description: 'Employee advance (receivable)' },
+      { code: tenderAccountCode(method), debit: 0, credit: amt, description: 'Advance paid out' },
+    ],
+  });
+}
+
+/**
+ * Payroll: gross wages are an expense; net is paid in cash and the balance is
+ * withheld as a payable. The deduction splits two ways — the part that recovers
+ * an outstanding advance CLEARS the Employee Advances receivable (it is not a
+ * new liability), and only the remainder is a genuine withholding payable.
+ *   gross = net + deduction;  deduction = advanceRecovered + withholding.
+ */
+async function postPayroll(tx, { businessId, gross, net, deduction, advanceRecovered = 0, sourceId, createdById }) {
+  const recovered   = round2(advanceRecovered);
+  const withholding = round2(round2(deduction) - recovered);
   return postJournal(tx, {
     businessId, description: 'Payroll', sourceType: 'payroll', sourceId, createdById,
     lines: [
       { code: '5100', debit: round2(gross), credit: 0, description: 'Salaries & wages' },
       { code: '1000', debit: 0, credit: round2(net), description: 'Net pay' },
-      { code: '2100', debit: 0, credit: round2(deduction), description: 'Payroll deductions' },
+      { code: '1110', debit: 0, credit: recovered,   description: 'Advance recovered' },
+      { code: '2100', debit: 0, credit: withholding, description: 'Payroll withholding' },
     ],
   });
 }
@@ -215,4 +240,4 @@ async function accountBalances(businessId, { from, to } = {}) {
   });
 }
 
-module.exports = { CHART, ensureChart, postJournal, postSale, postFolioCharge, postFolioPayment, postPayroll, postExpense, accountBalances, tenderAccountCode, round2 };
+module.exports = { CHART, ensureChart, postJournal, postSale, postFolioCharge, postFolioPayment, postAdvance, postPayroll, postExpense, accountBalances, tenderAccountCode, round2 };
