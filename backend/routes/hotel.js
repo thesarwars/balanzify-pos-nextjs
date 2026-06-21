@@ -477,6 +477,10 @@ router.post('/reservations/:id/checkin', auth, validate(z.object({
     });
     if (!reservation) return res.status(404).json({ error: 'Confirmed reservation not found.' });
 
+    // Honour the property's auto-post setting (defaults to on).
+    const hotelSettings = await prisma.hotelSettings.findUnique({ where: { businessId: req.user.business_id } });
+    const autoPostRoom = hotelSettings ? hotelSettings.autoPostRoomCharges !== false : true;
+
     await prisma.$transaction(async (tx) => {
       // Update reservation status
       await tx.reservation.update({
@@ -488,7 +492,7 @@ router.post('/reservations/:id/checkin', auth, validate(z.object({
       await tx.room.update({ where: { id: reservation.roomId }, data: { status: 'occupied' } });
 
       // Create folio
-      await tx.folio.create({
+      const folio = await tx.folio.create({
         data: {
           businessId:    req.user.business_id,
           folioNumber:   folioNumber(),
@@ -497,6 +501,52 @@ router.post('/reservations/:id/checkin', auth, validate(z.object({
           currency:      reservation.currency,
         },
       });
+
+      // Post the room-night charge to the folio. Without this the folio stays
+      // empty, room revenue reports as 0, and checkout never enforces a balance.
+      const rate   = parseFloat(reservation.ratePerNight || 0);
+      const nights = reservation.nights || 1;
+      const roomTotal = parseFloat((rate * nights).toFixed(2));
+      if (autoPostRoom && roomTotal > 0) {
+        await tx.folioCharge.create({
+          data: {
+            folioId:     folio.id,
+            businessId:  req.user.business_id,
+            type:        'room_night',
+            description: `Room charge — ${nights} night(s) @ ${reservation.currency} ${rate.toFixed(2)}`,
+            quantity:    nights,
+            unitAmount:  rate,
+            totalAmount: roomTotal,
+            currency:    reservation.currency,
+            chargeDate:  reservation.checkInDate,
+          },
+        });
+        await tx.folio.update({
+          where: { id: folio.id },
+          data:  { totalCharges: { increment: roomTotal }, balance: { increment: roomTotal } },
+        });
+      }
+
+      // Carry any pre-paid deposit onto the folio as a payment, so the guest
+      // isn't billed again for money already collected at reservation time.
+      const deposit = parseFloat(reservation.depositPaid || 0);
+      if (deposit > 0) {
+        await tx.folioPayment.create({
+          data: {
+            folioId:      folio.id,
+            businessId:   req.user.business_id,
+            provider:     'deposit',
+            amount:       deposit,
+            currency:     reservation.currency,
+            notes:        'Reservation deposit carried to folio',
+            receivedById: req.user.id,
+          },
+        });
+        await tx.folio.update({
+          where: { id: folio.id },
+          data:  { totalPayments: { increment: deposit }, balance: { decrement: deposit } },
+        });
+      }
     });
 
     // Send WhatsApp welcome if guest has whatsapp (non-blocking)
@@ -525,6 +575,7 @@ router.post('/reservations/:id/checkout', auth, validate(z.object({
   actual_check_out:   z.string().optional().nullable(),
   settlement_method:  z.string().max(50).optional().default('cash'),
   notes:              z.string().max(500).optional().nullable(),
+  force_checkout:     z.boolean().optional().default(false),
 })), async (req, res, next) => {
   try {
     const reservation = await prisma.reservation.findFirst({
