@@ -567,6 +567,18 @@ describe('hotel (PMS)', () => {
 
     // settled → checkout succeeds
     expect((await request(app).post(`/api/v1/hotel/reservations/${resId}/checkout`).set(auth(token))).status).toBe(200);
+
+    // GL: folio charges + payment posted to the one set of books, and it balances.
+    // (This hotel business is all-cash and fully settled, so AR nets to 0 and the
+    // cash taken equals the revenue booked.)
+    const tb = (await request(app).get('/api/v1/accounting/trial-balance').set(auth(token))).body;
+    expect(tb.totals.balanced).toBe(true);
+    const rev  = tb.accounts.find(a => a.code === '4000').balance;
+    const cash = tb.accounts.find(a => a.code === '1000').balance;
+    const ar   = tb.accounts.find(a => a.code === '1100').balance;
+    expect(ar).toBeCloseTo(0, 2);        // receivables fully settled
+    expect(rev).toBeGreaterThanOrEqual(110); // at least this folio's charges booked
+    expect(cash).toBeCloseTo(rev, 2);    // all-cash business: cash in == revenue
   });
 
   test('corporate account: create + list + month-end invoice', async () => {
