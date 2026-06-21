@@ -938,21 +938,60 @@ router.get('/:id', auth, async (req, res, next) => {
 });
 
 // ── POST /api/v1/sales/:id/refund ─────────────────────────────────────────────
-router.post('/:id/refund', auth, requireRole('owner', 'manager'), async (req, res, next) => {
+router.post('/:id/refund', auth, requireRole('owner', 'manager'), validate(RefundSchema), async (req, res, next) => {
   try {
     const { items, reason, refund_method, restock } = req.body;
     if (!items?.length) return res.status(400).json({ error: 'No items.' });
 
     const sale = await prisma.sale.findUnique({
       where: { id: req.params.id },
-      select: { id: true, businessId: true, locationId: true, totalAmount: true, loyaltyPointsEarned: true, customerId: true },
+      select: {
+        id: true, businessId: true, locationId: true, totalAmount: true,
+        loyaltyPointsEarned: true, customerId: true,
+        items: { select: { id: true, productId: true, quantity: true, unitPrice: true } },
+      },
     });
     if (!sale || sale.businessId !== req.user.business_id) {
       return res.status(404).json({ error: 'Sale not found.' });
     }
 
+    // Build authoritative maps from the ORIGINAL sale — never trust client price/qty.
+    const soldById = new Map(sale.items.map(si => [si.id, si]));
+
+    // How much has already been refunded per sale_item, so we can't over-refund.
+    const priorRefunds = await prisma.refundItem.groupBy({
+      by: ['saleItemId'],
+      where: { saleItemId: { in: sale.items.map(si => si.id) }, refund: { saleId: sale.id } },
+      _sum: { quantity: true },
+    });
+    const refundedById = new Map(priorRefunds.map(r => [r.saleItemId, r._sum.quantity || 0]));
+
+    // Validate + normalise each requested line against the source of truth.
+    const validItems = [];
+    for (const reqItem of items) {
+      const si = soldById.get(reqItem.sale_item_id);
+      if (!si) return res.status(400).json({ error: `Sale item ${reqItem.sale_item_id} does not belong to this sale.` });
+      const alreadyRefunded = refundedById.get(si.id) || 0;
+      const remaining = si.quantity - alreadyRefunded;
+      if (reqItem.quantity > remaining) {
+        return res.status(400).json({
+          error: `Cannot refund ${reqItem.quantity} of item ${si.id}; only ${remaining} remain (sold ${si.quantity}, already refunded ${alreadyRefunded}).`,
+          code: 'OVER_REFUND',
+        });
+      }
+      validItems.push({
+        sale_item_id: si.id,
+        product_id:   si.productId,            // from the sale, not the client
+        quantity:     reqItem.quantity,
+        unit_price:   parseFloat(si.unitPrice), // original price, not the client's
+        restock:      reqItem.restock !== false,
+      });
+    }
+
     const refund = await prisma.$transaction(async (tx) => {
-      const totalRefunded = items.reduce((s, i) => s + parseFloat(i.unit_price) * i.quantity, 0);
+      const totalRefunded = parseFloat(
+        validItems.reduce((s, i) => s + i.unit_price * i.quantity, 0).toFixed(2)
+      );
 
       const refundRecord = await tx.refund.create({
         data: {
@@ -965,20 +1004,20 @@ router.post('/:id/refund', auth, requireRole('owner', 'manager'), async (req, re
           restocked:     restock !== false,
           createdById:   req.user.id,
           items: {
-            create: items.map(item => ({
+            create: validItems.map(item => ({
               saleItemId: item.sale_item_id,
               productId:  item.product_id,
               quantity:   item.quantity,
               unitPrice:  item.unit_price,
-              totalPrice: parseFloat(item.unit_price) * item.quantity,
-              restock:    item.restock !== false,
+              totalPrice: parseFloat((item.unit_price * item.quantity).toFixed(2)),
+              restock:    item.restock,
             })),
           },
         },
       });
 
       // Restock + movements
-      for (const item of items) {
+      for (const item of validItems) {
         if (item.restock !== false && sale.locationId) {
           await tx.$executeRaw`
             INSERT INTO stock_levels (id, product_id, location_id, quantity)
