@@ -879,4 +879,50 @@ describe('lending — underwriting from the ledger', () => {
   });
 });
 
+describe('pharmacy prescriptions & controlled substances', () => {
+  let token, loc, drug, verifierId;
+  beforeAll(async () => {
+    token = await register();
+    await enableModule(token, 'pharmacy');
+    loc = await location(token);
+    drug = await stockedProduct(token, loc, 5, 100); // 100 units in stock
+    await prisma.product.update({ where: { id: drug }, data: { isPrescriptionDrug: true, controlledSchedule: 'C-II' } });
+    const v = await request(app).post('/api/v1/users').set(auth(token))
+      .send({ name: 'Verifier', email: `verifier_${Date.now()}_${SEQ++}@balanzify.test`, password: 'SecurePass123!', role: 'manager' });
+    expect(v.status).toBe(201);
+    verifierId = v.body.id;
+  });
+
+  test('Rx lifecycle: controlled dispense needs a 2nd person; refills are enforced', async () => {
+    const rx = (await request(app).post('/api/v1/pharmacy/prescriptions').set(auth(token)).send({
+      product_id: drug, patient_name: 'Yusuf', prescriber_name: 'Dr Ali', prescriber_reg: 'MD-123',
+      quantity: 20, refills_authorized: 1, sig: '1 tablet daily',
+    })).body;
+    expect(rx.rxNumber).toBeTruthy();
+    expect(rx.refills_remaining).toBe(2); // original fill + 1 refill
+
+    // controlled substance: dispensing without a verifier is rejected
+    expect((await request(app).post(`/api/v1/pharmacy/prescriptions/${rx.id}/dispense`).set(auth(token)).send({ location_id: loc })).status).toBe(400);
+
+    // first dispense (verified) → stock 100→80, one fill used
+    const d1 = await request(app).post(`/api/v1/pharmacy/prescriptions/${rx.id}/dispense`).set(auth(token)).send({ location_id: loc, verified_by: verifierId });
+    expect(d1.status).toBe(201);
+    expect(d1.body.refills_remaining).toBe(1);
+    expect((await prisma.stockLevel.findFirst({ where: { productId: drug, locationId: loc } })).quantity).toBe(80);
+
+    // refill dispense → completed, none left
+    const d2 = await request(app).post(`/api/v1/pharmacy/prescriptions/${rx.id}/dispense`).set(auth(token)).send({ location_id: loc, verified_by: verifierId });
+    expect(d2.status).toBe(201);
+    expect(d2.body.refills_remaining).toBe(0);
+
+    // third dispense → blocked (no refills)
+    expect((await request(app).post(`/api/v1/pharmacy/prescriptions/${rx.id}/dispense`).set(auth(token)).send({ location_id: loc, verified_by: verifierId })).status).toBe(400);
+
+    // controlled-substance register shows both dispenses
+    const reg = await request(app).get('/api/v1/pharmacy/controlled-register').set(auth(token));
+    expect(reg.status).toBe(200);
+    expect(reg.body.register.filter(r => r.rx_number === rx.rxNumber).length).toBe(2);
+  });
+});
+
 afterAll(async () => { await prisma.$disconnect(); });
