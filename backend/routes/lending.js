@@ -53,6 +53,14 @@ router.post('/advances/:id/repay', auth, requireRole('owner', 'manager'), valida
   } catch (err) { next(err); }
 });
 
+router.get('/advances/:id/health', auth, async (req, res, next) => {
+  try {
+    const h = await financing.health(req.user.business_id, req.params.id);
+    if (!h) return res.status(404).json({ error: 'Advance not found.' });
+    res.json(h);
+  } catch (err) { next(err); }
+});
+
 router.get('/advances', auth, async (req, res, next) => {
   try {
     const advances = await prisma.financingAdvance.findMany({
