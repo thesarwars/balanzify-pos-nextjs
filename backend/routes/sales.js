@@ -446,19 +446,33 @@ router.post('/', auth, validate(SaleSchemaV3), async (req, res, next) => {
       // Bundles are sent as bundle_id — expand into constituent items
       // (Bundle logic hooks here if bundle_id is added to schema later)
 
-      // ── 5. Coupon — atomic lock ───────────────────────────────────────────
+      // ── 5. Coupon — atomic lock + SERVER-SIDE discount computation ────────
+      // Never trust the client's coupon_discount. Lock the coupon row, verify
+      // validity + min_purchase, and recompute the discount from the coupon's
+      // own type/value (mirrors POST /coupons/validate). This closes a money
+      // leak where any client could pass an arbitrary discount amount.
+      let couponAmt = 0;
       if (coupon_id) {
         const couponRows = await tx.$queryRaw`
-          SELECT id, max_uses, uses_count FROM coupons
+          SELECT id, type, value, min_purchase, max_uses, uses_count FROM coupons
           WHERE id = ${coupon_id}::uuid
             AND business_id = ${req.user.business_id}::uuid
             AND is_active = true
+            AND (valid_from  IS NULL OR valid_from  <= CURRENT_DATE)
+            AND (valid_until IS NULL OR valid_until >= CURRENT_DATE)
             AND (max_uses IS NULL OR uses_count < max_uses)
           FOR UPDATE
         `;
         if (!couponRows.length) {
           throw Object.assign(new Error('Coupon is no longer valid or usage limit reached.'), { statusCode: 400 });
         }
+        const c = couponRows[0];
+        if (subtotal < parseFloat(c.min_purchase)) {
+          throw Object.assign(new Error(`Minimum purchase of ${c.min_purchase} required for this coupon.`), { statusCode: 400, code: 'MIN_PURCHASE_NOT_MET' });
+        }
+        const val = parseFloat(c.value) || 0;
+        couponAmt = c.type === 'pct' ? subtotal * val / 100 : Math.min(subtotal, val);
+        couponAmt = parseFloat(couponAmt.toFixed(2));
       }
 
       // ── 6. Loyalty — validate redemption ─────────────────────────────────
@@ -496,7 +510,7 @@ router.post('/', auth, validate(SaleSchemaV3), async (req, res, next) => {
       const discAmt = discount_type === 'pct'
         ? subtotal * (parseFloat(discount_value) || 0) / 100
         : Math.min(subtotal, parseFloat(discount_value) || 0);
-      const couponAmt  = parseFloat(coupon_discount)  || 0;
+      // couponAmt was computed server-side in step 5 (never trust the client).
       const tipAmt     = tip_type === 'pct'
         ? subtotal * (parseFloat(tip_amount) || 0) / 100
         : parseFloat(tip_amount) || 0;
@@ -522,6 +536,22 @@ router.post('/', auth, validate(SaleSchemaV3), async (req, res, next) => {
             { statusCode: 400, code: 'UNKNOWN_PAYMENT_METHOD' }
           );
         }
+        if (!(parseFloat(tender.amount) >= 0)) {
+          throw Object.assign(
+            new Error('Tender amount must be a non-negative number.'),
+            { statusCode: 400, code: 'INVALID_TENDER_AMOUNT' }
+          );
+        }
+      }
+
+      // The tender legs must add up to the order total. Without this a split
+      // sale could be recorded as fully paid while under-tendered (money leak).
+      const tenderedTotal = tenders.reduce((s, t) => s + parseFloat(t.amount), 0);
+      if (Math.abs(tenderedTotal - total) > 0.01) {
+        throw Object.assign(
+          new Error(`Payment legs (${tenderedTotal.toFixed(2)}) do not match the order total (${total.toFixed(2)}).`),
+          { statusCode: 400, code: 'TENDER_TOTAL_MISMATCH' }
+        );
       }
 
       // Legacy compatibility fields (kept for shift totals and backwards compat reporting)
@@ -1025,7 +1055,9 @@ router.post('/customer-payment', auth, requireRole('owner', 'manager'), async (r
     });
     if (!customer) return res.status(404).json({ error: 'Customer not found.' });
 
-    const newBalance = await creditEngine.postRepayment(prisma, {
+    // Run in a transaction so the balance read + ledger write are atomic;
+    // prevents concurrent repayments from both passing the balance check.
+    const newBalance = await prisma.$transaction((tx) => creditEngine.postRepayment(tx, {
       businessId:    req.user.business_id,
       customerId:    customer_id,
       amount:        parseFloat(amount),
@@ -1034,7 +1066,7 @@ router.post('/customer-payment', auth, requireRole('owner', 'manager'), async (r
       reference:     reference      || null,
       description:   notes          || 'Credit repayment',
       recordedById:  req.user.id,
-    });
+    }));
 
     res.json({ message: 'Payment recorded.', outstanding_balance: newBalance });
   } catch (err) {
