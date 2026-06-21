@@ -542,6 +542,13 @@ router.post('/orders/:id/checkout', auth, validate(z.object({
     const { payment_method, cash_tendered, payments, loyalty_points_redeemed,
             discount_type, discount_value, coupon_id, coupon_discount, tip_amount } = req.body;
 
+    // Service charge: a % of the order subtotal, from the business setting
+    // (accepts 10 or 0.10). Added to the bill total by the sale service.
+    const biz = await prisma.business.findUnique({ where: { id: req.user.business_id }, select: { serviceChargePct: true } });
+    const rawPct = parseFloat(biz?.serviceChargePct || 0);
+    const scPct = rawPct > 1 ? rawPct / 100 : rawPct;
+    const serviceCharge = scPct > 0 ? parseFloat((parseFloat(order.subtotal) * scPct).toFixed(2)) : 0;
+
     // Mint the idempotency key in-process (no loopback HTTP hop to /sales/initiate,
     // which broke behind a proxy/cluster). Equivalent to what initiate does.
     const idempotency_key = `${req.user.id}-${Date.now()}-${crypto.randomUUID()}`;
@@ -566,6 +573,7 @@ router.post('/orders/:id/checkout', auth, validate(z.object({
           coupon_id,
           coupon_discount,
           tip_amount,
+          service_charge: serviceCharge,
           customer_id: order.customerId,
           type: 'pos',
           notes: `Order ${order.orderNumber}${order.table ? ` — Table ${order.table.number}` : ''}`,
