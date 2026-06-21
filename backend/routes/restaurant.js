@@ -1365,4 +1365,56 @@ We look forward to seeing you!`;
   } catch (err) { next(err); }
 });
 
+// ── RECIPES / BILL-OF-MATERIALS ───────────────────────────────────
+// A menu item's recipe lists the ingredient products it consumes. Selling the
+// item depletes those ingredients (handled in the sales transaction).
+
+router.get('/products/:id/recipe', auth, async (req, res, next) => {
+  try {
+    const recipe = await prisma.recipe.findFirst({
+      where: { productId: req.params.id, businessId: req.user.business_id },
+      include: { items: { include: { ingredient: { select: { id: true, name: true, sku: true, costPrice: true } } } } },
+    });
+    if (!recipe) return res.status(404).json({ error: 'No recipe for this product.' });
+    res.json(recipe);
+  } catch (err) { next(err); }
+});
+
+router.put('/products/:id/recipe', auth, requireRole('owner', 'manager'), validate(z.object({
+  yieldQty: z.coerce.number().int().positive().default(1),
+  isActive: z.boolean().default(true),
+  items:    z.array(z.object({ ingredient_id: uuid, quantity: z.coerce.number().positive() })).min(1),
+})), async (req, res, next) => {
+  try {
+    const product = await prisma.product.findFirst({ where: { id: req.params.id, businessId: req.user.business_id }, select: { id: true } });
+    if (!product) return res.status(404).json({ error: 'Product not found.' });
+
+    // Every ingredient must belong to this business; none may be the item itself.
+    const ingIds = [...new Set(req.body.items.map(i => i.ingredient_id))];
+    if (ingIds.includes(req.params.id)) return res.status(400).json({ error: 'A recipe cannot include its own product as an ingredient.' });
+    const validIng = await prisma.product.count({ where: { id: { in: ingIds }, businessId: req.user.business_id } });
+    if (validIng !== ingIds.length) return res.status(400).json({ error: 'One or more ingredients were not found.' });
+
+    const recipe = await prisma.$transaction(async (tx) => {
+      const r = await tx.recipe.upsert({
+        where:  { productId: req.params.id },
+        update: { yieldQty: req.body.yieldQty, isActive: req.body.isActive },
+        create: { businessId: req.user.business_id, productId: req.params.id, yieldQty: req.body.yieldQty, isActive: req.body.isActive },
+      });
+      await tx.recipeItem.deleteMany({ where: { recipeId: r.id } });
+      await tx.recipeItem.createMany({ data: req.body.items.map(i => ({ recipeId: r.id, ingredientId: i.ingredient_id, quantity: i.quantity })) });
+      return tx.recipe.findUnique({ where: { id: r.id }, include: { items: { include: { ingredient: { select: { id: true, name: true, sku: true } } } } } });
+    });
+    res.json(recipe);
+  } catch (err) { next(err); }
+});
+
+router.delete('/products/:id/recipe', auth, requireRole('owner', 'manager'), async (req, res, next) => {
+  try {
+    const r = await prisma.recipe.deleteMany({ where: { productId: req.params.id, businessId: req.user.business_id } });
+    if (!r.count) return res.status(404).json({ error: 'No recipe to delete.' });
+    res.json({ message: 'Recipe removed.' });
+  } catch (err) { next(err); }
+});
+
 module.exports = router;
