@@ -200,6 +200,7 @@ try {
   // Public digital receipt — no auth, no rate limit (token is unguessable)
   app.use('/r', checkoutRoutes);
   
+  app.use('/api/v1/sync', apiLimiter, require('./routes/sync'));
   app.use('/api/v1/export', apiLimiter, exportRoutes);
   app.use('/api/v1/accounting', apiLimiter, accountingRoutes);
   app.use('/api/v1/lending', apiLimiter, lendingRoutes);
