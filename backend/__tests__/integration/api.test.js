@@ -982,3 +982,45 @@ describe('General ledger — sale posting', () => {
     expect(tb.body.totals.debit).toBeCloseTo(tb.body.totals.credit, 2);
   });
 });
+
+describe('General ledger — accounts receivable (credit)', () => {
+  let product, customerId;
+
+  beforeAll(async () => {
+    product = await createProductWithStock(ownerToken, { locationId, stock: 50, sellingPrice: 20, costPrice: 12 });
+    const cust = await request(app).post('/api/v1/customers').set(auth(ownerToken)).send({ name: 'Credit Cust', credit_limit: 1000 });
+    customerId = cust.body.id;
+  });
+
+  test('a credit sale debits AR; repayment credits AR', async () => {
+    const sale = await checkout(ownerToken, {
+      items: [{ product_id: product.id, quantity: 2 }],
+      payment_method: 'credit', customer_id: customerId, location_id: locationId,
+    });
+    expect(sale.status).toBe(201);
+    const total = parseFloat(sale.body.totalAmount ?? sale.body.total_amount);
+
+    const saleEntry = await prisma.journalEntry.findFirst({
+      where: { sourceType: 'sale', sourceId: sale.body.id },
+      include: { lines: { include: { account: true } } },
+    });
+    const sBy = {};
+    for (const l of saleEntry.lines) sBy[l.account.code] = l;
+    expect(parseFloat(sBy['1100'].debit)).toBeCloseTo(total, 2); // credit sale debits Accounts Receivable
+
+    const pay = await request(app).post('/api/v1/sales/customer-payment')
+      .set(auth(ownerToken)).send({ customer_id: customerId, amount: total, payment_method: 'cash' });
+    expect(pay.status).toBe(200);
+
+    const repay = await prisma.journalEntry.findFirst({
+      where: { sourceType: 'credit_repayment', sourceId: customerId },
+      include: { lines: { include: { account: true } } },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect(repay).toBeTruthy();
+    const rBy = {};
+    for (const l of repay.lines) rBy[l.account.code] = l;
+    expect(parseFloat(rBy['1000'].debit)).toBeCloseTo(total, 2);  // cash in
+    expect(parseFloat(rBy['1100'].credit)).toBeCloseTo(total, 2); // AR reduced
+  });
+});
