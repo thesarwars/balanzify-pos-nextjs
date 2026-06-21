@@ -25,6 +25,7 @@ const CHART = [
   { code: '3000', name: "Owner's Equity",      type: 'equity',    normal: 'credit' },
   { code: '4000', name: 'Sales Revenue',       type: 'revenue',   normal: 'credit' },
   { code: '5000', name: 'Cost of Goods Sold',  type: 'expense',   normal: 'debit'  },
+  { code: '5100', name: 'Salaries & Wages',     type: 'expense',   normal: 'debit'  },
 ];
 
 // Map a payment method to the asset/AR account its money lands in.
@@ -155,4 +156,19 @@ async function postFolioPayment(tx, { businessId, method, amount, sourceId, crea
   });
 }
 
-module.exports = { CHART, ensureChart, postJournal, postSale, postFolioCharge, postFolioPayment, tenderAccountCode, round2 };
+/**
+ * Payroll: gross wages are an expense; net is paid in cash and the balance is
+ * withheld (taxes/recoveries) as a payable. gross = net + deduction.
+ */
+async function postPayroll(tx, { businessId, gross, net, deduction, sourceId, createdById }) {
+  return postJournal(tx, {
+    businessId, description: 'Payroll', sourceType: 'payroll', sourceId, createdById,
+    lines: [
+      { code: '5100', debit: round2(gross), credit: 0, description: 'Salaries & wages' },
+      { code: '1000', debit: 0, credit: round2(net), description: 'Net pay' },
+      { code: '2100', debit: 0, credit: round2(deduction), description: 'Payroll deductions' },
+    ],
+  });
+}
+
+module.exports = { CHART, ensureChart, postJournal, postSale, postFolioCharge, postFolioPayment, postPayroll, tenderAccountCode, round2 };
