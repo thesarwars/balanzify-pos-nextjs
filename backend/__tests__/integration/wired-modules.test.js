@@ -725,4 +725,52 @@ describe('wholesale', () => {
   });
 });
 
+describe('restaurant recipes (BOM ingredient depletion)', () => {
+  let token, loc;
+  beforeAll(async () => { token = await register(); await enableModule(token, 'restaurant'); loc = await location(token); });
+
+  async function menuItem(name) {
+    const r = await request(app).post('/api/v1/products').set(auth(token))
+      .send({ name: `${name} ${Date.now()}_${SEQ++}`, selling_price: 8, cost_price: 0 });
+    expect(r.status).toBe(201);
+    return r.body.id;
+  }
+
+  test('selling a recipe item depletes ingredients, not the finished good', async () => {
+    const bun   = await stockedProduct(token, loc, 1, 100); // 100 buns
+    const patty = await stockedProduct(token, loc, 2, 50);  // 50 patties
+    const burger = await menuItem('Burger');
+
+    const rec = await request(app).put(`/api/v1/restaurant/products/${burger}/recipe`).set(auth(token))
+      .send({ yieldQty: 1, items: [{ ingredient_id: bun, quantity: 2 }, { ingredient_id: patty, quantity: 1 }] });
+    expect(rec.status).toBe(200);
+    expect(rec.body.items.length).toBe(2);
+
+    const sale = await makeSale(token, loc, burger, { qty: 3, price: 8 });
+    expect(sale.status).toBe(201);
+
+    // 3 burgers → 6 buns, 3 patties consumed; the burger itself has no stock row
+    const bunLevel   = await prisma.stockLevel.findFirst({ where: { productId: bun, locationId: loc } });
+    const pattyLevel = await prisma.stockLevel.findFirst({ where: { productId: patty, locationId: loc } });
+    expect(bunLevel.quantity).toBe(94);
+    expect(pattyLevel.quantity).toBe(47);
+    const burgerLevel = await prisma.stockLevel.findFirst({ where: { productId: burger, locationId: loc } });
+    expect(burgerLevel).toBeFalsy();
+
+    // ingredient movements recorded against the sale
+    const mv = await prisma.stockMovement.findFirst({ where: { productId: bun, referenceType: 'recipe' } });
+    expect(mv).toBeTruthy();
+    expect(mv.quantity).toBe(-6);
+  });
+
+  test('insufficient ingredient stock blocks the sale', async () => {
+    const cheese = await stockedProduct(token, loc, 1, 1); // only 1 cheese
+    const sandwich = await menuItem('Sandwich');
+    await request(app).put(`/api/v1/restaurant/products/${sandwich}/recipe`).set(auth(token))
+      .send({ items: [{ ingredient_id: cheese, quantity: 2 }] });
+    const sale = await makeSale(token, loc, sandwich, { qty: 1, price: 5 });
+    expect(sale.status).toBe(400);
+  });
+});
+
 afterAll(async () => { await prisma.$disconnect(); });

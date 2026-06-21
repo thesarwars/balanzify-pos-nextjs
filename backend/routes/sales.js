@@ -283,6 +283,76 @@ router.post('/', auth, validate(SaleSchemaV3), async (req, res, next) => {
           : item.quantity;
         subtotal += lineTotal;
 
+        // ── Recipe / BOM ────────────────────────────────────────────────────
+        // If this product is a made-to-order item (has a recipe), it has no
+        // finished-good stock — selling it depletes its INGREDIENTS instead.
+        const recipe = await tx.recipe.findFirst({
+          where: { productId: item.product_id, businessId: req.user.business_id, isActive: true },
+          include: { items: true },
+        });
+        if (recipe && recipe.items.length) {
+          const yieldQty = recipe.yieldQty > 0 ? recipe.yieldQty : 1;
+          let recipeCogs = 0;
+          for (const ri of recipe.items) {
+            const deductQty = Math.round(item.quantity * parseFloat(ri.quantity) / yieldQty);
+            if (deductQty <= 0) continue;
+
+            const ingRows = await tx.$queryRaw`
+              SELECT quantity FROM stock_levels
+              WHERE product_id = ${ri.ingredientId}::uuid AND location_id = ${locId}::uuid
+              FOR UPDATE`;
+            const ingQty = ingRows[0]?.quantity ?? 0;
+            if (ingQty < deductQty) {
+              const ing = await tx.product.findUnique({ where: { id: ri.ingredientId }, select: { name: true } });
+              throw Object.assign(
+                new Error(`Insufficient ingredient stock to make ${product.name}: ${ing?.name || 'ingredient'} needs ${deductQty}, have ${ingQty}.`),
+                { statusCode: 400, code: 'INSUFFICIENT_INGREDIENT' }
+              );
+            }
+            const ingNew = ingQty - deductQty;
+            await tx.$executeRaw`
+              UPDATE stock_levels SET quantity = ${ingNew}, updated_at = NOW()
+              WHERE product_id = ${ri.ingredientId}::uuid AND location_id = ${locId}::uuid`;
+
+            // FIFO-cost the ingredient consumption for COGS
+            let ingRemaining = deductQty, ingTotalCost = 0, ingConsumed = 0;
+            const ingLayers = await tx.$queryRaw`
+              SELECT id, quantity_remaining, unit_cost FROM cost_layers
+              WHERE product_id = ${ri.ingredientId}::uuid AND business_id = ${req.user.business_id}::uuid
+                AND (location_id = ${locId}::uuid OR location_id IS NULL) AND quantity_remaining > 0
+              ORDER BY received_at ASC FOR UPDATE`;
+            for (const layer of ingLayers) {
+              if (ingRemaining <= 0) break;
+              const consume = Math.min(ingRemaining, parseInt(layer.quantity_remaining));
+              ingTotalCost += consume * parseFloat(layer.unit_cost);
+              ingConsumed += consume;
+              await tx.$executeRaw`UPDATE cost_layers SET quantity_remaining = ${parseInt(layer.quantity_remaining) - consume} WHERE id = ${layer.id}::uuid`;
+              ingRemaining -= consume;
+            }
+            recipeCogs += deductQty * (ingConsumed > 0 ? ingTotalCost / ingConsumed : 0);
+
+            await tx.stockMovement.create({
+              data: {
+                businessId: req.user.business_id, productId: ri.ingredientId, locationId: locId,
+                type: 'sale', quantity: -deductQty, balanceAfter: ingNew,
+                referenceType: 'recipe', createdById: req.user.id,
+              },
+            });
+          }
+          processed.push({
+            product_id:     item.product_id,
+            variant_id:     item.variant_id || null,
+            quantity:       item.quantity,
+            unit_price:     unitPrice,
+            original_price: basePrice,
+            cost_price:     item.quantity > 0 ? recipeCogs / item.quantity : 0,
+            total_price:    lineTotal,
+            notes:          item.notes || null,
+            serial_numbers: [],
+          });
+          return; // ingredients depleted — skip the finished-good stock/FIFO path
+        }
+
         // Serial number validation (before stock deduction)
         if (product.isSerialized) {
           if (!item.serial_numbers?.length || item.serial_numbers.length !== item.quantity) {
