@@ -1000,4 +1000,26 @@ describe('pharmacy prescriptions & controlled substances', () => {
   });
 });
 
+describe('restaurant checkout (in-process sale service — no HTTP self-call)', () => {
+  let token, loc, prod;
+  beforeAll(async () => { token = await register(); await enableModule(token, 'restaurant'); loc = await location(token); prod = await stockedProduct(token, loc, 10, 100); });
+
+  test('order → add item → checkout creates a real sale and completes the order', async () => {
+    const order = (await request(app).post('/api/v1/restaurant/orders').set(auth(token)).send({ type: 'takeaway' })).body;
+    expect(order.id).toBeTruthy();
+    expect((await request(app).post(`/api/v1/restaurant/orders/${order.id}/items`).set(auth(token)).send({ productId: prod, quantity: 2 })).status).toBe(201);
+
+    const checkout = await request(app).post(`/api/v1/restaurant/orders/${order.id}/checkout`).set(auth(token))
+      .send({ payment_method: 'cash', cash_tendered: 100 });
+    expect(checkout.status).toBe(200);
+    expect(checkout.body.sale.id).toBeTruthy();
+
+    const ord = await prisma.restaurantOrder.findUnique({ where: { id: order.id } });
+    expect(ord.status).toBe('completed');
+    expect(ord.saleId).toBe(checkout.body.sale.id);
+    // the sale decremented stock (2 of 100) — proving it ran the real sale transaction
+    expect((await prisma.stockLevel.findFirst({ where: { productId: prod, locationId: loc } })).quantity).toBe(98);
+  });
+});
+
 afterAll(async () => { await prisma.$disconnect(); });
