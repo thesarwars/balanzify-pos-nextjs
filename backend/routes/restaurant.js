@@ -43,6 +43,7 @@ const prisma   = require('../lib/prisma');
 const { auth, requireRole } = require('../middleware/auth');
 const { validate }          = require('../middleware/validate');
 const webhooks = require('../lib/webhooks');
+const { createSale } = require('./sales');
 const router   = express.Router();
 
 const uuid    = z.string().uuid();
@@ -548,34 +549,31 @@ router.post('/orders/:id/checkout', auth, validate(z.object({
       data: { key: idempotency_key, cashierId: req.user.id, businessId: req.user.business_id, expiresAt: new Date(Date.now() + 10 * 60 * 1000) },
     });
 
-    // Create the sale by posting to the sales route internally
-    const saleRes = await fetch(`http://localhost:${process.env.PORT || 5000}/api/v1/sales`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${req.headers.authorization?.replace('Bearer ','') || ''}` },
-      body: JSON.stringify({
-        idempotency_key,
-        items: saleItems,
-        payment_method,
-        cash_tendered,
-        payments,
-        loyalty_points_redeemed,
-        discount_type,
-        discount_value,
-        coupon_id,
-        coupon_discount,
-        tip_amount,
-        customer_id: order.customerId,
-        type: 'pos',
-        notes: `Order ${order.orderNumber}${order.table ? ` — Table ${order.table.number}` : ''}`,
-      }),
-    });
-
-    if (!saleRes.ok) {
-      const err = await saleRes.json();
-      return res.status(saleRes.status).json(err);
+    // Create the sale in-process (no loopback HTTP) via the shared sale service.
+    let sale;
+    try {
+      sale = await createSale({
+        user: req.user, ip: req.ip, get: (h) => req.get(h),
+        body: {
+          idempotency_key,
+          items: saleItems,
+          payment_method,
+          cash_tendered,
+          payments,
+          loyalty_points_redeemed,
+          discount_type,
+          discount_value,
+          coupon_id,
+          coupon_discount,
+          tip_amount,
+          customer_id: order.customerId,
+          type: 'pos',
+          notes: `Order ${order.orderNumber}${order.table ? ` — Table ${order.table.number}` : ''}`,
+        },
+      });
+    } catch (e) {
+      return res.status(e.statusCode || 500).json({ error: e.message });
     }
-
-    const sale = await saleRes.json();
 
     // Mark order completed, free table
     await prisma.$transaction(async (tx) => {
