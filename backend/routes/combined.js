@@ -912,8 +912,9 @@ usersRouter.post('/', auth, requireRole('owner'), validate(CreateUserSchema), as
     const exists = await prisma.user.findUnique({ where: { email } });
     if (exists) return res.status(409).json({ title: 'Email already in use', status: 409 });
     const hashed = await bcrypt.hash(password, 12);
+    const hashedPin = pin ? await bcrypt.hash(String(pin), 10) : null;
     const user = await prisma.user.create({
-      data: { businessId: req.user.business_id, name, email, password: hashed, role, pin: pin || null, commissionPercent: commission_percent ?? 0 },
+      data: { businessId: req.user.business_id, name, email, password: hashed, role, pin: hashedPin, commissionPercent: commission_percent ?? 0 },
       select: { id: true, name: true, email: true, role: true, isActive: true, commissionPercent: true },
     });
     res.status(201).json(user);
@@ -943,9 +944,10 @@ usersRouter.put('/:id', auth, requireRole('owner'), validate(UpdateUserSchema), 
       }
     }
 
+    const hashedPin = req.body.pin ? await bcrypt.hash(String(req.body.pin), 10) : null;
     const user = await prisma.user.update({
       where: { id: target.id },
-      data: { name: req.body.name, role: req.body.role, isActive: req.body.is_active, ...(req.body.pin !== undefined && { pin: req.body.pin || null }), ...(req.body.commission_percent !== undefined && { commissionPercent: req.body.commission_percent }) },
+      data: { name: req.body.name, role: req.body.role, isActive: req.body.is_active, ...(req.body.pin !== undefined && { pin: hashedPin }), ...(req.body.commission_percent !== undefined && { commissionPercent: req.body.commission_percent }) },
       select: { id: true, name: true, email: true, role: true, isActive: true, commissionPercent: true },
     });
     res.json(user);
