@@ -866,7 +866,7 @@ model User {
   email             String    @unique @db.VarChar(255)
   password          String    @db.VarChar(255)
   role              UserRole  @default(cashier)
-  pin               String?   @db.VarChar(10)
+  pin               String?   @db.VarChar(72) // bcrypt hash of the till PIN
   commissionPercent Decimal   @default(0) @map("commission_percent") @db.Decimal(6, 2)
   isActive          Boolean   @default(true) @map("is_active")
   lastLogin         DateTime? @map("last_login")
