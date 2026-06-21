@@ -721,6 +721,36 @@ describe('construction (job costing)', () => {
     expect(list[0].billable_now).toBe(1900); // 2000 * (1 - 0.05)
   });
 
+  test('milestone billing raises real AR with retention; payment collects the net', async () => {
+    const ms = await request(app).post(`/api/v1/construction/${pid}/milestones`).set(auth(token)).send({ name: 'Superstructure', amount: 2000, retention_pct: 5 });
+    expect(ms.status).toBe(201);
+    // can't bill a milestone that isn't complete yet
+    expect((await request(app).put(`/api/v1/construction/milestones/${ms.body.id}/status`).set(auth(token)).send({ status: 'billed' })).status).toBe(422);
+
+    // complete → billed: Dr AR 1900 + Dr Retention 100 / Cr Revenue 2000
+    expect((await request(app).put(`/api/v1/construction/milestones/${ms.body.id}/status`).set(auth(token)).send({ status: 'complete' })).status).toBe(200);
+    expect((await request(app).put(`/api/v1/construction/milestones/${ms.body.id}/status`).set(auth(token)).send({ status: 'billed' })).status).toBe(200);
+
+    const bizId = (await prisma.project.findUnique({ where: { id: pid } })).businessId;
+    let bal = await accounting.accountBalances(bizId);
+    const at = (c) => (bal.find(a => a.code === c) || { balance: 0 }).balance;
+    expect(at('1100')).toBeCloseTo(1900, 2); // Accounts Receivable
+    expect(at('1120')).toBeCloseTo(100, 2);  // Retention Receivable held
+    expect(at('4000')).toBeCloseTo(2000, 2); // Construction revenue (full value earned)
+
+    // paid via mobile money: collects the net, retention stays receivable
+    expect((await request(app).put(`/api/v1/construction/milestones/${ms.body.id}/status`).set(auth(token)).send({ status: 'paid', method: 'mpesa' })).status).toBe(200);
+    bal = await accounting.accountBalances(bizId);
+    expect(at('1100')).toBeCloseTo(0, 2);    // AR collected
+    expect(at('1010')).toBeCloseTo(1900, 2); // Mobile Money received
+    expect(at('1120')).toBeCloseTo(100, 2);  // retention still outstanding
+
+    // idempotent — re-paying does not double-collect
+    await request(app).put(`/api/v1/construction/milestones/${ms.body.id}/status`).set(auth(token)).send({ status: 'paid', method: 'mpesa' });
+    bal = await accounting.accountBalances(bizId);
+    expect(at('1010')).toBeCloseTo(1900, 2);
+  });
+
   test('per-project tasks: create scoped to the project, advance status', async () => {
     const created = await request(app).post('/api/v1/tasks').set(auth(token)).send({ title: 'Order rebar', priority: 'high', status: 'not_started', due_date: '2026-07-10', project_id: pid });
     expect(created.status).toBe(201);
