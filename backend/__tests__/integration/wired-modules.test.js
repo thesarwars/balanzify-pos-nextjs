@@ -1144,4 +1144,83 @@ describe('restaurant: waiter / 86 / reservations as proper records', () => {
   });
 });
 
+describe('offline-first sync (push outbox + delta pull)', () => {
+  let token, loc, prod;
+  beforeAll(async () => {
+    token = await register();
+    loc = await location(token);
+    prod = await stockedProduct(token, loc, 10, 100);
+    await request(app).post('/api/v1/sales/shifts/open').set(auth(token)).send({ location_id: loc, opening_float: 100 });
+  });
+
+  const saleOp = (opId, key, qty) => ({
+    op_id: opId, type: 'sale', idempotency_key: key,
+    payload: { items: [{ product_id: prod, quantity: qty, override_price: 10 }], location_id: loc, payment_method: 'cash', cash_tendered: qty * 10 },
+  });
+
+  test('push replays an offline outbox with client-minted keys: applied, then duplicate on re-push', async () => {
+    const device = 'till-' + Date.now();
+    const k1 = 'offline-' + Date.now() + '-a';
+    const res = await request(app).post('/api/v1/sync/push').set(auth(token))
+      .send({ device_id: device, operations: [saleOp('op1', k1, 2)] });
+    expect(res.status).toBe(200);
+    expect(res.body.applied).toBe(1);
+    expect(res.body.results[0].status).toBe('applied');
+    const saleId = res.body.results[0].sale_id;
+    expect(saleId).toBeTruthy();
+
+    // The device retried the same op before it knew the first push landed.
+    const again = await request(app).post('/api/v1/sync/push').set(auth(token))
+      .send({ device_id: device, operations: [saleOp('op1', k1, 2)] });
+    expect(again.body.results[0].status).toBe('duplicate');
+    expect(again.body.results[0].sale_id).toBe(saleId);
+    expect(again.body.applied).toBe(0);
+
+    // Stock moved exactly once — exactly-once semantics across the retry.
+    const sl = await prisma.stockLevel.findFirst({ where: { productId: prod, locationId: loc } });
+    expect(sl.quantity).toBe(98);
+
+    // The device cursor advanced.
+    const dev = (await request(app).get('/api/v1/sync/devices').set(auth(token))).body.devices.find(d => d.device_id === device);
+    expect(dev).toBeTruthy();
+    expect(dev.last_push_at).toBeTruthy();
+  });
+
+  test('same key + different cart is a conflict; one bad op never fails the batch', async () => {
+    const device = 'till-' + Date.now() + '-b';
+    const k = 'offline-' + Date.now() + '-c';
+    await request(app).post('/api/v1/sync/push').set(auth(token)).send({ device_id: device, operations: [saleOp('a', k, 1)] });
+
+    // Reuse k with a different quantity (conflict) alongside a fresh valid op.
+    const k2 = 'offline-' + Date.now() + '-d';
+    const res = await request(app).post('/api/v1/sync/push').set(auth(token))
+      .send({ device_id: device, operations: [saleOp('a', k, 5), saleOp('b', k2, 1)] });
+    expect(res.status).toBe(200);
+    const byOp = Object.fromEntries(res.body.results.map(r => [r.op_id, r]));
+    expect(byOp.a.status).toBe('conflict');
+    expect(byOp.b.status).toBe('applied');
+  });
+
+  test('pull: full snapshot then delta by `since`', async () => {
+    const full = await request(app).get('/api/v1/sync/pull').set(auth(token)).query({ device_id: 'till-pull' });
+    expect(full.status).toBe(200);
+    expect(full.body.full_snapshot).toBe(true);
+    const mine = full.body.products.find(p => p.id === prod);
+    expect(mine).toBeTruthy();
+    expect(Array.isArray(mine.stock)).toBe(true);
+    const cursor = full.body.server_time;
+
+    // Nothing changed since the cursor → empty delta.
+    const empty = await request(app).get('/api/v1/sync/pull').set(auth(token)).query({ since: cursor });
+    expect(empty.body.full_snapshot).toBe(false);
+    expect(empty.body.products.length).toBe(0);
+
+    // Touch the product → it appears in the next delta.
+    await new Promise(r => setTimeout(r, 10));
+    await request(app).put(`/api/v1/products/${prod}`).set(auth(token)).send({ selling_price: 12 });
+    const delta = await request(app).get('/api/v1/sync/pull').set(auth(token)).query({ since: cursor });
+    expect(delta.body.products.find(p => p.id === prod)).toBeTruthy();
+  });
+});
+
 afterAll(async () => { await prisma.$disconnect(); });
