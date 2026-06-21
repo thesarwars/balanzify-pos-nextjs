@@ -37,6 +37,7 @@
  */
 
 const express  = require('express');
+const crypto   = require('crypto');
 const { z }    = require('zod');
 const prisma   = require('../lib/prisma');
 const { auth, requireRole } = require('../middleware/auth');
@@ -528,12 +529,6 @@ router.post('/orders/:id/checkout', auth, validate(z.object({
     if (!order) return res.status(404).json({ error: 'Active order not found.' });
     if (!order.items.length) return res.status(400).json({ error: 'Order has no items.' });
 
-    // Get a fresh idempotency key for the sale
-    const keyRes = await fetch(`http://localhost:${process.env.PORT || 5000}/api/v1/sales/initiate`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${req.headers.authorization?.replace('Bearer ','') || ''}` },
-    });
-
     // Build sale payload from order items
     const saleItems = order.items.map(i => ({
       product_id:     i.productId,
@@ -546,18 +541,12 @@ router.post('/orders/:id/checkout', auth, validate(z.object({
     const { payment_method, cash_tendered, payments, loyalty_points_redeemed,
             discount_type, discount_value, coupon_id, coupon_discount, tip_amount } = req.body;
 
-    let idempotency_key;
-    if (keyRes.ok) {
-      const keyData = await keyRes.json();
-      idempotency_key = keyData.idempotency_key;
-    } else {
-      // Fallback: generate a key directly
-      const { default: crypto } = await import('crypto');
-      idempotency_key = `${req.user.id}-${Date.now()}-${crypto.randomUUID()}`;
-      await prisma.saleKey.create({
-        data: { key: idempotency_key, cashierId: req.user.id, businessId: req.user.business_id, expiresAt: new Date(Date.now() + 10 * 60 * 1000) },
-      });
-    }
+    // Mint the idempotency key in-process (no loopback HTTP hop to /sales/initiate,
+    // which broke behind a proxy/cluster). Equivalent to what initiate does.
+    const idempotency_key = `${req.user.id}-${Date.now()}-${crypto.randomUUID()}`;
+    await prisma.saleKey.create({
+      data: { key: idempotency_key, cashierId: req.user.id, businessId: req.user.business_id, expiresAt: new Date(Date.now() + 10 * 60 * 1000) },
+    });
 
     // Create the sale by posting to the sales route internally
     const saleRes = await fetch(`http://localhost:${process.env.PORT || 5000}/api/v1/sales`, {
