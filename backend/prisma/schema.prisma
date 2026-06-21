@@ -272,6 +272,8 @@ model Business {
   barcodeLabelJobs   BarcodeLabelJob[]
   costLayers         CostLayer[]
   recipes            Recipe[]
+  accounts           Account[]
+  journalEntries     JournalEntry[]
   supplierCatalogs   SupplierCatalog[]
   scheduledReports   ScheduledReport[]
   whatsappLogs       WhatsappLog[]
@@ -2126,6 +2128,64 @@ model RecipeItem {
   @@unique([recipeId, ingredientId])
   @@index([recipeId])
   @@map("recipe_items")
+}
+
+// ── General Ledger (the accounting spine) ───────────────────────────────────
+// Every vertical's money posts here as balanced double-entry journals, giving
+// one set of books across all of an owner's businesses + the cashflow data the
+// credit engine underwrites on.
+model Account {
+  id            String  @id @default(uuid()) @db.Uuid
+  businessId    String  @map("business_id") @db.Uuid
+  code          String  @db.VarChar(20)
+  name          String  @db.VarChar(255)
+  type          String  @db.VarChar(20) // asset | liability | equity | revenue | expense
+  normalBalance String  @map("normal_balance") @db.VarChar(10) // debit | credit
+  isSystem      Boolean @default(false) @map("is_system")
+  isActive      Boolean @default(true) @map("is_active")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  business     Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  journalLines JournalLine[]
+
+  @@unique([businessId, code])
+  @@index([businessId])
+  @@map("accounts")
+}
+
+model JournalEntry {
+  id          String   @id @default(uuid()) @db.Uuid
+  businessId  String   @map("business_id") @db.Uuid
+  entryNumber String   @map("entry_number") @db.VarChar(40)
+  date        DateTime @db.Date
+  description String?
+  sourceType  String?  @map("source_type") @db.VarChar(40) // sale | purchase | payroll | folio | ...
+  sourceId    String?  @map("source_id") @db.Uuid
+  createdById String?  @map("created_by") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  business Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  lines    JournalLine[]
+
+  @@index([businessId, date])
+  @@index([sourceType, sourceId])
+  @@map("journal_entries")
+}
+
+model JournalLine {
+  id             String  @id @default(uuid()) @db.Uuid
+  journalEntryId String  @map("journal_entry_id") @db.Uuid
+  accountId      String  @map("account_id") @db.Uuid
+  debit          Decimal @default(0) @db.Decimal(14, 2)
+  credit         Decimal @default(0) @db.Decimal(14, 2)
+  description    String?
+
+  entry   JournalEntry @relation(fields: [journalEntryId], references: [id], onDelete: Cascade)
+  account Account      @relation(fields: [accountId], references: [id])
+
+  @@index([journalEntryId])
+  @@index([accountId])
+  @@map("journal_lines")
 }
 
 model ScheduledReport {
