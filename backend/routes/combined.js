@@ -1,6 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const prisma = require('../lib/prisma');
+const accounting = require('../lib/accounting');
 const { auth, requireRole } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const {
@@ -1176,21 +1177,31 @@ expensesRouter.get('/', auth, async (req, res, next) => {
 expensesRouter.post('/', auth, validate(ExpenseSchema), async (req, res, next) => {
   try {
     const { category_id, location_id, amount, date, payment_status, expense_for, note, is_refund } = req.body;
-    const expense = await prisma.expense.create({
-      data: {
-        businessId: req.user.business_id,
-        categoryId: category_id || null,
-        locationId: location_id || null,
-        expenseNumber: `EXP-${Date.now()}`,
-        amount,
-        paymentStatus: payment_status || 'paid',
-        expenseFor: expense_for || null,
-        note: note || null,
-        isRefund: is_refund || false,
-        expenseDate: date ? new Date(date) : new Date(),
-        createdById: req.user.id,
-      },
-      include: { category: { select: { name: true } }, location: { select: { name: true } } },
+    const expense = await prisma.$transaction(async (tx) => {
+      const e = await tx.expense.create({
+        data: {
+          businessId: req.user.business_id,
+          categoryId: category_id || null,
+          locationId: location_id || null,
+          expenseNumber: `EXP-${Date.now()}`,
+          amount,
+          paymentStatus: payment_status || 'paid',
+          expenseFor: expense_for || null,
+          note: note || null,
+          isRefund: is_refund || false,
+          expenseDate: date ? new Date(date) : new Date(),
+          createdById: req.user.id,
+        },
+        include: { category: { select: { name: true } }, location: { select: { name: true } } },
+      });
+      // GL: record the expense against cash (or payables if unpaid).
+      await accounting.postExpense(tx, {
+        businessId: req.user.business_id, amount,
+        paid: (payment_status || 'paid') === 'paid', isRefund: is_refund || false,
+        description: e.category?.name ? `Expense — ${e.category.name}` : 'Operating expense',
+        sourceId: e.id, createdById: req.user.id,
+      });
+      return e;
     });
     res.status(201).json(expense);
   } catch (err) { next(err); }
