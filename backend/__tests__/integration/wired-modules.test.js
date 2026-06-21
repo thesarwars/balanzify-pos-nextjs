@@ -126,6 +126,20 @@ describe('expenses', () => {
     expect((await request(app).delete(`/api/v1/expenses/${exp.body.id}`).set(auth(token))).status).toBe(200);
     expect((await request(app).post('/api/v1/expenses').set(auth(token)).send({ amount: 0 })).status).toBe(422);
   });
+
+  test('a paid expense posts Dr Operating Expenses / Cr Cash', async () => {
+    const exp = await request(app).post('/api/v1/expenses').set(auth(token)).send({ amount: 40, date: '2026-06-17', payment_status: 'paid' });
+    expect(exp.status).toBe(201);
+    const entry = await prisma.journalEntry.findFirst({
+      where: { sourceType: 'expense', sourceId: exp.body.id },
+      include: { lines: { include: { account: true } } },
+    });
+    expect(entry).toBeTruthy();
+    const by = {};
+    for (const l of entry.lines) by[l.account.code] = l;
+    expect(parseFloat(by['5200'].debit)).toBeCloseTo(40, 2);  // Operating Expenses
+    expect(parseFloat(by['1000'].credit)).toBeCloseTo(40, 2); // Cash
+  });
 });
 
 describe('payment accounts', () => {

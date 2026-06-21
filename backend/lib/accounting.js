@@ -26,6 +26,7 @@ const CHART = [
   { code: '4000', name: 'Sales Revenue',       type: 'revenue',   normal: 'credit' },
   { code: '5000', name: 'Cost of Goods Sold',  type: 'expense',   normal: 'debit'  },
   { code: '5100', name: 'Salaries & Wages',     type: 'expense',   normal: 'debit'  },
+  { code: '5200', name: 'Operating Expenses',   type: 'expense',   normal: 'debit'  },
 ];
 
 // Map a payment method to the asset/AR account its money lands in.
@@ -171,4 +172,18 @@ async function postPayroll(tx, { businessId, gross, net, deduction, sourceId, cr
   });
 }
 
-module.exports = { CHART, ensureChart, postJournal, postSale, postFolioCharge, postFolioPayment, postPayroll, tenderAccountCode, round2 };
+/**
+ * An operating expense debits the expense and credits cash (paid) or payables
+ * (unpaid). A refund reverses it (money comes back in).
+ */
+async function postExpense(tx, { businessId, amount, paid = true, isRefund = false, description, sourceId, createdById }) {
+  const amt = round2(amount);
+  if (amt <= 0) return null;
+  const cashOrAp = paid ? '1000' : '2000';
+  const lines = isRefund
+    ? [{ code: cashOrAp, debit: amt, credit: 0, description: 'Expense refund' }, { code: '5200', debit: 0, credit: amt, description: description || 'Expense reversed' }]
+    : [{ code: '5200', debit: amt, credit: 0, description: description || 'Operating expense' }, { code: cashOrAp, debit: 0, credit: amt, description: paid ? 'Paid' : 'Payable' }];
+  return postJournal(tx, { businessId, description: description || 'Expense', sourceType: 'expense', sourceId, createdById, lines });
+}
+
+module.exports = { CHART, ensureChart, postJournal, postSale, postFolioCharge, postFolioPayment, postPayroll, postExpense, tenderAccountCode, round2 };
