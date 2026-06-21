@@ -170,6 +170,7 @@ async function createSale(req) {
       tip_amount = 0,
       tip_type,
       packing_charge = 0,
+      service_charge = 0,
       service_type_id,
       custom_item,
       notes,
@@ -591,8 +592,9 @@ async function createSale(req) {
         ? subtotal * (parseFloat(tip_amount) || 0) / 100
         : parseFloat(tip_amount) || 0;
       const packAmt    = parseFloat(packing_charge) || 0;
+      const svcChargeAmt = parseFloat(service_charge) || 0;
 
-      const total = Math.max(0, subtotal - discAmt - couponAmt - loyaltyDiscountAmt + tipAmt + packAmt + lineTax);
+      const total = Math.max(0, subtotal - discAmt - couponAmt - loyaltyDiscountAmt + tipAmt + packAmt + svcChargeAmt + lineTax);
 
       // ── 7a. Validate all payment legs via the provider registry ──────────
       // payments[] is an array of tender lines: [{ method, amount, ... }]
@@ -669,6 +671,7 @@ async function createSale(req) {
           taxAmount:     lineTax,
           tipAmount:     tipAmt,
           packingCharge: packAmt,
+          serviceCharge: svcChargeAmt,
           serviceTypeId: service_type_id || null,
           totalAmount:   total,
           amountPaid,
