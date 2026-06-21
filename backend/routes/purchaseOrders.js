@@ -110,8 +110,32 @@ router.put('/:id/status', auth, requireRole('owner', 'manager'), validate(POStat
           },
         });
 
+        // Track the value actually received this time, so we increment the
+        // supplier's outstanding balance by the received amount once — not by
+        // the whole PO total on every partial receipt (which double-counted).
+        let receivedValue = 0;
+        const itemsById = new Map(po.items.map((i) => [i.id, i]));
+
         for (const ri of received_items) {
           if (!ri.qty || ri.qty <= 0) continue;
+
+          // Over-receipt guard: never receive more than was ordered (minus what
+          // has already been received against this line).
+          const orderLine = itemsById.get(ri.id);
+          if (!orderLine || orderLine.poId !== po.id) {
+            throw Object.assign(new Error(`Receipt item ${ri.id} is not part of this purchase order.`), { statusCode: 400 });
+          }
+          const outstanding = orderLine.orderedQty - orderLine.receivedQty;
+          if (ri.qty > outstanding) {
+            throw Object.assign(
+              new Error(`Cannot receive ${ri.qty} of line ${ri.id}; only ${outstanding} outstanding (ordered ${orderLine.orderedQty}, already received ${orderLine.receivedQty}).`),
+              { statusCode: 400, code: 'OVER_RECEIPT' }
+            );
+          }
+
+          const lineUnitCost = parseFloat(ri.unit_price ?? orderLine.unitPrice ?? 0);
+          receivedValue += lineUnitCost * ri.qty;
+
           await tx.purchaseOrderItem.update({
             where: { id: ri.id },
             data: { receivedQty: { increment: ri.qty } },
@@ -148,24 +172,42 @@ router.put('/:id/status', auth, requireRole('owner', 'manager'), validate(POStat
               });
             }
 
-            // Stock batch
+            // Stock batch (expiry / FEFO tracking). Fall back to the ordered
+            // line's batch/expiry when the receipt doesn't restate them.
             await tx.stockBatch.create({
               data: {
                 productId: ri.product_id,
                 locationId: locId,
-                batchNumber: ri.batch_number || null,
+                batchNumber: ri.batch_number || orderLine.batchNumber || null,
                 quantity: ri.qty,
-                costPrice: ri.unit_price || 0,
-                expiryDate: ri.expiry_date ? new Date(ri.expiry_date) : null,
+                costPrice: lineUnitCost,
+                expiryDate: ri.expiry_date ? new Date(ri.expiry_date)
+                          : orderLine.expiryDate ? new Date(orderLine.expiryDate)
+                          : null,
+              },
+            });
+
+            // Cost layer (FIFO costing). Without this, sales fall back to the
+            // product's last cost and FIFO never actually runs.
+            await tx.costLayer.create({
+              data: {
+                businessId:        req.user.business_id,
+                productId:         ri.product_id,
+                variantId:         orderLine.variantId || null,
+                locationId:        locId,
+                poId:              po.id,
+                quantityReceived:  ri.qty,
+                quantityRemaining: ri.qty,
+                unitCost:          lineUnitCost,
               },
             });
           }
         }
 
-        // Update supplier balance
+        // Increment the supplier's outstanding balance by what was received now.
         await tx.supplier.update({
           where: { id: po.supplierId },
-          data: { outstandingBalance: { increment: po.totalAmount } },
+          data: { outstandingBalance: { increment: receivedValue } },
         });
 
         await tx.purchaseOrder.update({
