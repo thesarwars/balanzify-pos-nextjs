@@ -144,7 +144,7 @@ router.get('/purchase-order/:id.pdf', auth, async (req, res, next) => {
       where: { id: req.params.id },
       include: {
         items: { include: { product: { select: { name: true, sku: true } } } },
-        supplier: { select: { name: true, contact_person: true, phone: true, address: true } },
+        supplier: { select: { name: true, contactPerson: true, phone: true, address: true } },
         business: { select: { name: true, address: true, phone: true, email: true, logoUrl: true } },
       },
     });

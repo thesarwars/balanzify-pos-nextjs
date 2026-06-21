@@ -2,19 +2,23 @@ const PDFDocument = require('pdfkit');
 const { stringify } = require('csv-stringify/sync');
 
 // ── CSV export ────────────────────────────────────────────────────────────────
+const cell = (v) => (v instanceof Date ? v.toISOString() : (v ?? ''));
 const toCSV = (rows, columns) => stringify(rows.map(row =>
-  columns.reduce((obj, col) => { obj[col.header] = row[col.key] ?? ''; return obj; }, {})
+  columns.reduce((obj, col) => { obj[col.header] = cell(row[col.key]); return obj; }, {})
 ), { header: true, columns: columns.map(c => c.header) });
 
+// NOTE: keys below match the row objects the routes actually build (Prisma
+// camelCase fields, spread directly + a few added _name fields). They were
+// previously snake_case and produced entirely blank columns.
 const salesCSV = (sales) => toCSV(sales, [
-  { header: 'Order #', key: 'sale_number' },
-  { header: 'Date', key: 'created_at' },
+  { header: 'Order #', key: 'saleNumber' },
+  { header: 'Date', key: 'createdAt' },
   { header: 'Customer', key: 'customer_name' },
   { header: 'Cashier', key: 'cashier_name' },
-  { header: 'Payment method', key: 'payment_method' },
+  { header: 'Payment method', key: 'paymentMethod' },
   { header: 'Subtotal', key: 'subtotal' },
-  { header: 'Discount', key: 'discount_amount' },
-  { header: 'Total', key: 'total_amount' },
+  { header: 'Discount', key: 'discountAmount' },
+  { header: 'Total', key: 'totalAmount' },
   { header: 'Status', key: 'status' },
 ]);
 
@@ -23,39 +27,45 @@ const productsCSV = (products) => toCSV(products, [
   { header: 'SKU', key: 'sku' },
   { header: 'Barcode', key: 'barcode' },
   { header: 'Category', key: 'category_name' },
-  { header: 'Selling price', key: 'selling_price' },
-  { header: 'Cost price', key: 'cost_price' },
-  { header: 'Wholesale price', key: 'wholesale_price' },
+  { header: 'Selling price', key: 'sellingPrice' },
+  { header: 'Cost price', key: 'costPrice' },
+  { header: 'Wholesale price', key: 'wholesalePrice' },
   { header: 'Stock', key: 'total_stock' },
-  { header: 'Min stock level', key: 'min_stock_level' },
-  { header: 'Reorder point', key: 'reorder_point' },
-  { header: 'Unit', key: 'unit_of_measure' },
-  { header: 'Active', key: 'is_active' },
+  { header: 'Min stock level', key: 'minStockLevel' },
+  { header: 'Reorder point', key: 'reorderPoint' },
+  { header: 'Unit', key: 'unitOfMeasure' },
+  { header: 'Active', key: 'isActive' },
 ]);
 
 const inventoryCSV = (items) => toCSV(items, [
-  { header: 'Product', key: 'name' },
+  { header: 'Product', key: 'product_name' },
   { header: 'SKU', key: 'sku' },
-  { header: 'Category', key: 'category' },
+  { header: 'Barcode', key: 'barcode' },
   { header: 'Location', key: 'location' },
-  { header: 'Stock', key: 'stock' },
-  { header: 'Cost value', key: 'cost_value' },
-  { header: 'Retail value', key: 'retail_value' },
+  { header: 'Stock', key: 'quantity' },
+  { header: 'Cost price', key: 'cost_price' },
+  { header: 'Selling price', key: 'selling_price' },
+  { header: 'Reorder point', key: 'reorder_point' },
+  { header: 'Stock value', key: 'stock_value' },
 ]);
 
 const stockMovementsCSV = (movements) => toCSV(movements, [
-  { header: 'Date', key: 'created_at' },
-  { header: 'Product', key: 'product_name' },
-  { header: 'Location', key: 'location_name' },
+  { header: 'Date', key: 'date' },
+  { header: 'Product', key: 'product' },
+  { header: 'SKU', key: 'sku' },
+  { header: 'Location', key: 'location' },
   { header: 'Type', key: 'type' },
   { header: 'Quantity', key: 'quantity' },
   { header: 'Balance after', key: 'balance_after' },
   { header: 'Notes', key: 'notes' },
-  { header: 'User', key: 'created_by_name' },
+  { header: 'User', key: 'created_by' },
 ]);
 
 // ── PDF invoice ───────────────────────────────────────────────────────────────
-const generateInvoicePDF = (sale, items, business) => new Promise((resolve, reject) => {
+const generateInvoicePDF = (sale) => new Promise((resolve, reject) => {
+  const items    = sale.items    || [];
+  const business = sale.business || {};
+  const customer = sale.customer || null;
   const chunks = [];
   const doc = new PDFDocument({ margin: 50, size: 'A4' });
 
@@ -67,12 +77,12 @@ const generateInvoicePDF = (sale, items, business) => new Promise((resolve, reje
   const W = 495; // usable width
 
   // Header
-  if (business.logo_url) {
-    try { doc.image(business.logo_url, 50, 45, { width: 80 }); } catch {}
+  if (business.logoUrl) {
+    try { doc.image(business.logoUrl, 50, 45, { width: 80 }); } catch {}
   }
   doc.fontSize(20).font('Helvetica-Bold').fillColor('#111827').text('INVOICE', 400, 50, { align: 'right' });
   doc.fontSize(10).font('Helvetica').fillColor('#6B7280');
-  doc.text(business.name, 400, 76, { align: 'right' });
+  doc.text(business.name || '', 400, 76, { align: 'right' });
   if (business.address) doc.text(business.address, 400, 90, { align: 'right' });
   if (business.phone) doc.text(business.phone, 400, 104, { align: 'right' });
 
@@ -81,13 +91,13 @@ const generateInvoicePDF = (sale, items, business) => new Promise((resolve, reje
   const y = doc.y;
   doc.fontSize(10).font('Helvetica-Bold').fillColor('#111827').text('Invoice details', 50, y);
   doc.font('Helvetica').fillColor('#6B7280');
-  doc.text(`Invoice #: ${sale.sale_number}`, 50, y + 16);
-  doc.text(`Date: ${new Date(sale.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}`, 50, y + 30);
-  doc.text(`Payment: ${sale.payment_method}`, 50, y + 44);
-  if (sale.customer_name) {
+  doc.text(`Invoice #: ${sale.saleNumber}`, 50, y + 16);
+  doc.text(`Date: ${new Date(sale.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}`, 50, y + 30);
+  doc.text(`Payment: ${sale.paymentMethod || ''}`, 50, y + 44);
+  if (customer?.name) {
     doc.font('Helvetica-Bold').fillColor('#111827').text('Bill to', 300, y);
-    doc.font('Helvetica').fillColor('#6B7280').text(sale.customer_name, 300, y + 16);
-    if (sale.customer_phone) doc.text(sale.customer_phone, 300, y + 30);
+    doc.font('Helvetica').fillColor('#6B7280').text(customer.name, 300, y + 16);
+    if (customer.phone) doc.text(customer.phone, 300, y + 30);
   }
 
   // Items table
@@ -109,10 +119,10 @@ const generateInvoicePDF = (sale, items, business) => new Promise((resolve, reje
     const bg = i % 2 === 0 ? '#FAFAFA' : '#fff';
     doc.rect(50, rowY, W, 22).fill(bg);
     doc.fontSize(9).font('Helvetica').fillColor('#111827');
-    doc.text(item.product_name, cols.item + 6, rowY + 6, { width: 220, ellipsis: true });
+    doc.text(item.product?.name || 'Item', cols.item + 6, rowY + 6, { width: 220, ellipsis: true });
     doc.text(String(item.quantity), cols.qty + 6, rowY + 6);
-    doc.text(fmt(item.unit_price), cols.unitPrice + 6, rowY + 6);
-    doc.text(fmt(item.total_price), cols.total + 6, rowY + 6);
+    doc.text(fmt(item.unitPrice), cols.unitPrice + 6, rowY + 6);
+    doc.text(fmt(item.totalPrice), cols.total + 6, rowY + 6);
     rowY += 22;
   });
 
@@ -129,23 +139,27 @@ const generateInvoicePDF = (sale, items, business) => new Promise((resolve, reje
   };
 
   addTotal('Subtotal', fmt(sale.subtotal));
-  if (parseFloat(sale.discount_amount) > 0) addTotal('Discount', `-${fmt(sale.discount_amount)}`, false, '#2D6A4F');
+  if (parseFloat(sale.discountAmount) > 0) addTotal('Discount', `-${fmt(sale.discountAmount)}`, false, '#2D6A4F');
+  if (parseFloat(sale.taxAmount) > 0) addTotal('Tax', fmt(sale.taxAmount));
   rowY += 4;
   doc.moveTo(340, rowY).lineTo(545, rowY).stroke('#E8ECF0');
   rowY += 8;
-  addTotal('Total', fmt(sale.total_amount), true);
+  addTotal('Total', fmt(sale.totalAmount), true);
 
   // Footer
-  if (business.receipt_footer) {
+  if (business.receiptFooter) {
     doc.moveDown(3);
-    doc.fontSize(10).font('Helvetica').fillColor('#9CA3AF').text(business.receipt_footer, 50, doc.y, { align: 'center', width: W });
+    doc.fontSize(10).font('Helvetica').fillColor('#9CA3AF').text(business.receiptFooter, 50, doc.y, { align: 'center', width: W });
   }
 
   doc.end();
 });
 
 // ── PDF purchase order ────────────────────────────────────────────────────────
-const generatePOPDF = (po, items, business, supplier) => new Promise((resolve, reject) => {
+const generatePOPDF = (po) => new Promise((resolve, reject) => {
+  const items    = po.items    || [];
+  const business = po.business || {};
+  const supplier = po.supplier || {};
   const chunks = [];
   const doc = new PDFDocument({ margin: 50, size: 'A4' });
   doc.on('data', c => chunks.push(c));
@@ -157,17 +171,17 @@ const generatePOPDF = (po, items, business, supplier) => new Promise((resolve, r
 
   doc.fontSize(20).font('Helvetica-Bold').fillColor('#111827').text('PURCHASE ORDER', 50, 50);
   doc.fontSize(10).font('Helvetica').fillColor('#6B7280');
-  doc.text(`PO Number: ${po.po_number}`, 50, 80);
-  doc.text(`Date: ${new Date(po.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}`, 50, 94);
-  if (po.expected_delivery) doc.text(`Expected delivery: ${new Date(po.expected_delivery).toLocaleDateString('en-GB')}`, 50, 108);
+  doc.text(`PO Number: ${po.poNumber}`, 50, 80);
+  doc.text(`Date: ${new Date(po.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}`, 50, 94);
+  if (po.expectedDelivery) doc.text(`Expected delivery: ${new Date(po.expectedDelivery).toLocaleDateString('en-GB')}`, 50, 108);
 
   doc.font('Helvetica-Bold').fillColor('#111827').text('From', 300, 80);
-  doc.font('Helvetica').fillColor('#6B7280').text(business.name, 300, 96);
+  doc.font('Helvetica').fillColor('#6B7280').text(business.name || '', 300, 96);
   if (business.address) doc.text(business.address, 300, 110);
 
   doc.font('Helvetica-Bold').fillColor('#111827').text('To', 50, 140);
-  doc.font('Helvetica').fillColor('#6B7280').text(supplier.name, 50, 156);
-  if (supplier.contact_person) doc.text(supplier.contact_person, 50, 170);
+  doc.font('Helvetica').fillColor('#6B7280').text(supplier.name || '', 50, 156);
+  if (supplier.contactPerson) doc.text(supplier.contactPerson, 50, 170);
   if (supplier.phone) doc.text(supplier.phone, 50, 184);
 
   const tableTop = 220;
@@ -182,20 +196,20 @@ const generatePOPDF = (po, items, business, supplier) => new Promise((resolve, r
   items.forEach((item, i) => {
     doc.rect(50, rowY, W, 22).fill(i % 2 === 0 ? '#FAFAFA' : '#fff');
     doc.fontSize(9).font('Helvetica').fillColor('#111827');
-    doc.text(item.product_name, 56, rowY + 6, { width: 236, ellipsis: true });
-    doc.text(String(item.ordered_qty), 300, rowY + 6);
-    doc.text(fmt(item.unit_price), 360, rowY + 6);
-    doc.text(fmt(item.total_price), 436, rowY + 6);
+    doc.text(item.product?.name || 'Item', 56, rowY + 6, { width: 236, ellipsis: true });
+    doc.text(String(item.orderedQty), 300, rowY + 6);
+    doc.text(fmt(item.unitPrice), 360, rowY + 6);
+    doc.text(fmt(item.totalPrice), 436, rowY + 6);
     rowY += 22;
   });
 
   rowY += 10;
-  if (parseFloat(po.freight_cost) > 0) { doc.fontSize(9).font('Helvetica').fillColor('#6B7280').text('Freight', 360, rowY); doc.text(fmt(po.freight_cost), 436, rowY); rowY += 16; }
-  if (parseFloat(po.customs_duty) > 0) { doc.text('Customs duty', 360, rowY); doc.text(fmt(po.customs_duty), 436, rowY); rowY += 16; }
+  if (parseFloat(po.freightCost) > 0) { doc.fontSize(9).font('Helvetica').fillColor('#6B7280').text('Freight', 360, rowY); doc.text(fmt(po.freightCost), 436, rowY); rowY += 16; }
+  if (parseFloat(po.customsDuty) > 0) { doc.text('Customs duty', 360, rowY); doc.text(fmt(po.customsDuty), 436, rowY); rowY += 16; }
   rowY += 4;
   doc.moveTo(340, rowY).lineTo(545, rowY).stroke('#E8ECF0');
   rowY += 8;
-  doc.fontSize(10).font('Helvetica-Bold').fillColor('#111827').text('Total', 360, rowY).text(fmt(po.total_amount), 436, rowY);
+  doc.fontSize(10).font('Helvetica-Bold').fillColor('#111827').text('Total', 360, rowY).text(fmt(po.totalAmount), 436, rowY);
 
   if (po.notes) {
     doc.moveDown(4);
