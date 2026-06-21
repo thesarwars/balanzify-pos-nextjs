@@ -12,6 +12,8 @@
  * Posting is balanced by construction; postJournal asserts debits === credits.
  */
 
+const prisma = require('./prisma');
+
 // Standard small-business chart of accounts. System accounts are seeded per
 // business on first posting (lazily) so every existing/new business is covered.
 const CHART = [
@@ -186,4 +188,29 @@ async function postExpense(tx, { businessId, amount, paid = true, isRefund = fal
   return postJournal(tx, { businessId, description: description || 'Expense', sourceType: 'expense', sourceId, createdById, lines });
 }
 
-module.exports = { CHART, ensureChart, postJournal, postSale, postFolioCharge, postFolioPayment, postPayroll, postExpense, tenderAccountCode, round2 };
+/**
+ * Per-account net balances (positive = the account's normal side), optionally
+ * within a date range on the journal entry date. Reads via the prisma singleton.
+ */
+async function accountBalances(businessId, { from, to } = {}) {
+  const rows = await prisma.$queryRaw`
+    SELECT a.code, a.name, a.type, a.normal_balance,
+      COALESCE(SUM(jl.debit), 0)  AS total_debit,
+      COALESCE(SUM(jl.credit), 0) AS total_credit
+    FROM accounts a
+    LEFT JOIN journal_lines jl ON jl.account_id = a.id
+    LEFT JOIN journal_entries je ON je.id = jl.journal_entry_id
+      AND (${from ?? null}::date IS NULL OR je.date >= ${from ?? null}::date)
+      AND (${to   ?? null}::date IS NULL OR je.date <= ${to   ?? null}::date)
+    WHERE a.business_id = ${businessId}::uuid
+    GROUP BY a.code, a.name, a.type, a.normal_balance
+    ORDER BY a.code
+  `;
+  return rows.map(r => {
+    const debit = parseFloat(r.total_debit), credit = parseFloat(r.total_credit);
+    const balance = r.normal_balance === 'debit' ? debit - credit : credit - debit;
+    return { code: r.code, name: r.name, type: r.type, balance: parseFloat(balance.toFixed(2)) };
+  });
+}
+
+module.exports = { CHART, ensureChart, postJournal, postSale, postFolioCharge, postFolioPayment, postPayroll, postExpense, accountBalances, tenderAccountCode, round2 };

@@ -8,6 +8,7 @@
 const express = require('express');
 const prisma = require('../lib/prisma');
 const { auth } = require('../middleware/auth');
+const { accountBalances } = require('../lib/accounting');
 const router = express.Router();
 
 router.get('/accounts', auth, async (req, res, next) => {
@@ -57,29 +58,6 @@ router.get('/trial-balance', auth, async (req, res, next) => {
     });
   } catch (err) { next(err); }
 });
-
-// Per-account net balances (positive = the account's normal side), optionally
-// within a date range on the journal entry date.
-async function accountBalances(businessId, { from, to } = {}) {
-  const rows = await prisma.$queryRaw`
-    SELECT a.code, a.name, a.type, a.normal_balance,
-      COALESCE(SUM(jl.debit), 0)  AS total_debit,
-      COALESCE(SUM(jl.credit), 0) AS total_credit
-    FROM accounts a
-    LEFT JOIN journal_lines jl ON jl.account_id = a.id
-    LEFT JOIN journal_entries je ON je.id = jl.journal_entry_id
-      AND (${from ?? null}::date IS NULL OR je.date >= ${from ?? null}::date)
-      AND (${to   ?? null}::date IS NULL OR je.date <= ${to   ?? null}::date)
-    WHERE a.business_id = ${businessId}::uuid
-    GROUP BY a.code, a.name, a.type, a.normal_balance
-    ORDER BY a.code
-  `;
-  return rows.map(r => {
-    const debit = parseFloat(r.total_debit), credit = parseFloat(r.total_credit);
-    const balance = r.normal_balance === 'debit' ? debit - credit : credit - debit;
-    return { code: r.code, name: r.name, type: r.type, balance: parseFloat(balance.toFixed(2)) };
-  });
-}
 
 const sumType = (accts, type) => parseFloat(accts.filter(a => a.type === type).reduce((s, a) => s + a.balance, 0).toFixed(2));
 
