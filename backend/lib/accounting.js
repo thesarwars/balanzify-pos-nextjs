@@ -123,4 +123,36 @@ async function postSale(tx, { businessId, sale, tenders, taxAmount = 0, cogs = 0
   });
 }
 
-module.exports = { CHART, ensureChart, postJournal, postSale, tenderAccountCode, round2 };
+/**
+ * A folio charge raises what the guest owes (AR) against revenue — or the tax
+ * liability for a tax line. `type` is the FolioChargeType.
+ */
+async function postFolioCharge(tx, { businessId, type, amount, description, sourceId, createdById }) {
+  const amt = round2(amount);
+  if (amt <= 0) return null;
+  const creditCode = type === 'tax' ? '2100' : '4000';
+  return postJournal(tx, {
+    businessId, description: description || 'Folio charge',
+    sourceType: 'folio_charge', sourceId, createdById,
+    lines: [
+      { code: '1100', debit: amt, credit: 0, description: 'Guest folio (AR)' },
+      { code: creditCode, debit: 0, credit: amt, description: description || (type === 'tax' ? 'Tax' : 'Folio revenue') },
+    ],
+  });
+}
+
+/** A folio payment brings in cash and reduces the guest's receivable. */
+async function postFolioPayment(tx, { businessId, method, amount, sourceId, createdById }) {
+  const amt = round2(amount);
+  if (amt <= 0) return null;
+  return postJournal(tx, {
+    businessId, description: 'Folio payment',
+    sourceType: 'folio_payment', sourceId, createdById,
+    lines: [
+      { code: tenderAccountCode(method), debit: amt, credit: 0, description: 'Payment received' },
+      { code: '1100', debit: 0, credit: amt, description: 'Guest folio (AR)' },
+    ],
+  });
+}
+
+module.exports = { CHART, ensureChart, postJournal, postSale, postFolioCharge, postFolioPayment, tenderAccountCode, round2 };
