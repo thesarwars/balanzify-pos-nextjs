@@ -10,6 +10,7 @@ const { z } = require('zod');
 const prisma = require('../lib/prisma');
 const { auth, requireRole } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
+const accounting = require('../lib/accounting');
 
 const router = express.Router();
 const uuid = z.string().uuid();
@@ -104,11 +105,25 @@ router.post('/orders/:id/dispatch', auth, requireRole('owner', 'manager'), valid
 // Mark delivered
 router.post('/orders/:id/deliver', auth, async (req, res, next) => {
   try {
-    const r = await prisma.wholesaleOrder.updateMany({
-      where: { id: req.params.id, businessId: req.user.business_id, status: 'out_for_delivery' },
-      data: { status: 'delivered', deliveredAt: new Date() },
+    const delivered = await prisma.$transaction(async (tx) => {
+      const order = await tx.wholesaleOrder.findFirst({
+        where: { id: req.params.id, businessId: req.user.business_id, status: 'out_for_delivery' },
+      });
+      if (!order) return null;
+      await tx.wholesaleOrder.update({ where: { id: order.id }, data: { status: 'delivered', deliveredAt: new Date() } });
+      // GL: delivery recognises revenue on credit — the customer now owes us.
+      await accounting.postJournal(tx, {
+        businessId:  req.user.business_id,
+        description: `Wholesale delivery — ${order.orderNumber || ''}`.trim(),
+        sourceType:  'wholesale_delivery', sourceId: order.id, createdById: req.user.id,
+        lines: [
+          { code: '1100', debit: parseFloat(order.total), credit: 0, description: 'Wholesale receivable' },
+          { code: '4000', debit: 0, credit: parseFloat(order.total), description: 'Wholesale revenue' },
+        ],
+      });
+      return order;
     });
-    if (!r.count) return res.status(400).json({ title: 'Order is not out for delivery', status: 400 });
+    if (!delivered) return res.status(400).json({ title: 'Order is not out for delivery', status: 400 });
     res.json({ message: 'Delivered. Outstanding balance is collectible.' });
   } catch (err) { next(err); }
 });
@@ -120,9 +135,25 @@ router.post('/orders/:id/payment', auth, validate(z.object({
   try {
     const order = await prisma.wholesaleOrder.findFirst({ where: { id: req.params.id, businessId: req.user.business_id } });
     if (!order) return res.status(404).json({ title: 'Order not found', status: 404 });
-    const paid = +(parseFloat(order.amountPaid) + req.body.amount).toFixed(2);
+    // Cap the payment at the outstanding balance.
+    const outstanding = +(parseFloat(order.total) - parseFloat(order.amountPaid)).toFixed(2);
+    const amount = Math.min(req.body.amount, outstanding);
+    if (amount <= 0) return res.status(400).json({ title: 'Order already fully paid', status: 400 });
+    const paid = +(parseFloat(order.amountPaid) + amount).toFixed(2);
     const status = paid >= parseFloat(order.total) ? 'paid' : 'partial';
-    await prisma.wholesaleOrder.update({ where: { id: order.id }, data: { amountPaid: paid, paymentStatus: status } });
+    await prisma.$transaction(async (tx) => {
+      await tx.wholesaleOrder.update({ where: { id: order.id }, data: { amountPaid: paid, paymentStatus: status } });
+      // GL: collection brings in cash and reduces the wholesale receivable.
+      await accounting.postJournal(tx, {
+        businessId:  req.user.business_id,
+        description: `Wholesale payment — ${order.orderNumber || ''}`.trim(),
+        sourceType:  'wholesale_payment', sourceId: order.id, createdById: req.user.id,
+        lines: [
+          { code: '1000', debit: amount, credit: 0, description: 'Cash collected' },
+          { code: '1100', debit: 0, credit: amount, description: 'Wholesale receivable' },
+        ],
+      });
+    });
     res.json({ message: status === 'paid' ? 'Order fully paid' : `Partial payment recorded — ${(parseFloat(order.total) - paid).toFixed(2)} outstanding`, payment_status: status });
   } catch (err) { next(err); }
 });
