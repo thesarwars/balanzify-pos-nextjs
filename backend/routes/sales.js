@@ -847,8 +847,8 @@ router.post('/', auth, validate(SaleSchemaV3), async (req, res, next) => {
       });
 
       // Auto-collect a fixed share of the takings toward any active financing
-      // advance (the lock-in mechanic). Based on cash collected, not credit sales.
-      await financing.autoCollect(tx, { businessId: req.user.business_id, collectible: amountPaid, createdById: req.user.id });
+      // advance (the lock-in mechanic), crediting the account the money landed in.
+      await financing.autoCollect(tx, { businessId: req.user.business_id, tenders, createdById: req.user.id });
 
       // ── 16. Shift totals ──────────────────────────────────────────────────
       if (shift_id) {
