@@ -276,6 +276,7 @@ model Business {
   journalEntries     JournalEntry[]
   prescriptions      Prescription[]
   dispenseRecords    DispenseRecord[]
+  financingAdvances  FinancingAdvance[]
   supplierCatalogs   SupplierCatalog[]
   scheduledReports   ScheduledReport[]
   whatsappLogs       WhatsappLog[]
@@ -2183,6 +2184,49 @@ model DispenseRecord {
   @@index([businessId])
   @@index([prescriptionId])
   @@map("dispense_records")
+}
+
+// ── Embedded financing (Sharia-compliant: fixed Murabaha-style fee, NOT interest) ─
+// A working-capital advance: the merchant receives `principal` and owes a fixed,
+// disclosed `totalRepayable` = principal + feeAmount. The fee is flat — no time
+// accrual, no compounding, no late penalties. Repaid manually or auto-collected
+// as a fixed share of daily takings.
+model FinancingAdvance {
+  id             String    @id @default(uuid()) @db.Uuid
+  businessId     String    @map("business_id") @db.Uuid
+  reference      String    @db.VarChar(40)
+  principal      Decimal   @db.Decimal(14, 2)
+  feeAmount      Decimal   @map("fee_amount") @db.Decimal(14, 2)
+  totalRepayable Decimal   @map("total_repayable") @db.Decimal(14, 2)
+  amountRepaid   Decimal   @default(0) @map("amount_repaid") @db.Decimal(14, 2)
+  status         String    @default("offered") @db.VarChar(20) // offered | active | settled | cancelled
+  termDays       Int       @map("term_days")
+  collectionRate Decimal   @default(0) @map("collection_rate") @db.Decimal(5, 4) // share of daily sales auto-collected
+  score          Int?
+  disbursedAt    DateTime? @map("disbursed_at")
+  settledAt      DateTime? @map("settled_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  createdById    String?   @map("created_by") @db.Uuid
+
+  business   Business             @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  repayments FinancingRepayment[]
+
+  @@index([businessId, status])
+  @@map("financing_advances")
+}
+
+model FinancingRepayment {
+  id        String   @id @default(uuid()) @db.Uuid
+  advanceId String   @map("advance_id") @db.Uuid
+  businessId String  @map("business_id") @db.Uuid
+  amount    Decimal  @db.Decimal(14, 2)
+  source    String   @default("manual") @db.VarChar(20) // manual | auto_sales
+  createdAt DateTime @default(now()) @map("created_at")
+
+  advance FinancingAdvance @relation(fields: [advanceId], references: [id], onDelete: Cascade)
+
+  @@index([advanceId])
+  @@map("financing_repayments")
 }
 
 // ── General Ledger (the accounting spine) ───────────────────────────────────

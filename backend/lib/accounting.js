@@ -24,11 +24,13 @@ const CHART = [
   { code: '1200', name: 'Inventory',           type: 'asset',     normal: 'debit'  },
   { code: '2000', name: 'Accounts Payable',    type: 'liability', normal: 'credit' },
   { code: '2100', name: 'Tax Payable',         type: 'liability', normal: 'credit' },
+  { code: '2200', name: 'Financing Payable',   type: 'liability', normal: 'credit' },
   { code: '3000', name: "Owner's Equity",      type: 'equity',    normal: 'credit' },
   { code: '4000', name: 'Sales Revenue',       type: 'revenue',   normal: 'credit' },
   { code: '5000', name: 'Cost of Goods Sold',  type: 'expense',   normal: 'debit'  },
   { code: '5100', name: 'Salaries & Wages',     type: 'expense',   normal: 'debit'  },
   { code: '5200', name: 'Operating Expenses',   type: 'expense',   normal: 'debit'  },
+  { code: '5300', name: 'Financing Cost',       type: 'expense',   normal: 'debit'  },
 ];
 
 // Map a payment method to the asset/AR account its money lands in.
