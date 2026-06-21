@@ -10,6 +10,7 @@
 const express = require('express');
 const { z } = require('zod');
 const prisma = require('../lib/prisma');
+const accounting = require('../lib/accounting');
 const { auth, requireRole } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 
@@ -32,11 +33,19 @@ router.get('/:id/costing', auth, async (req, res, next) => {
       prisma.laborEntry.aggregate({ where: { projectId: project.id }, _sum: { total: true } }),
     ]);
     const laborActual = parseFloat(labor._sum.total || 0);
-    const enriched = lines.map(l => ({
-      ...l,
-      actual: l.category === 'labor' ? +(parseFloat(l.actual) + laborActual).toFixed(2) : parseFloat(l.actual),
-      variance: +(parseFloat(l.budgeted) - (l.category === 'labor' ? parseFloat(l.actual) + laborActual : parseFloat(l.actual))).toFixed(2),
-    }));
+    // Daily-labor entries roll into the labor category exactly ONCE. The old code
+    // added them to every labor budget line, so two labor lines double-counted the
+    // wage bill; and with no labor line the wages vanished from the totals.
+    let laborApplied = false;
+    const enriched = lines.map(l => {
+      let actual = parseFloat(l.actual);
+      if (l.category === 'labor' && !laborApplied) { actual = +(actual + laborActual).toFixed(2); laborApplied = true; }
+      return { ...l, actual, variance: +(parseFloat(l.budgeted) - actual).toFixed(2) };
+    });
+    // Labor was logged but never budgeted — surface it so it isn't lost from totals.
+    if (!laborApplied && laborActual > 0) {
+      enriched.push({ id: null, projectId: project.id, category: 'labor', description: 'Daily labor (unbudgeted)', budgeted: 0, actual: laborActual, variance: -laborActual });
+    }
     const totalBudget = enriched.reduce((s, l) => s + parseFloat(l.budgeted), 0);
     const totalActual = enriched.reduce((s, l) => s + l.actual, 0);
     res.json({
@@ -190,19 +199,57 @@ router.get('/:id/milestones', auth, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// Advance milestone status: pending → in_progress → complete → billed → paid
+// Advance milestone status: pending → in_progress → complete → billed → paid.
+// Billing raises a real receivable against revenue (retention held aside); paying
+// collects the net into the chosen account. Both post to the GL idempotently.
 router.put('/milestones/:msId/status', auth, validate(z.object({
   status: z.enum(['pending', 'in_progress', 'complete', 'billed', 'paid']),
+  method: z.string().max(30).optional(),
 })), async (req, res, next) => {
   try {
+    const businessId = req.user.business_id;
     const ms = await prisma.projectMilestone.findFirst({
-      where: { id: req.params.msId, project: { businessId: req.user.business_id } },
+      where: { id: req.params.msId, project: { businessId } },
     });
     if (!ms) return res.status(404).json({ title: 'Milestone not found', status: 404 });
-    const stamps = {};
-    if (req.body.status === 'complete') stamps.completedAt = new Date();
-    if (req.body.status === 'billed') stamps.billedAt = new Date();
-    res.json(await prisma.projectMilestone.update({ where: { id: ms.id }, data: { status: req.body.status, ...stamps } }));
+
+    const next_ = req.body.status;
+    const total = parseFloat(ms.amount);
+    const retention = +(total * parseFloat(ms.retentionPct) / 100).toFixed(2);
+    const net = +(total - retention).toFixed(2);
+
+    // A milestone can only be billed once it's actually complete.
+    if (next_ === 'billed' && ms.status !== 'complete' && !ms.completedAt) {
+      return res.status(422).json({ title: 'Milestone must be complete before billing', status: 422 });
+    }
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const stamps = {};
+      if (next_ === 'complete') stamps.completedAt = ms.completedAt || new Date();
+
+      // Raise the receivable on first billing (or implicitly when jumping to paid).
+      const needsBill = (next_ === 'billed' || next_ === 'paid') && !ms.billedAt;
+      if (needsBill) {
+        stamps.billedAt = new Date();
+        if (total > 0) {
+          await accounting.postMilestoneBill(tx, {
+            businessId, amount: total, retention, sourceId: ms.id,
+            createdById: req.user.id, description: `Milestone: ${ms.name}`,
+          });
+        }
+      }
+
+      // Collect the net (retention stays receivable) — once.
+      if (next_ === 'paid' && net > 0) {
+        const paid = await tx.journalEntry.findFirst({ where: { businessId, sourceType: 'milestone_payment', sourceId: ms.id } });
+        if (!paid) {
+          await accounting.postMilestonePayment(tx, { businessId, method: req.body.method || 'cash', amount: net, sourceId: ms.id, createdById: req.user.id });
+        }
+      }
+
+      return tx.projectMilestone.update({ where: { id: ms.id }, data: { status: next_, ...stamps } });
+    });
+    res.json(updated);
   } catch (err) { next(err); }
 });
 
