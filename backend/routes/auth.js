@@ -274,7 +274,10 @@ router.post('/forgot-password', validate(z.object({ email: z.string().email() })
     const { sendPasswordReset } = require('../lib/email');
     const base = (process.env.FRONTEND_URL || '').replace(/\/$/, '');
     const resetUrl = `${base}/reset-password?token=${rawToken}`;
-    await sendPasswordReset(user.email, user.name, resetUrl).catch(() => {});
+    // Fire-and-forget: never block (or delay) the HTTP response on SMTP. A slow
+    // or unreachable mail server must not hang the request, and keeping the
+    // response time constant preserves the enumeration-safe behaviour.
+    sendPasswordReset(user.email, user.name, resetUrl).catch(() => {});
     res.json({ message: 'If that email is registered, a reset link has been sent.' });
   } catch (err) { next(err); }
 });
