@@ -328,7 +328,7 @@ router.get('/reservations', auth, async (req, res, next) => {
     // Today's activity summary
     const [arrivalsToday, departuresToday, inHouse] = await Promise.all([
       prisma.reservation.count({ where: { businessId: req.user.business_id, checkInDate: { gte: today, lt: new Date(today.getTime() + 86400000) }, status: 'confirmed' } }),
-      prisma.reservation.count({ where: { businessId: req.user.business_id, checkOutDate: { gte: today, lt: new Date(today.getTime() + 86400000) }, status: 'checked_in' } }),
+      prisma.reservation.count({ where: { businessId: req.user.business_id, checkOutDate: { gte: today, lt: new Date(today.getTime() + 86400000) }, status: { in: ['checked_in', 'checked_out'] } } }),
       prisma.reservation.count({ where: { businessId: req.user.business_id, status: 'checked_in' } }),
     ]);
 
@@ -347,25 +347,11 @@ router.post('/reservations', auth, validate(ReservationSchema), async (req, res,
     const nights = nightsBetween(checkInDate, checkOutDate);
     if (nights < 1) return res.status(400).json({ error: 'Check-out must be after check-in.' });
 
-    // Check room availability — no overlapping confirmed/checked_in reservations
-    const conflict = await prisma.reservation.findFirst({
-      where: {
-        roomId,
-        status: { in: ['confirmed', 'checked_in'] },
-        AND: [
-          { checkInDate:  { lt: new Date(checkOutDate) } },
-          { checkOutDate: { gt: new Date(checkInDate)  } },
-        ],
-      },
-    });
-    if (conflict) {
-      return res.status(409).json({
-        error: `Room is already reserved from ${conflict.checkInDate.toISOString().split('T')[0]} to ${conflict.checkOutDate.toISOString().split('T')[0]}.`,
-        code: 'ROOM_NOT_AVAILABLE',
-      });
-    }
+    // The room must belong to this business.
+    const roomRow = await prisma.room.findFirst({ where: { id: roomId, businessId: req.user.business_id }, select: { id: true } });
+    if (!roomRow) return res.status(404).json({ error: 'Room not found.' });
 
-    // Resolve or create guest record
+    // Resolve or create guest record (outside the booking tx is fine)
     let resolvedGuestId = guestId;
     if (!resolvedGuestId && guestName) {
       const guest = await prisma.customer.create({
@@ -395,7 +381,27 @@ router.post('/reservations', auth, validate(ReservationSchema), async (req, res,
 
     const totalRoomCharge = resolvedRate * nights;
 
+    let conflictErr = null;
     const reservation = await prisma.$transaction(async (tx) => {
+      // Serialize bookings for this room: lock the room row, THEN check for an
+      // overlap inside the same transaction. Without the lock two concurrent
+      // requests both pass the availability check and double-book.
+      await tx.$queryRaw`SELECT id FROM rooms WHERE id = ${roomId}::uuid FOR UPDATE`;
+      const conflict = await tx.reservation.findFirst({
+        where: {
+          roomId,
+          status: { in: ['confirmed', 'checked_in'] },
+          AND: [
+            { checkInDate:  { lt: new Date(checkOutDate) } },
+            { checkOutDate: { gt: new Date(checkInDate)  } },
+          ],
+        },
+      });
+      if (conflict) {
+        conflictErr = `Room is already reserved from ${conflict.checkInDate.toISOString().split('T')[0]} to ${conflict.checkOutDate.toISOString().split('T')[0]}.`;
+        return null;
+      }
+
       const res = await tx.reservation.create({
         data: {
           businessId:        req.user.business_id,
@@ -432,7 +438,11 @@ router.post('/reservations', auth, validate(ReservationSchema), async (req, res,
       return res;
     });
 
-    webhooks.emit(req.user.business_id, 'sale.completed', {
+    if (conflictErr) {
+      return res.status(409).json({ error: conflictErr, code: 'ROOM_NOT_AVAILABLE' });
+    }
+
+    webhooks.emit(req.user.business_id, 'reservation.created', {
       type:           'reservation',
       reservation_id: reservation.id,
       guest:          reservation.guest.name,
@@ -586,6 +596,42 @@ router.post('/reservations/:id/checkout', auth, validate(z.object({
 
     const folio = reservation.folio;
     if (!folio) return res.status(400).json({ error: 'No folio found. Contact support.' });
+
+    // Apply service charge + tax from the property settings, once, before
+    // settling. Service charge applies to the running charges; tax applies to
+    // charges + service charge. Both are skipped if already posted (idempotent).
+    const settings = await prisma.hotelSettings.findUnique({ where: { businessId: req.user.business_id } });
+    const asFraction = (v) => { const n = parseFloat(v || 0); return n > 1 ? n / 100 : n; }; // accept 5 or 0.05
+    const scPct  = asFraction(settings?.serviceChargePct);
+    const taxPct = asFraction(settings?.taxRate);
+    const alreadyPosted = (folio.charges || []).some(c => c.type === 'service_charge' || c.type === 'tax');
+    if (!alreadyPosted && (scPct > 0 || taxPct > 0)) {
+      const base = (folio.charges || []).reduce((s, c) => s + parseFloat(c.totalAmount), 0);
+      const serviceCharge = parseFloat((base * scPct).toFixed(2));
+      const tax = parseFloat(((base + serviceCharge) * taxPct).toFixed(2));
+      await prisma.$transaction(async (tx) => {
+        if (serviceCharge > 0) {
+          await tx.folioCharge.create({ data: {
+            folioId: folio.id, businessId: req.user.business_id, type: 'service_charge',
+            description: `Service charge (${(scPct * 100).toFixed(1)}%)`, quantity: 1,
+            unitAmount: serviceCharge, totalAmount: serviceCharge, currency: folio.currency, chargeDate: new Date(),
+          } });
+        }
+        if (tax > 0) {
+          await tx.folioCharge.create({ data: {
+            folioId: folio.id, businessId: req.user.business_id, type: 'tax',
+            description: `Tax (${(taxPct * 100).toFixed(1)}%)`, quantity: 1,
+            unitAmount: tax, totalAmount: tax, currency: folio.currency, chargeDate: new Date(),
+          } });
+        }
+        const added = serviceCharge + tax;
+        if (added > 0) {
+          await tx.folio.update({ where: { id: folio.id }, data: { totalCharges: { increment: added }, balance: { increment: added } } });
+        }
+      });
+      // Reflect the newly-posted charges in the balance we evaluate below.
+      folio.balance = parseFloat(folio.balance) + serviceCharge + tax;
+    }
 
     // Check balance — can't check out with unpaid balance unless explicitly overriding
     const balance = parseFloat(folio.balance);
@@ -889,8 +935,8 @@ router.get('/dashboard', auth, async (req, res, next) => {
       }),
       // Arrivals today
       prisma.reservation.count({ where: { businessId: bizId, checkInDate: { gte: today, lt: tomorrow }, status: 'confirmed' } }),
-      // Departures today
-      prisma.reservation.count({ where: { businessId: bizId, checkOutDate: { gte: today, lt: tomorrow }, status: 'checked_in' } }),
+      // Departures today (whether or not they've physically left yet)
+      prisma.reservation.count({ where: { businessId: bizId, checkOutDate: { gte: today, lt: tomorrow }, status: { in: ['checked_in', 'checked_out'] } } }),
       // Currently in-house
       prisma.reservation.count({ where: { businessId: bizId, status: 'checked_in' } }),
       // Room revenue today (folio charges for room_night)
@@ -1052,11 +1098,21 @@ router.post('/groups', auth, requireRole('owner', 'manager'), validate(z.object(
       });
       // Create master folio if billing type is master or split
       if (['master','split'].includes(req.body.billingType)) {
+        // The folio's guest must be a real Customer (FK), not the operating
+        // user. Materialise a customer record for the group organiser.
+        const organiser = await tx.customer.create({
+          data: {
+            businessId: req.user.business_id,
+            name:       req.body.organiserName || `${req.body.name} (group)`,
+            phone:      req.body.organiserPhone || null,
+            email:      req.body.organiserEmail || null,
+          },
+        });
         const folio = await tx.folio.create({
           data: {
             businessId:  req.user.business_id,
             folioNumber: folioNumber(),
-            guestId:     req.user.id, // Placeholder — updated when organiser is a customer
+            guestId:     organiser.id,
             currency:    req.body.currency || 'USD',
             notes:       `Master folio — Group ${groupNum}: ${req.body.name}`,
           },
@@ -1387,7 +1443,10 @@ router.get('/corporate/:id/invoice', auth, async (req, res, next) => {
     });
     if (!account) return res.status(404).json({ error: 'Corporate account not found.' });
 
-    const fromDate = new Date(parseInt(year || new Date().getFullYear()), parseInt(month || new Date().getMonth()) - 1, 1);
+    // month is 1-based in the API; default to the current calendar month.
+    const y = year  ? parseInt(year)  : new Date().getFullYear();
+    const m = month ? parseInt(month) : new Date().getMonth() + 1;
+    const fromDate = new Date(y, m - 1, 1);
     const toDate   = new Date(fromDate.getFullYear(), fromDate.getMonth() + 1, 0, 23, 59, 59);
 
     // Get all reservations for this corporate account in the period
