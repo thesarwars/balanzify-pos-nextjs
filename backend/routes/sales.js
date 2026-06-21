@@ -346,6 +346,7 @@ router.post('/', auth, validate(SaleSchemaV3), async (req, res, next) => {
           FROM cost_layers
           WHERE product_id = ${item.product_id}::uuid
             AND business_id = ${req.user.business_id}::uuid
+            AND (location_id = ${locId}::uuid OR location_id IS NULL)
             AND quantity_remaining > 0
           ORDER BY received_at ASC
           FOR UPDATE
