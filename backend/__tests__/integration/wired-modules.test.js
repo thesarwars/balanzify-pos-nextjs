@@ -12,6 +12,7 @@ const crypto = require('crypto');
 const speakeasy = require('speakeasy');
 const { app } = require('../../server');
 const prisma = require('../../lib/prisma');
+const { requireModule } = require('../../lib/moduleGate');
 
 const auth = (t) => ({ Authorization: `Bearer ${t}` });
 let SEQ = 0;
@@ -24,10 +25,20 @@ async function register() {
   return res.body.access_token;
 }
 async function enableModule(token, key) {
-  const cat = (await request(app).get('/api/v1/modules').set(auth(token))).body.catalog;
-  const enabledModules = [...new Set([...cat.filter(m => m.enabled).map(m => m.key), key])];
-  const res = await request(app).put('/api/v1/modules').set(auth(token)).send({ enabledModules });
-  expect(res.status).toBe(200);
+  // Paid add-ons require an active subscription (and the platform console is
+  // never self-grantable) in the real authorization model. Tests exercise the
+  // module FEATURES, not the billing/enable path, so seed the licensed state
+  // directly: an active subscription + the module in enabledModules.
+  const { businessId } = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
+  await prisma.moduleSubscription.upsert({
+    where:  { businessId_module: { businessId, module: key } },
+    update: { status: 'active' },
+    create: { businessId, module: key, status: 'active', priceMonthly: 0 },
+  });
+  const biz = await prisma.business.findUnique({ where: { id: businessId }, select: { enabledModules: true } });
+  const enabledModules = [...new Set([...(biz.enabledModules || []), key])];
+  await prisma.business.update({ where: { id: businessId }, data: { enabledModules } });
+  requireModule.invalidate(businessId); // clear the 60s gate cache so the change is visible now
 }
 async function stockedProduct(token, locationId, price = 10, stock = 100) {
   const p = await request(app).post('/api/v1/products').set(auth(token))
@@ -512,7 +523,11 @@ describe('hotel (PMS)', () => {
     rooms = (await request(app).get('/api/v1/hotel/rooms').set(auth(token))).body.rooms;
     expect(rooms.find(r => r.id === roomId).status).toBe('occupied');
 
-    // check out (zero balance settles) → housekeeping task auto-created
+    // the room charge (2 nights x 50) is posted to the folio at check-in
+    const rChk = (await request(app).get('/api/v1/hotel/reservations').set(auth(token))).body.reservations.find(x => x.id === resId);
+    expect(Number(rChk.folio.balance)).toBe(100);
+    // settle the folio, then check out → housekeeping task auto-created
+    await request(app).post(`/api/v1/hotel/folios/${rChk.folio.id}/payments`).set(auth(token)).send({ provider: 'cash', amount: 100 });
     expect((await request(app).post(`/api/v1/hotel/reservations/${resId}/checkout`).set(auth(token))).status).toBe(200);
     const hk = await request(app).get('/api/v1/hotel/housekeeping').set(auth(token));
     expect(hk.body.tasks.length).toBeGreaterThan(0);
@@ -532,16 +547,20 @@ describe('hotel (PMS)', () => {
     const r = (await request(app).get('/api/v1/hotel/reservations').set(auth(token))).body.reservations.find(x => x.id === resId);
     const folioId = r.folio.id;
 
+    // folio already carries the room charge (1 night x 80) posted at check-in
+    let folio = (await request(app).get(`/api/v1/hotel/folios/${folioId}`).set(auth(token))).body;
+    expect(Number(folio.totalCharges)).toBe(80);
+
     const ch = await request(app).post(`/api/v1/hotel/folios/${folioId}/charges`).set(auth(token)).send({ type: 'restaurant', description: 'Dinner', quantity: 2, unitAmount: 15, chargeDate: '2026-08-01' });
     expect(ch.status).toBe(201);
-    let folio = (await request(app).get(`/api/v1/hotel/folios/${folioId}`).set(auth(token))).body;
-    expect(Number(folio.totalCharges)).toBe(30);
-    expect(Number(folio.balance)).toBe(30);
+    folio = (await request(app).get(`/api/v1/hotel/folios/${folioId}`).set(auth(token))).body;
+    expect(Number(folio.totalCharges)).toBe(110); // 80 room + 30 dinner
+    expect(Number(folio.balance)).toBe(110);
 
     // outstanding balance blocks checkout
     expect((await request(app).post(`/api/v1/hotel/reservations/${resId}/checkout`).set(auth(token))).status).toBe(400);
 
-    const pay = await request(app).post(`/api/v1/hotel/folios/${folioId}/payments`).set(auth(token)).send({ provider: 'cash', amount: 30 });
+    const pay = await request(app).post(`/api/v1/hotel/folios/${folioId}/payments`).set(auth(token)).send({ provider: 'cash', amount: 110 });
     expect(pay.status).toBe(201);
     folio = (await request(app).get(`/api/v1/hotel/folios/${folioId}`).set(auth(token))).body;
     expect(Number(folio.balance)).toBe(0);

@@ -16,10 +16,14 @@ const prisma  = require('../../lib/prisma');
 
 const auth = (token) => ({ Authorization: `Bearer ${token}` });
 
-async function registerBusiness(suffix = Date.now()) {
-  const email = `owner_${suffix}@balanzify.test`;
+async function registerBusiness(arg = Date.now()) {
+  // Accept either a full email (when a test needs a specific address) or a
+  // suffix used to build one. Previously the email arg was silently treated as
+  // a suffix, so the duplicate-email and login tests asserted a different
+  // address than was registered.
+  const email = String(arg).includes('@') ? arg : `owner_${arg}@balanzify.test`;
   const res = await request(app).post('/api/v1/auth/register').send({
-    businessName: `Test Business ${suffix}`,
+    businessName: `Test Business ${arg}`,
     email,
     password: 'SecureTestPass123!',
   });
@@ -86,7 +90,13 @@ beforeAll(async () => {
   ownerToken = reg.access_token;
   businessId = reg.business.id;
 
-  const locRes = await request(app).get('/api/v1/locations').set(auth(ownerToken));
+  // Registration doesn't seed a location, so create one for opening-stock /
+  // checkout tests (mirrors what the wired-modules suite does for its business).
+  let locRes = await request(app).get('/api/v1/locations').set(auth(ownerToken));
+  if (!locRes.body.locations?.length) {
+    await request(app).post('/api/v1/locations').set(auth(ownerToken)).send({ name: 'Main', type: 'store' });
+    locRes = await request(app).get('/api/v1/locations').set(auth(ownerToken));
+  }
   locationId = locRes.body.locations?.[0]?.id;
 }, 20000);
 
