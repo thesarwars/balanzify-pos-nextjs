@@ -203,6 +203,18 @@ describe('HRM', () => {
     expect(parseFloat(pay.net)).toBe(600);
     expect(parseFloat(pay.advance_recovered)).toBe(150);
     expect((await request(app).get('/api/v1/hrm/advance/outstanding/' + e.id).set(auth(token))).body.outstanding).toBe(0);
+
+    // GL: payroll posts gross wages (800) = net cash (600) + deductions (200)
+    const entry = await prisma.journalEntry.findFirst({
+      where: { sourceType: 'payroll', sourceId: pay.id },
+      include: { lines: { include: { account: true } } },
+    });
+    expect(entry).toBeTruthy();
+    const by = {};
+    for (const l of entry.lines) by[l.account.code] = l;
+    expect(parseFloat(by['5100'].debit)).toBeCloseTo(800, 2);  // Salaries & Wages expense
+    expect(parseFloat(by['1000'].credit)).toBeCloseTo(600, 2); // Net pay (cash)
+    expect(parseFloat(by['2100'].credit)).toBeCloseTo(200, 2); // Deductions withheld
   });
   test('leave balance accrual + over-apply 422', async () => {
     const e = (await request(app).post('/api/v1/hrm/employee').set(auth(token)).send({ name: 'Bashir', salary: 700, joined: '2026-01-01' })).body;
