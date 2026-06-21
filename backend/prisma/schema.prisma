@@ -274,6 +274,8 @@ model Business {
   recipes            Recipe[]
   accounts           Account[]
   journalEntries     JournalEntry[]
+  prescriptions      Prescription[]
+  dispenseRecords    DispenseRecord[]
   supplierCatalogs   SupplierCatalog[]
   scheduledReports   ScheduledReport[]
   whatsappLogs       WhatsappLog[]
@@ -1028,6 +1030,7 @@ model Product {
   formulation        String?  @db.VarChar(50)
   manufacturer       String?  @db.VarChar(255)
   isPrescriptionDrug Boolean  @default(false) @map("is_prescription_drug")
+  controlledSchedule String?  @map("controlled_schedule") @db.VarChar(10) // e.g. C-II … C-V; null = not controlled
   // ── Partial-pack / unit selling ──
   packSize           Int?     @map("pack_size")
   sellByUnit         Boolean  @default(false) @map("sell_by_unit")
@@ -1067,6 +1070,8 @@ model Product {
   orderItems         OrderItem[]            @relation("menu_item")
   recipe             Recipe?                @relation("product_recipe")
   recipeUses         RecipeItem[]           @relation("ingredient_recipe_items")
+  prescriptions      Prescription[]         @relation("prescription_drug")
+  dispenseRecords    DispenseRecord[]       @relation("dispense_drug")
 
   wholesaleOrderItems WholesaleOrderItem[] @relation("wholesale_item_product")
   @@index([businessId])
@@ -1508,6 +1513,7 @@ model Customer {
   lostFoundItems  LostFound[]  @relation("lost_found_guest")
 
   wholesaleOrders WholesaleOrder[] @relation("wholesale_customer")
+  prescriptions   Prescription[]
   @@map("customers")
 }
 
@@ -2128,6 +2134,55 @@ model RecipeItem {
   @@unique([recipeId, ingredientId])
   @@index([recipeId])
   @@map("recipe_items")
+}
+
+// ── Pharmacy: prescriptions + dispensing (regulatory record) ────────────────
+model Prescription {
+  id                String   @id @default(uuid()) @db.Uuid
+  businessId        String   @map("business_id") @db.Uuid
+  rxNumber          String   @map("rx_number") @db.VarChar(40)
+  productId         String   @map("product_id") @db.Uuid
+  patientId         String?  @map("patient_id") @db.Uuid
+  patientName       String   @map("patient_name") @db.VarChar(255)
+  patientPhone      String?  @map("patient_phone") @db.VarChar(50)
+  prescriberName    String   @map("prescriber_name") @db.VarChar(255)
+  prescriberReg     String?  @map("prescriber_reg") @db.VarChar(100)
+  sig               String?  // dosage instructions
+  quantity          Int      // quantity per fill (base units)
+  refillsAuthorized Int      @default(0) @map("refills_authorized")
+  refillsUsed       Int      @default(0) @map("refills_used")
+  daw               Boolean  @default(false) // dispense as written
+  status            String   @default("active") @db.VarChar(20) // active | completed | cancelled
+  issuedAt          DateTime @default(now()) @map("issued_at")
+  createdById       String?  @map("created_by") @db.Uuid
+
+  business  Business         @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  product   Product          @relation("prescription_drug", fields: [productId], references: [id])
+  patient   Customer?        @relation(fields: [patientId], references: [id])
+  dispenses DispenseRecord[]
+
+  @@index([businessId])
+  @@map("prescriptions")
+}
+
+model DispenseRecord {
+  id             String   @id @default(uuid()) @db.Uuid
+  businessId     String   @map("business_id") @db.Uuid
+  prescriptionId String   @map("prescription_id") @db.Uuid
+  productId      String   @map("product_id") @db.Uuid
+  quantity       Int
+  saleId         String?  @map("sale_id") @db.Uuid
+  dispensedById  String?  @map("dispensed_by") @db.Uuid
+  verifiedById   String?  @map("verified_by") @db.Uuid // 2nd-person check for controlled substances
+  dispensedAt    DateTime @default(now()) @map("dispensed_at")
+
+  business     Business     @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  prescription Prescription @relation(fields: [prescriptionId], references: [id], onDelete: Cascade)
+  product      Product      @relation("dispense_drug", fields: [productId], references: [id])
+
+  @@index([businessId])
+  @@index([prescriptionId])
+  @@map("dispense_records")
 }
 
 // ── General Ledger (the accounting spine) ───────────────────────────────────
