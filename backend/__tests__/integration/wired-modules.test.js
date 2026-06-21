@@ -819,4 +819,40 @@ describe('restaurant recipes (BOM ingredient depletion)', () => {
   });
 });
 
+describe('financial statements (P&L + balance sheet from the ledger)', () => {
+  let token, loc;
+  beforeAll(async () => { token = await register(); loc = await location(token); });
+
+  test('P&L and balance sheet derive from the journals and balance', async () => {
+    // Receive 50 units @ 12 via a PO → Dr Inventory 600 / Cr Accounts Payable 600
+    const sup = (await request(app).post('/api/v1/suppliers').set(auth(token)).send({ name: 'Acme Supply', currency: 'USD' })).body;
+    const prod = (await request(app).post('/api/v1/products').set(auth(token)).send({ name: `Widget ${Date.now()}`, selling_price: 20, cost_price: 12 })).body;
+    const po = (await request(app).post('/api/v1/purchase-orders').set(auth(token)).send({
+      supplier_id: sup.id, location_id: loc, currency: 'USD',
+      items: [{ product_id: prod.id, ordered_qty: 50, unit_price: 12 }],
+    })).body;
+    const poItemId = po.items[0].id;
+    expect((await request(app).put(`/api/v1/purchase-orders/${po.id}/status`).set(auth(token))
+      .send({ status: 'received', received_items: [{ id: poItemId, product_id: prod.id, qty: 50, unit_price: 12 }] })).status).toBe(200);
+
+    // Sell 2 @ 20 (cash) → revenue 40, COGS 24 (FIFO @ 12)
+    expect((await makeSale(token, loc, prod.id, { qty: 2, price: 20 })).status).toBe(201);
+    // Pay an operating expense of 10 → Dr Operating Expenses / Cr Cash
+    expect((await request(app).post('/api/v1/expenses').set(auth(token)).send({ amount: 10, payment_status: 'paid' })).status).toBe(201);
+
+    const pl = (await request(app).get('/api/v1/accounting/income-statement').set(auth(token))).body;
+    expect(pl.revenue).toBeCloseTo(40, 2);
+    expect(pl.cogs).toBeCloseTo(24, 2);
+    expect(pl.gross_profit).toBeCloseTo(16, 2);
+    expect(pl.operating_expenses).toBeCloseTo(10, 2);
+    expect(pl.net_profit).toBeCloseTo(6, 2);
+
+    const bs = (await request(app).get('/api/v1/accounting/balance-sheet').set(auth(token))).body;
+    expect(bs.balanced).toBe(true);
+    expect(bs.assets).toBeCloseTo(606, 2);       // cash 30 + inventory 576
+    expect(bs.liabilities).toBeCloseTo(600, 2);  // accounts payable
+    expect(bs.equity).toBeCloseTo(6, 2);         // retained earnings = net profit
+  });
+});
+
 afterAll(async () => { await prisma.$disconnect(); });
