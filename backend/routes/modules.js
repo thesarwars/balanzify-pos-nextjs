@@ -45,13 +45,57 @@ router.put('/', auth, requireRole('owner'), validate(z.object({
   enabledModules: z.array(z.enum(Object.keys(MODULES))).max(20),
 })), async (req, res, next) => {
   try {
+    const requested = req.body.enabledModules;
+
+    // ── Authorization: an owner may NOT self-grant paid add-ons or the platform
+    // console. Paid add-ons (MODULES[k].default === false) are unlocked only
+    // through billing (an active ModuleSubscription) or by a platform operator;
+    // `superadmin` is never self-serviceable from a tenant. This endpoint is for
+    // toggling base-plan modules and turning OFF things you no longer want.
+    const isPaidAddon = (k) => MODULES[k]?.default === false;
+
+    // superadmin is platform-operator-only — reject outright.
+    if (requested.includes('superadmin')) {
+      return res.status(403).json({
+        type: 'https://balanzify.com/errors/forbidden',
+        title: 'Cannot self-grant the platform console',
+        status: 403,
+        detail: 'The superadmin module is granted by a Balanzify platform operator, not from your account.',
+      });
+    }
+
+    // What paid add-ons is this business actually entitled to keep/enable?
+    const [biz, subs] = await Promise.all([
+      prisma.business.findUnique({ where: { id: req.user.business_id }, select: { enabledModules: true } }),
+      prisma.moduleSubscription.findMany({
+        where: { businessId: req.user.business_id, status: 'active' },
+        select: { module: true },
+      }),
+    ]);
+    const currentlyEnabled = new Set(biz?.enabledModules || []);
+    const subscribed = new Set(subs.map((s) => s.module));
+    const entitled = (k) => currentlyEnabled.has(k) || subscribed.has(k);
+
+    // Any requested paid add-on that isn't already enabled or actively subscribed
+    // is a self-grant attempt — block it.
+    const unauthorized = requested.filter((k) => isPaidAddon(k) && !entitled(k));
+    if (unauthorized.length) {
+      return res.status(402).json({
+        type: 'https://balanzify.com/errors/payment-required',
+        title: 'Add-on requires an active subscription',
+        status: 402,
+        modules: unauthorized,
+        detail: `These modules are paid add-ons and must be activated through billing: ${unauthorized.join(', ')}.`,
+      });
+    }
+
     await prisma.business.update({
       where: { id: req.user.business_id },
-      data: { enabledModules: req.body.enabledModules },
+      data: { enabledModules: requested },
     });
     requireModule.invalidate(req.user.business_id);
-    const enabled = resolveEnabled(req.body.enabledModules);
-    res.json({ licensed: req.body.enabledModules, effective: [...enabled] });
+    const enabled = resolveEnabled(requested);
+    res.json({ licensed: requested, effective: [...enabled] });
   } catch (err) { next(err); }
 });
 
