@@ -14,6 +14,7 @@
 
 const prisma = require('./prisma');
 const crypto = require('crypto');
+const accounting = require('./accounting');
 
 /**
  * Get the current balance from the ledger (source of truth).
@@ -134,6 +135,18 @@ async function postRepayment(tx, { businessId, customerId, amount, currency = 'U
   await tx.customer.update({
     where: { id: customerId },
     data:  { outstandingBalance: balanceAfter },
+  });
+
+  // GL: a repayment brings in cash and reduces accounts receivable. (The credit
+  // SALE already debited AR via the sale journal.)
+  await accounting.postJournal(tx, {
+    businessId,
+    description: 'Credit repayment',
+    sourceType: 'credit_repayment', sourceId: customerId, createdById: recordedById,
+    lines: [
+      { code: accounting.tenderAccountCode(paymentMethod), debit: parseFloat(amount), credit: 0, description: 'Repayment received' },
+      { code: '1100', debit: 0, credit: parseFloat(amount), description: 'Accounts receivable' },
+    ],
   });
 
   return balanceAfter;
