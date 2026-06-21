@@ -4,6 +4,7 @@
  */
 const express = require('express');
 const prisma = require('../lib/prisma');
+const accounting = require('../lib/accounting');
 const { auth, requireRole } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { EmployeeSchema, OrgUnitSchema, HrmSettingsSchema, EmployeeShiftSchema, AttendanceClockSchema,
@@ -806,10 +807,14 @@ router.post('/payroll', auth, requireRole('owner', 'manager'), validate(PayrollS
           recovered += take;
         }
       }
-      return tx.payroll.create({
+      const created = await tx.payroll.create({
         data: { businessId, employeeId: emp.id, month: b.month, basic: b.basic, allowance: b.allowance, overtime: b.overtime, bonus: b.bonus, incentive: b.incentive, deduction: b.deduction, advanceRecovered: +recovered.toFixed(2), net, status: 'paid' },
         include: { employee: { select: { name: true } } },
       });
+      // GL: gross wages expensed, net paid in cash, deductions withheld as payable.
+      const gross = b.basic + b.allowance + b.overtime + b.bonus + b.incentive;
+      await accounting.postPayroll(tx, { businessId, gross, net, deduction: b.deduction, sourceId: created.id, createdById: req.user.id });
+      return created;
     });
     res.status(201).json(serializePayroll(payroll));
   } catch (err) { next(err); }
