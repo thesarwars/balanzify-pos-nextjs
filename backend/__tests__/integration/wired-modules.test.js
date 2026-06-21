@@ -877,6 +877,48 @@ describe('lending — underwriting from the ledger', () => {
     expect(a.recommended_limit).toBeGreaterThan(0);
     expect(a.recommended_limit).toBeLessThanOrEqual(a.signals.avg_monthly_revenue + 0.01); // scaled by score ≤ 1
   });
+
+  test('Sharia-compliant advance: fixed fee, disburse, auto-collect from sales, settle', async () => {
+    const token = await register();
+    const loc = await location(token);
+    const prod = await stockedProduct(token, loc, 20, 1000); // sell 20, cost 5
+    expect((await makeSale(token, loc, prod, { qty: 300, price: 20 })).status).toBe(201); // qualify (6000)
+
+    // Offer 1000 over 30 days, auto-collect 50% of takings
+    const offer = await request(app).post('/api/v1/lending/offer').set(auth(token))
+      .send({ principal: 1000, term_days: 30, collection_rate: 0.5 });
+    expect(offer.status).toBe(201);
+    // Fixed disclosed fee (6% flat) — NOT interest
+    expect(Number(offer.body.feeAmount)).toBeCloseTo(60, 2);
+    expect(Number(offer.body.totalRepayable)).toBeCloseTo(1060, 2);
+
+    // Over-limit offers are refused by underwriting
+    expect((await request(app).post('/api/v1/lending/offer').set(auth(token)).send({ principal: 999999 })).status).toBe(400);
+
+    // Disburse → financing payable appears on the books
+    expect((await request(app).post(`/api/v1/lending/advances/${offer.body.id}/disburse`).set(auth(token))).status).toBe(200);
+    let tb = (await request(app).get('/api/v1/accounting/trial-balance').set(auth(token))).body;
+    expect(tb.totals.balanced).toBe(true);
+    expect(tb.accounts.find(a => a.code === '2200').balance).toBeCloseTo(1060, 2); // owes principal + fee
+
+    // A 400 cash sale auto-collects 50% = 200 toward the advance
+    expect((await makeSale(token, loc, prod, { qty: 20, price: 20 })).status).toBe(201);
+    let adv = (await request(app).get('/api/v1/lending/advances').set(auth(token))).body.advances[0];
+    expect(Number(adv.amountRepaid)).toBeCloseTo(200, 2);
+    expect(adv.outstanding).toBeCloseTo(860, 2);
+
+    // Manual repayment of the remaining 860 settles it
+    const repay = await request(app).post(`/api/v1/lending/advances/${offer.body.id}/repay`).set(auth(token)).send({ amount: 860 });
+    expect(repay.status).toBe(200);
+    expect(repay.body.settled).toBe(true);
+    adv = (await request(app).get('/api/v1/lending/advances').set(auth(token))).body.advances[0];
+    expect(adv.status).toBe('settled');
+
+    // Books still balance after the whole financing lifecycle
+    tb = (await request(app).get('/api/v1/accounting/trial-balance').set(auth(token))).body;
+    expect(tb.totals.balanced).toBe(true);
+    expect(tb.accounts.find(a => a.code === '2200')?.balance || 0).toBeCloseTo(0, 2); // fully repaid
+  });
 });
 
 describe('pharmacy prescriptions & controlled substances', () => {

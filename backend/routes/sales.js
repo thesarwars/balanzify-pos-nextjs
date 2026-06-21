@@ -12,6 +12,7 @@ const { convert }        = require('../lib/currency');
 const { generateReceiptToken, receiptUrl, generateWhatsAppReceipt } = require('../lib/receipt');
 const creditEngine = require('../lib/credit');
 const accounting = require('../lib/accounting');
+const financing = require('../lib/financing');
 const router = express.Router();
 
 // ── Cart fingerprint ──────────────────────────────────────────────────────────
@@ -844,6 +845,10 @@ router.post('/', auth, validate(SaleSchemaV3), async (req, res, next) => {
         cogs:        saleCogs,
         createdById: req.user.id,
       });
+
+      // Auto-collect a fixed share of the takings toward any active financing
+      // advance (the lock-in mechanic). Based on cash collected, not credit sales.
+      await financing.autoCollect(tx, { businessId: req.user.business_id, collectible: amountPaid, createdById: req.user.id });
 
       // ── 16. Shift totals ──────────────────────────────────────────────────
       if (shift_id) {
