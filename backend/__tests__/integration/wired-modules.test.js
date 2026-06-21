@@ -855,4 +855,28 @@ describe('financial statements (P&L + balance sheet from the ledger)', () => {
   });
 });
 
+describe('lending — underwriting from the ledger', () => {
+  test('a fresh business with no activity is not eligible', async () => {
+    const token = await register();
+    const a = (await request(app).get('/api/v1/lending/assessment').set(auth(token))).body;
+    expect(a.eligible).toBe(false);
+    expect(a.recommended_limit).toBe(0);
+    expect(a.signals.avg_monthly_revenue).toBe(0);
+  });
+
+  test('a trading business is pre-qualified for a limit sized to its cashflow', async () => {
+    const token = await register();
+    const loc = await location(token);
+    const prod = await stockedProduct(token, loc, 20, 500); // sell 20, cost 5, stock 500
+    expect((await makeSale(token, loc, prod, { qty: 300, price: 20 })).status).toBe(201); // 6000 revenue
+
+    const a = (await request(app).get('/api/v1/lending/assessment').set(auth(token))).body;
+    expect(a.eligible).toBe(true);
+    expect(a.score).toBeGreaterThan(50);
+    expect(a.signals.avg_monthly_revenue).toBeCloseTo(2000, 0);   // 6000 over a 3-month window
+    expect(a.recommended_limit).toBeGreaterThan(0);
+    expect(a.recommended_limit).toBeLessThanOrEqual(a.signals.avg_monthly_revenue + 0.01); // scaled by score ≤ 1
+  });
+});
+
 afterAll(async () => { await prisma.$disconnect(); });
