@@ -1002,9 +1002,17 @@ describe('pharmacy prescriptions & controlled substances', () => {
 
 describe('restaurant checkout (in-process sale service — no HTTP self-call)', () => {
   let token, loc, prod;
-  beforeAll(async () => { token = await register(); await enableModule(token, 'restaurant'); loc = await location(token); prod = await stockedProduct(token, loc, 10, 100); });
+  beforeAll(async () => {
+    token = await register();
+    await enableModule(token, 'restaurant');
+    loc = await location(token);
+    prod = await stockedProduct(token, loc, 10, 100);
+    // configure a 10% service charge for this business
+    const { businessId } = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
+    await prisma.business.update({ where: { id: businessId }, data: { serviceChargePct: 10 } });
+  });
 
-  test('order → add item → checkout creates a real sale and completes the order', async () => {
+  test('order → add item → checkout: real sale, service charge applied, order completed', async () => {
     const order = (await request(app).post('/api/v1/restaurant/orders').set(auth(token)).send({ type: 'takeaway' })).body;
     expect(order.id).toBeTruthy();
     expect((await request(app).post(`/api/v1/restaurant/orders/${order.id}/items`).set(auth(token)).send({ productId: prod, quantity: 2 })).status).toBe(201);
@@ -1013,6 +1021,9 @@ describe('restaurant checkout (in-process sale service — no HTTP self-call)', 
       .send({ payment_method: 'cash', cash_tendered: 100 });
     expect(checkout.status).toBe(200);
     expect(checkout.body.sale.id).toBeTruthy();
+    // 2 x 10 = 20 subtotal; 10% service charge = 2; total 22
+    expect(Number(checkout.body.sale.serviceCharge)).toBeCloseTo(2, 2);
+    expect(Number(checkout.body.sale.totalAmount)).toBeCloseTo(22, 2);
 
     const ord = await prisma.restaurantOrder.findUnique({ where: { id: order.id } });
     expect(ord.status).toBe('completed');
