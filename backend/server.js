@@ -129,6 +129,7 @@ try {
   const salesRoutes = require('./routes/sales');
   const purchaseOrderRoutes = require('./routes/purchaseOrders');
   const exportRoutes  = require('./routes/exports');
+  const accountingRoutes = require('./routes/accounting');
   const paymentRoutes  = require('./routes/payments');
   const taxRoutes      = require('./routes/tax');
   const webhookRoutes  = require('./routes/webhooks');
@@ -199,6 +200,7 @@ try {
   app.use('/r', checkoutRoutes);
   
   app.use('/api/v1/export', apiLimiter, exportRoutes);
+  app.use('/api/v1/accounting', apiLimiter, accountingRoutes);
   app.use('/api/v1/upload', apiLimiter, uploadRoutes);
   app.use('/api/v1/stocktake', apiLimiter, stocktakeRoutes);
   app.use('/api/v1/currency', apiLimiter, currencyRoutes);
