@@ -68,38 +68,63 @@ router.get('/status/:reference', auth, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// Optional IP allowlist for unauthenticated payment callbacks. M-Pesa does not
+// sign its callbacks, so the practical defence is restricting source IPs to the
+// provider's published callback ranges (set MPESA_CALLBACK_IPS=ip1,ip2,...).
+function ipAllowed(req, envKey) {
+  const allow = (process.env[envKey] || '').split(',').map(s => s.trim()).filter(Boolean);
+  if (allow.length === 0) return true; // not configured → don't block (logged elsewhere)
+  const ip = (req.ip || '').replace(/^::ffff:/, '');
+  return allow.includes(ip);
+}
+
 // POST /api/v1/payments/webhook/mpesa
 router.post('/webhook/mpesa', express.raw({ type: 'application/json' }), async (req, res) => {
   try {
+    if (!ipAllowed(req, 'MPESA_CALLBACK_IPS')) {
+      logger.warn('mpesa_webhook_rejected_ip', { ip: req.ip });
+      return res.status(403).json({ ResultCode: 1, ResultDesc: 'Rejected' });
+    }
+
     const rawString = req.body instanceof Buffer ? req.body.toString('utf8') : req.body;
     const body = typeof rawString === 'string' ? JSON.parse(rawString) : rawString;
-    
+
     const callbackData = body.Body?.stkCallback;
     if (!callbackData) return res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
 
     const reference  = callbackData.CheckoutRequestID;
     const success    = callbackData.ResultCode === 0;
     const mpesaRef   = callbackData.CallbackMetadata?.Item?.find(i => i.Name === 'MpesaReceiptNumber')?.Value;
+    const paidAmount = callbackData.CallbackMetadata?.Item?.find(i => i.Name === 'Amount')?.Value;
 
-    logger.info('mpesa_webhook_received', { reference, success, mpesaRef });
+    logger.info('mpesa_webhook_received', { reference, success, mpesaRef, paidAmount });
 
-    await prisma.salePayment.updateMany({
-      where: { providerReference: reference },
+    // Resolve the exact pending M-Pesa payment this callback refers to, then
+    // update it by id — never a blind updateMany on a client-supplied reference
+    // (which could touch another tenant's row or re-complete a settled sale).
+    const payment = await prisma.salePayment.findFirst({
+      where: { providerReference: reference, provider: 'mpesa', status: 'pending' },
+      select: { id: true, saleId: true, amount: true },
+    });
+    if (!payment) {
+      // Unknown / already-processed reference — accept idempotently, change nothing.
+      return res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
+    }
+
+    await prisma.salePayment.update({
+      where: { id: payment.id },
       data: {
         status:            success ? 'completed' : 'failed',
-        providerReference:   mpesaRef || reference,
-        completedAt:         success ? new Date() : null,
-        rawResponse:         body,
+        providerReference: mpesaRef || reference,
+        completedAt:       success ? new Date() : null,
+        rawResponse:       body,
       },
     });
 
-    if (success) {
-      const payment = await prisma.salePayment.findFirst({ where: { providerReference: mpesaRef || reference } });
-      if (payment?.saleId) {
-        const sale = await prisma.sale.findUnique({ where: { id: payment.saleId }, select: { status: true } });
-        if (sale?.status === 'pending') {
-          await prisma.sale.update({ where: { id: payment.saleId }, data: { status: 'completed' } });
-        }
+    if (success && payment.saleId) {
+      const sale = await prisma.sale.findUnique({ where: { id: payment.saleId }, select: { status: true } });
+      if (sale?.status === 'pending') {
+        await prisma.sale.update({ where: { id: payment.saleId }, data: { status: 'completed' } });
       }
     }
 
@@ -113,35 +138,48 @@ router.post('/webhook/mpesa', express.raw({ type: 'application/json' }), async (
 // POST /api/v1/payments/webhook/moov
 router.post('/webhook/moov', express.raw({ type: 'application/json' }), async (req, res) => {
   try {
+    // Fail CLOSED: without a configured secret we cannot verify authenticity,
+    // so reject rather than silently trusting any caller.
+    if (!process.env.MOOV_WEBHOOK_SECRET) {
+      logger.error('moov_webhook_no_secret_configured');
+      return res.status(503).json({ error: 'Webhook verification not configured' });
+    }
     const signature = req.headers['x-moov-signature'];
-    
-    if (process.env.MOOV_WEBHOOK_SECRET && signature) {
-      const expected = crypto
-        .createHmac('sha256', process.env.MOOV_WEBHOOK_SECRET)
-        .update(req.body) 
-        .digest('hex');
-        
-      if (signature !== `sha256=${expected}`) {
-        logger.warn('moov_webhook_invalid_signature');
-        return res.status(401).json({ error: 'Invalid signature' });
-      }
+    if (!signature) {
+      logger.warn('moov_webhook_missing_signature');
+      return res.status(401).json({ error: 'Missing signature' });
+    }
+    const expected = crypto
+      .createHmac('sha256', process.env.MOOV_WEBHOOK_SECRET)
+      .update(req.body)
+      .digest('hex');
+    if (signature !== `sha256=${expected}`) {
+      logger.warn('moov_webhook_invalid_signature');
+      return res.status(401).json({ error: 'Invalid signature' });
     }
 
     const rawString = req.body instanceof Buffer ? req.body.toString('utf8') : req.body;
     const event = typeof rawString === 'string' ? JSON.parse(rawString) : rawString;
-    
+
     logger.info('moov_webhook_received', { type: event.eventType, transferID: event.data?.transferID });
 
     if (['transfer.completed', 'transfer.failed'].includes(event.eventType)) {
       const success = event.eventType === 'transfer.completed';
-      await prisma.salePayment.updateMany({
-        where: { providerReference: event.data.transferID },
-        data: {
-          status:      success ? 'completed' : 'failed',
-          completedAt: success ? new Date() : null,
-          rawResponse: event,
-        },
+      // Scope to a pending Moov payment for this transfer; update by id.
+      const payment = await prisma.salePayment.findFirst({
+        where: { providerReference: event.data.transferID, provider: 'moov', status: 'pending' },
+        select: { id: true },
       });
+      if (payment) {
+        await prisma.salePayment.update({
+          where: { id: payment.id },
+          data: {
+            status:      success ? 'completed' : 'failed',
+            completedAt: success ? new Date() : null,
+            rawResponse: event,
+          },
+        });
+      }
     }
 
     res.json({ received: true });
