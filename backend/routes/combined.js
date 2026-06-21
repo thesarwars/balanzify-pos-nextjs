@@ -922,8 +922,29 @@ usersRouter.post('/', auth, requireRole('owner'), validate(CreateUserSchema), as
 
 usersRouter.put('/:id', auth, requireRole('owner'), validate(UpdateUserSchema), async (req, res, next) => {
   try {
+    // Tenant isolation: only operate on users within the caller's business.
+    const target = await prisma.user.findFirst({
+      where: { id: req.params.id, businessId: req.user.business_id },
+      select: { id: true, role: true },
+    });
+    if (!target) return res.status(404).json({ title: 'User not found', status: 404 });
+
+    // Guardrail: never let the last active owner be demoted or deactivated,
+    // which would lock the business out of its own admin functions.
+    const demotingOrDisabling =
+      (req.body.role !== undefined && req.body.role !== 'owner') ||
+      req.body.is_active === false;
+    if (target.role === 'owner' && demotingOrDisabling) {
+      const otherOwners = await prisma.user.count({
+        where: { businessId: req.user.business_id, role: 'owner', isActive: true, id: { not: target.id } },
+      });
+      if (otherOwners === 0) {
+        return res.status(409).json({ title: 'Cannot remove the last active owner', status: 409 });
+      }
+    }
+
     const user = await prisma.user.update({
-      where: { id: req.params.id },
+      where: { id: target.id },
       data: { name: req.body.name, role: req.body.role, isActive: req.body.is_active, ...(req.body.pin !== undefined && { pin: req.body.pin || null }), ...(req.body.commission_percent !== undefined && { commissionPercent: req.body.commission_percent }) },
       select: { id: true, name: true, email: true, role: true, isActive: true, commissionPercent: true },
     });
@@ -954,7 +975,13 @@ categoriesRouter.post('/', auth, requireRole('owner', 'manager'), validate(requi
 
 categoriesRouter.put('/:id', auth, requireRole('owner', 'manager'), async (req, res, next) => {
   try {
-    const cat = await prisma.category.update({ where: { id: req.params.id }, data: { name: req.body.name, description: req.body.description, color: req.body.color } });
+    // Tenant isolation: scope the update to the caller's business.
+    const result = await prisma.category.updateMany({
+      where: { id: req.params.id, businessId: req.user.business_id },
+      data: { name: req.body.name, description: req.body.description, color: req.body.color },
+    });
+    if (result.count === 0) return res.status(404).json({ title: 'Category not found', status: 404 });
+    const cat = await prisma.category.findUnique({ where: { id: req.params.id } });
     res.json(cat);
   } catch (err) { next(err); }
 });
@@ -1022,7 +1049,13 @@ customersRouter.post('/', auth, validate(CustomerSchema), async (req, res, next)
 
 customersRouter.put('/:id', auth, validate(CustomerSchema.partial()), async (req, res, next) => {
   try {
-    const customer = await prisma.customer.update({ where: { id: req.params.id }, data: { name: req.body.name, phone: req.body.phone, whatsapp: req.body.whatsapp, email: req.body.email, address: req.body.address, creditLimit: req.body.credit_limit, customerGroupId: req.body.customer_group_id, notes: req.body.notes } });
+    // Tenant isolation: scope the update to the caller's business.
+    const result = await prisma.customer.updateMany({
+      where: { id: req.params.id, businessId: req.user.business_id },
+      data: { name: req.body.name, phone: req.body.phone, whatsapp: req.body.whatsapp, email: req.body.email, address: req.body.address, creditLimit: req.body.credit_limit, customerGroupId: req.body.customer_group_id, notes: req.body.notes },
+    });
+    if (result.count === 0) return res.status(404).json({ title: 'Customer not found', status: 404 });
+    const customer = await prisma.customer.findUnique({ where: { id: req.params.id } });
     res.json(customer);
   } catch (err) { next(err); }
 });
@@ -1043,7 +1076,15 @@ const settingsRouter = express.Router();
 
 settingsRouter.get('/', auth, async (req, res, next) => {
   try {
-    const biz = await prisma.business.findUnique({ where: { id: req.user.business_id } });
+    // Whitelist the fields returned — never leak internal columns
+    // (enabledModules, market flags, billing linkage, raw timestamps).
+    const biz = await prisma.business.findUnique({
+      where: { id: req.user.business_id },
+      select: {
+        id: true, name: true, phone: true, address: true, city: true, country: true,
+        currency: true, receiptHeader: true, receiptFooter: true, taxNumber: true,
+      },
+    });
     res.json(biz);
   } catch (err) { next(err); }
 });
@@ -1073,7 +1114,13 @@ notificationsRouter.get('/', auth, async (req, res, next) => {
 
 notificationsRouter.put('/:id/read', auth, async (req, res, next) => {
   try {
-    await prisma.notification.update({ where: { id: req.params.id }, data: { isRead: true } });
+    // Tenant isolation: only notifications belonging to this business and
+    // addressed to this user (or broadcast) can be marked read.
+    const result = await prisma.notification.updateMany({
+      where: { id: req.params.id, businessId: req.user.business_id, OR: [{ userId: req.user.id }, { userId: null }] },
+      data: { isRead: true },
+    });
+    if (result.count === 0) return res.status(404).json({ title: 'Notification not found', status: 404 });
     res.json({ message: 'Marked as read.' });
   } catch (err) { next(err); }
 });
