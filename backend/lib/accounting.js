@@ -22,6 +22,7 @@ const CHART = [
   { code: '1020', name: 'Bank / Card',         type: 'asset',     normal: 'debit'  },
   { code: '1100', name: 'Accounts Receivable', type: 'asset',     normal: 'debit'  },
   { code: '1110', name: 'Employee Advances',   type: 'asset',     normal: 'debit'  },
+  { code: '1120', name: 'Retention Receivable', type: 'asset',    normal: 'debit'  },
   { code: '1200', name: 'Inventory',           type: 'asset',     normal: 'debit'  },
   { code: '2000', name: 'Accounts Payable',    type: 'liability', normal: 'credit' },
   { code: '2100', name: 'Tax Payable',         type: 'liability', normal: 'credit' },
@@ -202,6 +203,37 @@ async function postPayroll(tx, { businessId, gross, net, deduction, advanceRecov
 }
 
 /**
+ * Stage billing for a construction milestone. The full milestone value is earned
+ * revenue, but the client only owes the amount net of retention now — the held
+ * retention is a separate receivable realized when the job is signed off.
+ *   Dr Accounts Receivable   = amount − retention
+ *   Dr Retention Receivable  = retention
+ *   Cr Construction Revenue  = amount
+ */
+async function postMilestoneBill(tx, { businessId, amount, retention = 0, description, sourceId, createdById }) {
+  const total = round2(amount), ret = round2(retention);
+  if (total <= 0) return null;
+  const net = round2(total - ret);
+  const lines = [{ code: '1100', debit: net, credit: 0, description: 'Client billing (AR)' }];
+  if (ret > 0) lines.push({ code: '1120', debit: ret, credit: 0, description: 'Retention held' });
+  lines.push({ code: '4000', debit: 0, credit: total, description: description || 'Construction revenue' });
+  return postJournal(tx, { businessId, description: description || 'Milestone billed', sourceType: 'milestone_bill', sourceId, createdById, lines });
+}
+
+/** Client settles a billed milestone (the net, retention stays receivable). */
+async function postMilestonePayment(tx, { businessId, method = 'cash', amount, sourceId, createdById }) {
+  const amt = round2(amount);
+  if (amt <= 0) return null;
+  return postJournal(tx, {
+    businessId, description: 'Milestone payment', sourceType: 'milestone_payment', sourceId, createdById,
+    lines: [
+      { code: tenderAccountCode(method), debit: amt, credit: 0, description: 'Payment received' },
+      { code: '1100', debit: 0, credit: amt, description: 'Client billing (AR)' },
+    ],
+  });
+}
+
+/**
  * An operating expense debits the expense and credits cash (paid) or payables
  * (unpaid). A refund reverses it (money comes back in).
  */
@@ -240,4 +272,4 @@ async function accountBalances(businessId, { from, to } = {}) {
   });
 }
 
-module.exports = { CHART, ensureChart, postJournal, postSale, postFolioCharge, postFolioPayment, postAdvance, postPayroll, postExpense, accountBalances, tenderAccountCode, round2 };
+module.exports = { CHART, ensureChart, postJournal, postSale, postFolioCharge, postFolioPayment, postAdvance, postPayroll, postMilestoneBill, postMilestonePayment, postExpense, accountBalances, tenderAccountCode, round2 };
