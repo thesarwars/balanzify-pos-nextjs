@@ -715,6 +715,34 @@ describe('Purchase orders — receive stock', () => {
     expect(movement).toBeTruthy();
     expect(movement.quantity).toBe(50);
   });
+
+  test('receiving the PO posts Dr Inventory / Cr Accounts Payable', async () => {
+    const entry = await prisma.journalEntry.findFirst({
+      where: { sourceType: 'purchase', sourceId: poId },
+      include: { lines: { include: { account: true } } },
+    });
+    expect(entry).toBeTruthy();
+    const by = {};
+    for (const l of entry.lines) by[l.account.code] = l;
+    expect(parseFloat(by['1200'].debit)).toBeCloseTo(900, 2);  // Inventory  (50 x 18)
+    expect(parseFloat(by['2000'].credit)).toBeCloseTo(900, 2); // Accounts Payable
+  });
+
+  test('paying the supplier posts Dr Accounts Payable / Cr Cash', async () => {
+    const pay = await request(app).post(`/api/v1/purchase-orders/${poId}/payment`)
+      .set(auth(ownerToken)).send({ amount: 900, payment_method: 'cash' });
+    expect(pay.status).toBe(201);
+    const entry = await prisma.journalEntry.findFirst({
+      where: { sourceType: 'po_payment', sourceId: poId },
+      include: { lines: { include: { account: true } } },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect(entry).toBeTruthy();
+    const by = {};
+    for (const l of entry.lines) by[l.account.code] = l;
+    expect(parseFloat(by['2000'].debit)).toBeCloseTo(900, 2);  // Accounts Payable settled
+    expect(parseFloat(by['1000'].credit)).toBeCloseTo(900, 2); // Cash out
+  });
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
