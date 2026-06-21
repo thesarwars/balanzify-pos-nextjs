@@ -38,6 +38,7 @@ const registry              = require('../lib/payments');
 const { convert }           = require('../lib/currency');
 const webhooks              = require('../lib/webhooks');
 const { logger }            = require('../lib/logger');
+const { escapeHtml }        = require('../lib/html');
 const router = express.Router();
 
 const uuid  = z.string().uuid();
@@ -555,7 +556,7 @@ router.get('/pay/:token', async (req, res, next) => {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>Pay installment — ${business.name}</title>
+<title>Pay installment — ${escapeHtml(business.name)}</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #F3F4F6; min-height: 100vh; padding: 16px; }
@@ -579,20 +580,20 @@ h3 { font-size: 14px; color: #374151; margin-bottom: 12px; }
 <body>
 <div class="card">
   <div class="header">
-    <h1>${business.name}</h1>
+    <h1>${escapeHtml(business.name)}</h1>
     <p>Installment Payment</p>
   </div>
 
   <div class="amount-box">
-    <div class="amount">${currency} ${amount.toFixed(2)}</div>
-    <div class="amount-label">Installment #${item.installmentNo} — Due ${dueDate}</div>
+    <div class="amount">${escapeHtml(currency)} ${amount.toFixed(2)}</div>
+    <div class="amount-label">Installment #${escapeHtml(item.installmentNo)} — Due ${escapeHtml(dueDate)}</div>
   </div>
 
   <div class="section">
-    <div class="info-row"><span class="info-label">For</span><span class="info-value">${customer.name}</span></div>
-    <div class="info-row"><span class="info-label">Plan</span><span class="info-value">${item.plan.description}</span></div>
-    <div class="info-row"><span class="info-label">Plan number</span><span class="info-value">${item.plan.planNumber}</span></div>
-    <div class="info-row"><span class="info-label">Installment</span><span class="info-value">${item.installmentNo} of ${item.plan.installments}</span></div>
+    <div class="info-row"><span class="info-label">For</span><span class="info-value">${escapeHtml(customer.name)}</span></div>
+    <div class="info-row"><span class="info-label">Plan</span><span class="info-value">${escapeHtml(item.plan.description)}</span></div>
+    <div class="info-row"><span class="info-label">Plan number</span><span class="info-value">${escapeHtml(item.plan.planNumber)}</span></div>
+    <div class="info-row"><span class="info-label">Installment</span><span class="info-value">${escapeHtml(item.installmentNo)} of ${escapeHtml(item.plan.installments)}</span></div>
   </div>
 
   <div class="section">
@@ -603,9 +604,9 @@ h3 { font-size: 14px; color: #374151; margin-bottom: 12px; }
   <div id="manual-instructions" style="display:none;padding:0 20px 20px;">
     <div style="background:#F9FAFB;border:1px solid #E5E7EB;border-radius:10px;padding:16px;font-size:13px;">
       <strong>Bank transfer instructions:</strong><br><br>
-      Please transfer <strong>${currency} ${amount.toFixed(2)}</strong> and include this reference:<br>
-      <code style="background:#E5E7EB;padding:4px 8px;border-radius:4px;font-size:14px;font-weight:700;">${item.paymentToken?.slice(0,12).toUpperCase()}</code><br><br>
-      Contact ${business.name} to confirm which account to use for your country.
+      Please transfer <strong>${escapeHtml(currency)} ${amount.toFixed(2)}</strong> and include this reference:<br>
+      <code style="background:#E5E7EB;padding:4px 8px;border-radius:4px;font-size:14px;font-weight:700;">${escapeHtml(item.paymentToken?.slice(0,12).toUpperCase())}</code><br><br>
+      Contact ${escapeHtml(business.name)} to confirm which account to use for your country.
     </div>
     <button onclick="confirmManual()" style="width:100%;margin-top:12px;padding:14px;background:#1B3A6B;color:#fff;border:none;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;">
       I've made the transfer →
@@ -625,7 +626,7 @@ function selectMethod(method) {
 }
 function confirmManual() {
   fetch('/api/v1/pay/${req.params.token}/confirm-manual', { method: 'POST' })
-    .then(() => { document.querySelector('.card').innerHTML = '<div class="success"><div style="font-size:64px">✅</div><h2 style="margin-top:16px">Transfer recorded!</h2><p style="color:#6B7280;margin-top:8px">${business.name} will confirm when it arrives.</p></div>'; });
+    .then(() => { document.querySelector('.card').innerHTML = '<div class="success"><div style="font-size:64px">✅</div><h2 style="margin-top:16px">Transfer recorded!</h2><p style="color:#6B7280;margin-top:8px">${escapeHtml(business.name)} will confirm when it arrives.</p></div>'; });
 }
 </script>
 </body>
