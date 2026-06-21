@@ -235,6 +235,7 @@ model Business {
   receiptHeader String?  @map("receipt_header")
   receiptFooter String?  @default("Thank you for your business!") @map("receipt_footer")
   taxNumber     String?  @map("tax_number") @db.VarChar(100)
+  serviceChargePct Decimal? @map("service_charge_pct") @db.Decimal(6, 4) // accepts 10 or 0.10
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @default(now()) @updatedAt @map("updated_at")
 
@@ -1590,6 +1591,7 @@ model Sale {
   loyaltyDiscount       Decimal       @default(0) @map("loyalty_discount") @db.Decimal(12, 2)
   tipAmount             Decimal       @default(0) @map("tip_amount") @db.Decimal(12, 2)
   packingCharge         Decimal       @default(0) @map("packing_charge") @db.Decimal(12, 2)
+  serviceCharge         Decimal       @default(0) @map("service_charge") @db.Decimal(12, 2)
   serviceTypeId         String?       @map("service_type_id") @db.Uuid
   totalAmount           Decimal       @default(0) @map("total_amount") @db.Decimal(12, 2)
   amountPaid            Decimal       @default(0) @map("amount_paid") @db.Decimal(12, 2)
