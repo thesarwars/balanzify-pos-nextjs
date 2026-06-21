@@ -111,7 +111,7 @@ function mapSupplier(b) {
 // ── STOCK (adjustments, transfers) ───────────────────────────────────────────
 const stockRouter = express.Router();
 
-stockRouter.post('/adjustments', auth, validate(AdjustmentSchema), async (req, res, next) => {
+stockRouter.post('/adjustments', auth, requireRole('owner', 'manager'), validate(AdjustmentSchema), async (req, res, next) => {
   try {
     const { product_id, location_id, type, quantity, reason, photo_url } = req.body;
     const adj = await prisma.stockAdjustment.create({
@@ -174,72 +174,97 @@ stockRouter.post('/adjustments/:id/approve', auth, requireRole('owner', 'manager
   } catch (err) { next(err); }
 });
 
-stockRouter.post('/transfers', auth, validate(TransferSchema), async (req, res, next) => {
+stockRouter.post('/transfers', auth, requireRole('owner', 'manager'), validate(TransferSchema), async (req, res, next) => {
   try {
     const { from_location_id, to_location_id, items, notes } = req.body;
-    
+    if (from_location_id === to_location_id) {
+      return res.status(400).json({ title: 'Source and destination must differ', status: 400 });
+    }
+
+    // Both locations must belong to the caller's business.
+    const locs = await prisma.location.findMany({
+      where: { id: { in: [from_location_id, to_location_id] }, businessId: req.user.business_id },
+      select: { id: true },
+    });
+    if (locs.length !== 2) return res.status(404).json({ title: 'Location not found', status: 404 });
+
     const transfer = await prisma.$transaction(async (tx) => {
       const t = await tx.stockTransfer.create({
         data: {
           businessId: req.user.business_id,
           transferNumber: `TRF-${Date.now()}`,
-          fromLocationId: from_location_id, 
+          fromLocationId: from_location_id,
           toLocationId: to_location_id,
-          notes, 
-          status: 'received', 
+          notes,
+          status: 'received',
           createdById: req.user.id,
-          items: { 
-            create: items.map(i => ({ 
-              productId: i.product_id, 
-              requestedQty: i.qty, 
-              dispatchedQty: i.qty, 
-              receivedQty: i.qty 
-            })) 
+          items: {
+            create: items.map(i => ({
+              productId: i.product_id,
+              requestedQty: i.qty,
+              dispatchedQty: i.qty,
+              receivedQty: i.qty,
+            })),
           },
         },
       });
 
-      // Loop through each item using only the exact columns present in stock_levels
       for (const item of items) {
-        // Deduct quantity from source location
-        await tx.$executeRaw`
-          INSERT INTO stock_levels (id, product_id, location_id, quantity, updated_at) 
-          VALUES (
-            gen_random_uuid(), 
-            ${item.product_id}::uuid, 
-            ${from_location_id}::uuid, 
-            0, 
-            NOW()
-          )
-          ON CONFLICT (product_id, location_id) 
-          DO UPDATE SET 
-            quantity = GREATEST(0, stock_levels.quantity - ${item.qty}), 
-            updated_at = NOW()
+        // Lock the source row and verify there is enough to move — never clamp
+        // at 0 (which would "transfer" stock that doesn't exist and create it at
+        // the destination out of nothing).
+        const srcRows = await tx.$queryRaw`
+          SELECT quantity FROM stock_levels
+          WHERE product_id = ${item.product_id}::uuid AND location_id = ${from_location_id}::uuid
+          FOR UPDATE
         `;
+        const srcQty = srcRows[0]?.quantity ?? 0;
+        if (srcQty < item.qty) {
+          throw Object.assign(
+            new Error(`Insufficient stock to transfer: product ${item.product_id} has ${srcQty} at source, requested ${item.qty}.`),
+            { statusCode: 400, code: 'INSUFFICIENT_STOCK' }
+          );
+        }
 
-        // Add quantity to destination location
+        // Deduct from source
         await tx.$executeRaw`
-          INSERT INTO stock_levels (id, product_id, location_id, quantity, updated_at) 
-          VALUES (
-            gen_random_uuid(), 
-            ${item.product_id}::uuid, 
-            ${to_location_id}::uuid, 
-            ${item.qty}, 
-            NOW()
-          )
-          ON CONFLICT (product_id, location_id) 
-          DO UPDATE SET 
-            quantity = stock_levels.quantity + ${item.qty}, 
-            updated_at = NOW()
+          UPDATE stock_levels SET quantity = quantity - ${item.qty}, updated_at = NOW()
+          WHERE product_id = ${item.product_id}::uuid AND location_id = ${from_location_id}::uuid
         `;
+        await tx.stockMovement.create({
+          data: {
+            businessId: req.user.business_id, productId: item.product_id, locationId: from_location_id,
+            type: 'transfer_out', quantity: -item.qty, balanceAfter: srcQty - item.qty,
+            referenceId: t.id, referenceType: 'stock_transfer', createdById: req.user.id,
+          },
+        });
+
+        // Add to destination
+        const destRows = await tx.$executeRaw`
+          INSERT INTO stock_levels (id, product_id, location_id, quantity, updated_at)
+          VALUES (gen_random_uuid(), ${item.product_id}::uuid, ${to_location_id}::uuid, ${item.qty}, NOW())
+          ON CONFLICT (product_id, location_id)
+          DO UPDATE SET quantity = stock_levels.quantity + ${item.qty}, updated_at = NOW()
+        `;
+        const destQty = (await tx.$queryRaw`
+          SELECT quantity FROM stock_levels
+          WHERE product_id = ${item.product_id}::uuid AND location_id = ${to_location_id}::uuid
+        `)[0]?.quantity ?? item.qty;
+        await tx.stockMovement.create({
+          data: {
+            businessId: req.user.business_id, productId: item.product_id, locationId: to_location_id,
+            type: 'transfer_in', quantity: item.qty, balanceAfter: destQty,
+            referenceId: t.id, referenceType: 'stock_transfer', createdById: req.user.id,
+          },
+        });
       }
-      
+
       return t;
     });
 
     res.status(201).json(transfer);
-  } catch (err) { 
-    next(err); 
+  } catch (err) {
+    next(err);
   }
 });
 // ======= GET ALL TRANSFERS =======
@@ -283,7 +308,7 @@ stockRouter.get('/transfers/:id', auth, async (req, res, next) => {
 });
 
 // ======= UPDATE TRANSFER (Reconciles quantities dynamically) =======
-stockRouter.put('/transfers/:id', auth, validate(TransferSchema), async (req, res, next) => {
+stockRouter.put('/transfers/:id', auth, requireRole('owner', 'manager'), validate(TransferSchema), async (req, res, next) => {
   try {
     const { from_location_id, to_location_id, items, notes } = req.body;
     const transferId = req.params.id;
@@ -345,7 +370,7 @@ stockRouter.put('/transfers/:id', auth, validate(TransferSchema), async (req, re
 });
 
 // ======= DELETE TRANSFER (Reverts inventory levels cleanly) =======
-stockRouter.delete('/transfers/:id', auth, async (req, res, next) => {
+stockRouter.delete('/transfers/:id', auth, requireRole('owner', 'manager'), async (req, res, next) => {
   try {
     const transferId = req.params.id;
 
