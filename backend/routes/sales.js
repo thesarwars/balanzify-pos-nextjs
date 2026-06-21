@@ -147,8 +147,11 @@ router.delete('/held/:id', auth, async (req, res, next) => {
 // Handles: products, variants, bundles, serialised items,
 //          coupons, loyalty earn/redeem, tips, FIFO cost layers,
 //          credit sales, split payments, customer balances, shift totals.
-router.post('/', auth, validate(SaleSchemaV3), async (req, res, next) => {
-  try {
+// Core sale-creation transaction, callable in-process by both the HTTP route
+// and the restaurant checkout. `req` is a minimal context: { user, body, ip, get }.
+// Returns the sale result (with _retry on an idempotent replay); throws errors
+// carrying a statusCode.
+async function createSale(req) {
     const {
       items = [],
       variant_items = [],
@@ -183,10 +186,10 @@ router.post('/', auth, validate(SaleSchemaV3), async (req, res, next) => {
     ];
 
     if (!allItems.length && !custom_item) {
-      return res.status(400).json({ error: 'No items in cart.' });
+      throw Object.assign(new Error('No items in cart.'), { statusCode: 400 });
     }
     if (!idempotency_key) {
-      return res.status(400).json({ error: 'Transaction token required.' });
+      throw Object.assign(new Error('Transaction token required.'), { statusCode: 400 });
     }
 
     const result = await prisma.$transaction(async (tx) => {
@@ -941,8 +944,14 @@ router.post('/', auth, validate(SaleSchemaV3), async (req, res, next) => {
       items_count:    result.items?.length ?? 0,
     }).catch(() => {});
 
-    res.status(201).json(result);
+    return result;
+}
 
+// Thin HTTP wrapper around the in-process sale service.
+router.post('/', auth, validate(SaleSchemaV3), async (req, res, next) => {
+  try {
+    const result = await createSale(req);
+    res.status(result._retry ? 200 : 201).json(result);
   } catch (err) {
     if (err.statusCode) return res.status(err.statusCode).json({ error: err.message });
     next(err);
@@ -1203,4 +1212,5 @@ router.post('/customer-payment', auth, requireRole('owner', 'manager'), async (r
   }
 });
 
+router.createSale = createSale; // in-process sale service (used by restaurant checkout)
 module.exports = router;
