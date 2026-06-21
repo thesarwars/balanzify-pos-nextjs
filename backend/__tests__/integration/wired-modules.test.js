@@ -746,6 +746,14 @@ describe('wholesale', () => {
     expect(pay2.body.payment_status).toBe('paid');
     const out2 = await request(app).get('/api/v1/wholesale/outstanding').set(auth(token));
     expect(out2.body.outstanding.find(o => o.customer === 'Corner Shop')).toBeFalsy();
+
+    // GL: delivery booked revenue (50) to receivable; the two payments (20+30)
+    // collected it. Books balance, AR settled, revenue == cash collected (50).
+    const tb = (await request(app).get('/api/v1/accounting/trial-balance').set(auth(token))).body;
+    expect(tb.totals.balanced).toBe(true);
+    expect(tb.accounts.find(a => a.code === '1100').balance).toBeCloseTo(0, 2);  // receivable settled
+    expect(tb.accounts.find(a => a.code === '4000').balance).toBeCloseTo(50, 2); // revenue
+    expect(tb.accounts.find(a => a.code === '1000').balance).toBeCloseTo(50, 2); // cash collected
   });
 });
 
