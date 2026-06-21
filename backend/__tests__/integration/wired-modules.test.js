@@ -1033,4 +1033,49 @@ describe('restaurant checkout (in-process sale service — no HTTP self-call)', 
   });
 });
 
+describe('restaurant: waiter / 86 / reservations as proper records', () => {
+  let token, loc, prod, tableId, waiterId;
+  beforeAll(async () => {
+    token = await register();
+    await enableModule(token, 'restaurant');
+    loc = await location(token);
+    prod = await stockedProduct(token, loc, 10, 100);
+    tableId = (await request(app).post('/api/v1/restaurant/tables').set(auth(token)).send({ number: 'T1', name: 'Window', capacity: 4 })).body.id;
+    waiterId = (await request(app).post('/api/v1/users').set(auth(token)).send({ name: 'Server', email: `srv_${Date.now()}_${SEQ++}@balanzify.test`, password: 'SecurePass123!', role: 'cashier' })).body.id;
+  });
+
+  test('waiter is a real FK, not a clobbered table name', async () => {
+    expect((await request(app).put(`/api/v1/restaurant/tables/${tableId}/waiter`).set(auth(token)).send({ waiter_id: waiterId })).status).toBe(200);
+    const t = await prisma.restaurantTable.findUnique({ where: { id: tableId } });
+    expect(t.waiterId).toBe(waiterId);
+    expect(t.name).toBe('Window'); // name untouched
+  });
+
+  test('86 marks an item unavailable for the day and blocks ordering', async () => {
+    // 86 the item
+    expect((await request(app).post(`/api/v1/restaurant/products/${prod}/86`).set(auth(token)).send({ available: false, reason: 'sold out' })).status).toBe(200);
+    // product is NOT globally deactivated
+    expect((await prisma.product.findUnique({ where: { id: prod } })).isActive).toBe(true);
+    // it shows in the 86 list
+    expect((await request(app).get('/api/v1/restaurant/eighty-six').set(auth(token))).body.items.find(i => i.product_id === prod)).toBeTruthy();
+    // ordering it is blocked
+    const order = (await request(app).post('/api/v1/restaurant/orders').set(auth(token)).send({ type: 'takeaway' })).body;
+    expect((await request(app).post(`/api/v1/restaurant/orders/${order.id}/items`).set(auth(token)).send({ productId: prod, quantity: 1 })).status).toBe(400);
+    // un-86 → can order again
+    expect((await request(app).post(`/api/v1/restaurant/products/${prod}/86`).set(auth(token)).send({ available: true })).status).toBe(200);
+    expect((await request(app).post(`/api/v1/restaurant/orders/${order.id}/items`).set(auth(token)).send({ productId: prod, quantity: 1 })).status).toBe(201);
+  });
+
+  test('a reservation is a real record, not a clobbered table name', async () => {
+    const r = await request(app).post('/api/v1/restaurant/table-reservations').set(auth(token))
+      .send({ table_id: tableId, guest_name: 'Hodan', guest_phone: '0700123', date: '2026-09-01', time: '19:30', covers: 4 });
+    expect(r.status).toBe(201);
+    expect(r.body.reservation_id).toBeTruthy();
+    const t = await prisma.restaurantTable.findUnique({ where: { id: tableId } });
+    expect(t.name).toBe('Window'); // name NOT clobbered with BOOKED:...
+    const list = await request(app).get('/api/v1/restaurant/table-reservations').set(auth(token)).query({ date: '2026-09-01' });
+    expect(list.body.reservations.find(x => x.id === r.body.reservation_id)).toBeTruthy();
+  });
+});
+
 afterAll(async () => { await prisma.$disconnect(); });
