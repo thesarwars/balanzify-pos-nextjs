@@ -1,0 +1,126 @@
+/**
+ * General Ledger — the accounting spine.
+ *
+ * Every vertical posts its money here as BALANCED double-entry journals, so a
+ * business has one true set of books (across all its locations/verticals) and a
+ * clean cashflow dataset for credit underwriting.
+ *
+ * Usage (inside a transaction):
+ *   const gl = require('./accounting');
+ *   await gl.postSale(tx, { businessId, sale, tenders, taxAmount, cogs, createdById });
+ *
+ * Posting is balanced by construction; postJournal asserts debits === credits.
+ */
+
+// Standard small-business chart of accounts. System accounts are seeded per
+// business on first posting (lazily) so every existing/new business is covered.
+const CHART = [
+  { code: '1000', name: 'Cash',                type: 'asset',     normal: 'debit'  },
+  { code: '1010', name: 'Mobile Money',        type: 'asset',     normal: 'debit'  },
+  { code: '1020', name: 'Bank / Card',         type: 'asset',     normal: 'debit'  },
+  { code: '1100', name: 'Accounts Receivable', type: 'asset',     normal: 'debit'  },
+  { code: '1200', name: 'Inventory',           type: 'asset',     normal: 'debit'  },
+  { code: '2000', name: 'Accounts Payable',    type: 'liability', normal: 'credit' },
+  { code: '2100', name: 'Tax Payable',         type: 'liability', normal: 'credit' },
+  { code: '3000', name: "Owner's Equity",      type: 'equity',    normal: 'credit' },
+  { code: '4000', name: 'Sales Revenue',       type: 'revenue',   normal: 'credit' },
+  { code: '5000', name: 'Cost of Goods Sold',  type: 'expense',   normal: 'debit'  },
+];
+
+// Map a payment method to the asset/AR account its money lands in.
+function tenderAccountCode(method) {
+  switch ((method || 'cash').toLowerCase()) {
+    case 'cash':                                   return '1000';
+    case 'zaad': case 'evc': case 'mpesa':
+    case 'telebirr': case 'mobile_money':          return '1010';
+    case 'card': case 'stripe': case 'visa':
+    case 'mastercard': case 'moov': case 'bank':   return '1020';
+    case 'credit':                                 return '1100'; // billed to customer account
+    default:                                       return '1000';
+  }
+}
+
+const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+async function ensureChart(tx, businessId) {
+  const count = await tx.account.count({ where: { businessId } });
+  if (count > 0) return;
+  await tx.account.createMany({
+    data: CHART.map(a => ({ businessId, code: a.code, name: a.name, type: a.type, normalBalance: a.normal, isSystem: true })),
+    skipDuplicates: true,
+  });
+}
+
+/**
+ * Post a balanced journal entry. `lines` is [{ code, debit, credit, description }].
+ * Throws if debits !== credits. Returns the created entry (or null if empty).
+ */
+async function postJournal(tx, { businessId, date = new Date(), description, sourceType, sourceId, createdById, lines }) {
+  await ensureChart(tx, businessId);
+
+  const clean = lines
+    .map(l => ({ code: l.code, debit: round2(l.debit || 0), credit: round2(l.credit || 0), description: l.description }))
+    .filter(l => l.debit !== 0 || l.credit !== 0);
+  if (!clean.length) return null;
+
+  const totalDebit  = round2(clean.reduce((s, l) => s + l.debit, 0));
+  const totalCredit = round2(clean.reduce((s, l) => s + l.credit, 0));
+  if (Math.abs(totalDebit - totalCredit) > 0.01) {
+    throw Object.assign(
+      new Error(`Unbalanced journal: debits ${totalDebit} != credits ${totalCredit}`),
+      { statusCode: 500, code: 'GL_UNBALANCED' }
+    );
+  }
+
+  const codes = [...new Set(clean.map(l => l.code))];
+  const accounts = await tx.account.findMany({ where: { businessId, code: { in: codes } }, select: { id: true, code: true } });
+  const byCode = Object.fromEntries(accounts.map(a => [a.code, a.id]));
+
+  return tx.journalEntry.create({
+    data: {
+      businessId,
+      entryNumber: `JE-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      date,
+      description: description || null,
+      sourceType: sourceType || null,
+      sourceId: sourceId || null,
+      createdById: createdById || null,
+      lines: { create: clean.map(l => ({ accountId: byCode[l.code], debit: l.debit, credit: l.credit, description: l.description || null })) },
+    },
+  });
+}
+
+/**
+ * Post the journal for a completed sale.
+ *   Dr cash/mobile-money/bank/AR (per tender)   = total
+ *   Cr Sales Revenue                             = total - tax
+ *   Cr Tax Payable                               = tax
+ *   Dr Cost of Goods Sold                        = cogs
+ *   Cr Inventory                                 = cogs
+ */
+async function postSale(tx, { businessId, sale, tenders, taxAmount = 0, cogs = 0, createdById }) {
+  const total = round2(sale.totalAmount);
+  const tax   = round2(taxAmount);
+  const cost  = round2(cogs);
+  const lines = [];
+
+  // Money received (or receivable), routed by tender to the right asset/AR account.
+  for (const t of (tenders || [])) {
+    lines.push({ code: tenderAccountCode(t.method), debit: round2(t.amount), credit: 0, description: `Tender: ${t.method}` });
+  }
+  // Revenue net of tax, and the tax liability.
+  lines.push({ code: '4000', debit: 0, credit: round2(total - tax), description: 'Sales revenue' });
+  if (tax > 0) lines.push({ code: '2100', debit: 0, credit: tax, description: 'Sales tax' });
+  // Cost of goods sold + inventory relief.
+  if (cost > 0) {
+    lines.push({ code: '5000', debit: cost, credit: 0, description: 'COGS' });
+    lines.push({ code: '1200', debit: 0, credit: cost, description: 'Inventory relief' });
+  }
+
+  return postJournal(tx, {
+    businessId, description: `Sale ${sale.saleNumber || ''}`.trim(),
+    sourceType: 'sale', sourceId: sale.id, createdById, lines,
+  });
+}
+
+module.exports = { CHART, ensureChart, postJournal, postSale, tenderAccountCode, round2 };

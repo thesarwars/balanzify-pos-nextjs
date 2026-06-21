@@ -908,3 +908,49 @@ describe('Error handling', () => {
     expect(Array.isArray(res.body.errors)).toBe(true);
   });
 });
+
+// ══════════════════════════════════════════════════════════════════════════════
+// GENERAL LEDGER (accounting spine)
+// ══════════════════════════════════════════════════════════════════════════════
+describe('General ledger — sale posting', () => {
+  let product, saleId, total, tax;
+
+  beforeAll(async () => {
+    product = await createProductWithStock(ownerToken, { locationId, stock: 50, sellingPrice: 20, costPrice: 12 });
+  });
+
+  test('a cash sale posts a balanced double-entry journal', async () => {
+    const res = await checkout(ownerToken, {
+      items: [{ product_id: product.id, quantity: 2 }],
+      payment_method: 'cash', cash_tendered: 100, location_id: locationId,
+    });
+    expect(res.status).toBe(201);
+    saleId = res.body.id;
+    total = parseFloat(res.body.totalAmount ?? res.body.total_amount);
+    tax   = parseFloat(res.body.taxAmount ?? res.body.tax_amount ?? 0);
+
+    const entry = await prisma.journalEntry.findFirst({
+      where: { sourceType: 'sale', sourceId: saleId },
+      include: { lines: { include: { account: true } } },
+    });
+    expect(entry).toBeTruthy();
+
+    const debit  = entry.lines.reduce((s, l) => s + parseFloat(l.debit), 0);
+    const credit = entry.lines.reduce((s, l) => s + parseFloat(l.credit), 0);
+    expect(debit).toBeCloseTo(credit, 2); // the books balance
+
+    const by = {};
+    for (const l of entry.lines) by[l.account.code] = l;
+    expect(parseFloat(by['1000'].debit)).toBeCloseTo(total, 2);        // Cash = total received
+    expect(parseFloat(by['4000'].credit)).toBeCloseTo(total - tax, 2); // Sales Revenue = net of tax
+    expect(parseFloat(by['5000'].debit)).toBeCloseTo(24, 2);           // COGS = 2 x 12
+    expect(parseFloat(by['1200'].credit)).toBeCloseTo(24, 2);          // Inventory relief
+  });
+
+  test('trial balance is balanced', async () => {
+    const tb = await request(app).get('/api/v1/accounting/trial-balance').set(auth(ownerToken));
+    expect(tb.status).toBe(200);
+    expect(tb.body.totals.balanced).toBe(true);
+    expect(tb.body.totals.debit).toBeCloseTo(tb.body.totals.credit, 2);
+  });
+});

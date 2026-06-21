@@ -11,6 +11,7 @@ const webhooks         = require('../lib/webhooks');
 const { convert }        = require('../lib/currency');
 const { generateReceiptToken, receiptUrl, generateWhatsAppReceipt } = require('../lib/receipt');
 const creditEngine = require('../lib/credit');
+const accounting = require('../lib/accounting');
 const router = express.Router();
 
 // ── Cart fingerprint ──────────────────────────────────────────────────────────
@@ -831,6 +832,18 @@ router.post('/', auth, validate(SaleSchemaV3), async (req, res, next) => {
           },
         });
       }
+
+      // ── 15b. General ledger — post the sale's double-entry journal ────────
+      // COGS = sum of the (FIFO/recipe) cost of every stocked line just sold.
+      const saleCogs = processed.reduce((s, p) => s + (p.product_id ? parseFloat(p.cost_price || 0) * p.quantity : 0), 0);
+      await accounting.postSale(tx, {
+        businessId:  req.user.business_id,
+        sale,
+        tenders,
+        taxAmount:   lineTax,
+        cogs:        saleCogs,
+        createdById: req.user.id,
+      });
 
       // ── 16. Shift totals ──────────────────────────────────────────────────
       if (shift_id) {
