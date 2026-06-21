@@ -771,6 +771,7 @@ model HrmSettings {
   businessId             String  @unique @map("business_id") @db.Uuid
   workStart              String  @default("08:00") @map("work_start") @db.VarChar(5)
   graceMinutes           Int     @default(10) @map("grace_minutes")
+  timezone               String  @default("Africa/Nairobi") @map("timezone") @db.VarChar(64)
   standardHours          Decimal @default(8) @map("standard_hours") @db.Decimal(5, 2)
   halfDayHours           Decimal @default(4) @map("half_day_hours") @db.Decimal(5, 2)
   overtimeRate           Decimal @default(1.5) @map("overtime_rate") @db.Decimal(4, 2)

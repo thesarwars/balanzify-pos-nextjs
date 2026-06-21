@@ -12,6 +12,7 @@ const crypto = require('crypto');
 const speakeasy = require('speakeasy');
 const { app } = require('../../server');
 const prisma = require('../../lib/prisma');
+const accounting = require('../../lib/accounting');
 const { requireModule } = require('../../lib/moduleGate');
 
 const auth = (t) => ({ Authorization: `Bearer ${t}` });
@@ -218,7 +219,20 @@ describe('HRM', () => {
     expect(parseFloat(pay.advance_recovered)).toBe(150);
     expect((await request(app).get('/api/v1/hrm/advance/outstanding/' + e.id).set(auth(token))).body.outstanding).toBe(0);
 
-    // GL: payroll posts gross wages (800) = net cash (600) + deductions (200)
+    // GL: the advance posted a receivable (Dr 1110) when it was paid out…
+    const bizId = (await prisma.employee.findUnique({ where: { id: e.id } })).businessId;
+    const advEntry = await prisma.journalEntry.findFirst({
+      where: { businessId: bizId, sourceType: 'hr_advance' },
+      include: { lines: { include: { account: true } } },
+    });
+    expect(advEntry).toBeTruthy();
+    const advBy = {};
+    for (const l of advEntry.lines) advBy[l.account.code] = l;
+    expect(parseFloat(advBy['1110'].debit)).toBeCloseTo(150, 2); // Employee Advances (receivable)
+
+    // GL: payroll gross (800) = net cash (600) + advance recovered (150) + withholding (50).
+    // The recovered portion CLEARS the receivable (Cr 1110) — it is NOT a new
+    // payable, so only the genuine 50 lands in Tax Payable.
     const entry = await prisma.journalEntry.findFirst({
       where: { sourceType: 'payroll', sourceId: pay.id },
       include: { lines: { include: { account: true } } },
@@ -228,7 +242,29 @@ describe('HRM', () => {
     for (const l of entry.lines) by[l.account.code] = l;
     expect(parseFloat(by['5100'].debit)).toBeCloseTo(800, 2);  // Salaries & Wages expense
     expect(parseFloat(by['1000'].credit)).toBeCloseTo(600, 2); // Net pay (cash)
-    expect(parseFloat(by['2100'].credit)).toBeCloseTo(200, 2); // Deductions withheld
+    expect(parseFloat(by['1110'].credit)).toBeCloseTo(150, 2); // Advance recovered (clears receivable)
+    expect(parseFloat(by['2100'].credit)).toBeCloseTo(50, 2);  // Genuine withholding only
+
+    // Net effect on the Employee Advances account is zero — paid out then recovered.
+    const bal = await accounting.accountBalances(bizId);
+    const advAcct = bal.find(a => a.code === '1110');
+    expect(advAcct.balance).toBeCloseTo(0, 2);
+  });
+  test('overnight shift hours: 22:00 → 06:00 counts as 8h, not 0', async () => {
+    const e = (await request(app).post('/api/v1/hrm/employee').set(auth(token)).send({ name: 'Cabdi (night guard)', salary: 600 })).body;
+    await request(app).post('/api/v1/hrm/attendance/clock').set(auth(token)).send({ employee_id: e.id, at: '22:00', date: '2026-06-10' });
+    await request(app).post('/api/v1/hrm/attendance/clock').set(auth(token)).send({ employee_id: e.id, at: '06:00', date: '2026-06-10' });
+    const sum = (await request(app).get('/api/v1/hrm/attendance-summary/' + e.id + '?month=2026-06').set(auth(token))).body;
+    expect(sum.total_hours).toBeCloseTo(8, 1);
+  });
+  test('leave accrual: a new hire has not yet earned a full month of annual leave', async () => {
+    // Joined today → zero completed months of service → zero accrued annual leave
+    // (the old code granted a whole month's entitlement on day one).
+    const today = new Date().toISOString().slice(0, 10);
+    const e = (await request(app).post('/api/v1/hrm/employee').set(auth(token)).send({ name: 'Deeqa (new hire)', salary: 500, joined: today })).body;
+    const bal = (await request(app).get('/api/v1/hrm/leave-balance/' + e.id).set(auth(token))).body;
+    const annual = bal.find(b => b.type === 'Annual');
+    expect(annual.entitled).toBe(0);
   });
   test('leave balance accrual + over-apply 422', async () => {
     const e = (await request(app).post('/api/v1/hrm/employee').set(auth(token)).send({ name: 'Bashir', salary: 700, joined: '2026-01-01' })).body;
