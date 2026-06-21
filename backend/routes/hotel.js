@@ -46,6 +46,7 @@ const { auth, requireRole } = require('../middleware/auth');
 const { validate }          = require('../middleware/validate');
 const registry = require('../lib/payments');
 const webhooks = require('../lib/webhooks');
+const accounting = require('../lib/accounting');
 const router   = express.Router();
 
 // ── Validation schemas ────────────────────────────────────────────
@@ -535,6 +536,7 @@ router.post('/reservations/:id/checkin', auth, validate(z.object({
           where: { id: folio.id },
           data:  { totalCharges: { increment: roomTotal }, balance: { increment: roomTotal } },
         });
+        await accounting.postFolioCharge(tx, { businessId: req.user.business_id, type: 'room_night', amount: roomTotal, description: 'Room charge', sourceId: folio.id, createdById: req.user.id });
       }
 
       // Carry any pre-paid deposit onto the folio as a payment, so the guest
@@ -556,6 +558,7 @@ router.post('/reservations/:id/checkin', auth, validate(z.object({
           where: { id: folio.id },
           data:  { totalPayments: { increment: deposit }, balance: { decrement: deposit } },
         });
+        await accounting.postFolioPayment(tx, { businessId: req.user.business_id, method: 'deposit', amount: deposit, sourceId: folio.id, createdById: req.user.id });
       }
     });
 
@@ -616,6 +619,7 @@ router.post('/reservations/:id/checkout', auth, validate(z.object({
             description: `Service charge (${(scPct * 100).toFixed(1)}%)`, quantity: 1,
             unitAmount: serviceCharge, totalAmount: serviceCharge, currency: folio.currency, chargeDate: new Date(),
           } });
+          await accounting.postFolioCharge(tx, { businessId: req.user.business_id, type: 'service_charge', amount: serviceCharge, description: 'Service charge', sourceId: folio.id, createdById: req.user.id });
         }
         if (tax > 0) {
           await tx.folioCharge.create({ data: {
@@ -623,6 +627,7 @@ router.post('/reservations/:id/checkout', auth, validate(z.object({
             description: `Tax (${(taxPct * 100).toFixed(1)}%)`, quantity: 1,
             unitAmount: tax, totalAmount: tax, currency: folio.currency, chargeDate: new Date(),
           } });
+          await accounting.postFolioCharge(tx, { businessId: req.user.business_id, type: 'tax', amount: tax, description: 'Tax', sourceId: folio.id, createdById: req.user.id });
         }
         const added = serviceCharge + tax;
         if (added > 0) {
@@ -750,6 +755,11 @@ router.post('/folios/:id/charges', auth, validate(FolioChargeSchema), async (req
           balance:      { increment: totalAmount + taxAmount },
         },
       });
+      // GL: charge raises AR against revenue (+ tax liability if any).
+      await accounting.postFolioCharge(tx, { businessId: req.user.business_id, type, amount: totalAmount, description, sourceId: req.params.id, createdById: req.user.id });
+      if (parseFloat(taxAmount) > 0) {
+        await accounting.postFolioCharge(tx, { businessId: req.user.business_id, type: 'tax', amount: parseFloat(taxAmount), description: 'Tax', sourceId: req.params.id, createdById: req.user.id });
+      }
       return c;
     });
 
@@ -829,6 +839,8 @@ router.post('/folios/:id/payments', auth, validate(FolioPaymentSchema), async (r
           settledById:   newBalance <= 0 ? req.user.id : null,
         },
       });
+      // GL: folio payment brings in cash and reduces the guest's receivable.
+      await accounting.postFolioPayment(tx, { businessId: req.user.business_id, method: provider, amount: parseFloat(amount), sourceId: req.params.id, createdById: req.user.id });
     });
 
     res.status(201).json({ payment_result: result, new_balance: Math.max(0, newBalance) });
