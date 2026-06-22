@@ -835,7 +835,7 @@ const KITCHEN_ORDERS: any[] = [
 ];
 function regTotals0() { return { cash: 0, zaad: 0, evc: 0, card: 0, bank: 0, advance: 0 }; }
 function serializeRegister(r: any) {
-  const total_payments = +Object.values(r.totals).reduce((a: any, b: any) => a + b, 0).toFixed(2);
+  const total_payments = +(Object.values(r.totals) as number[]).reduce((a, b) => a + b, 0).toFixed(2);
   return { ...r, total_payments, expected_cash: +(r.opening_cash + (r.totals.cash || 0) - (r.refunds || 0)).toFixed(2) };
 }
 function logToRegister(method: any, amount: any) {
