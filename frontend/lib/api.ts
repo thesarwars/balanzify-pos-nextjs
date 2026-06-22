@@ -215,6 +215,34 @@ async function realReq(method: string, path: string, { query, body, auth = true,
 }
 
 // ═══════════════════════════════════════════════════════════════════
+//  Response shapes for the newer platform capabilities (live backend).
+// ═══════════════════════════════════════════════════════════════════
+export interface HijriDate {
+  day: number; month: number; year: number; month_name: string;
+  formatted: string; iso: string; is_ramadan: boolean;
+}
+export interface ZakatAssessment {
+  base: number; assets: number; liabilities: number; rate: number;
+  nisab: number | null; meets_nisab: boolean | null; due: boolean; amount: number;
+  assetLines: { code: string; name: string; amount: number }[];
+  liabilityLines: { code: string; name: string; amount: number }[];
+  as_of_hijri: string;
+}
+export interface FiscalReceipt {
+  sale_id: string; jurisdiction: string; fiscal_number: number; invoice_label: string;
+  signature: string; verification_code: string; qr_data: string; device_serial: string | null;
+  status: string; signed_at: string; transmitted_at: string | null;
+}
+export type InteractionSeverity = 'minor' | 'moderate' | 'major' | 'contraindicated';
+export interface DrugInteractionResult {
+  drug_a: string; drug_b: string; severity: InteractionSeverity; description: string;
+}
+export interface SyncPushResult {
+  server_time: string; applied: number; total: number;
+  results: { op_id: string; status: 'applied' | 'duplicate' | 'conflict' | 'error'; sale_id?: string; sale_number?: string | null; error?: string; code?: string }[];
+}
+
+// ═══════════════════════════════════════════════════════════════════
 //  MOCK BACKEND
 //  Persistent ledger + UltimatePOS-shaped serializers.
 // ═══════════════════════════════════════════════════════════════════
@@ -3698,6 +3726,62 @@ const API: any = {
       }
       return (await transport('POST', '/business/register', { auth: false, body: payload })).data;
     },
+  },
+
+  // ═══════════════════════════════════════════════════════════════════
+  //  Newer platform capabilities — typed clients over the live /api/v1
+  //  backend. These have no UltimatePOS mock equivalent; they require
+  //  REAL_MODE (a configured backend). The UI consumes them directly.
+  // ═══════════════════════════════════════════════════════════════════
+
+  // Hijri calendar, Zakat (ledger-derived) and localization.
+  islamic: {
+    zakat(nisab?: number): Promise<ZakatAssessment> { return realReq('GET', '/islamic/zakat/assessment', { query: { nisab } }); },
+    hijriToday(): Promise<{ gregorian: string; hijri: HijriDate; is_ramadan: boolean; timezone: string }> { return realReq('GET', '/islamic/hijri/today'); },
+    hijriConvert(date: string, lang?: string): Promise<{ gregorian: string; hijri: HijriDate }> { return realReq('GET', '/islamic/hijri/convert', { query: { date, lang } }); },
+    localization(): Promise<{ language: string; is_rtl: boolean; supported: { code: string; name: string; rtl: boolean }[] }> { return realReq('GET', '/islamic/localization'); },
+  },
+
+  // Tax-authority fiscalization (eTIMS / VFD / EBM).
+  fiscal: {
+    config(): Promise<any> { return realReq('GET', '/fiscal/config'); },
+    setConfig(body: { jurisdiction: string; device_serial?: string; enabled?: boolean }): Promise<any> { return realReq('POST', '/fiscal/config', { body }); },
+    fiscalize(saleId: string): Promise<FiscalReceipt> { return realReq('POST', `/fiscal/sales/${saleId}/fiscalize`, {}); },
+    receipt(saleId: string): Promise<FiscalReceipt> { return realReq('GET', `/fiscal/receipt/${saleId}`); },
+    transmit(saleId: string): Promise<FiscalReceipt> { return realReq('POST', `/fiscal/sales/${saleId}/transmit`, {}); },
+    pending(): Promise<{ pending: number; receipts: FiscalReceipt[] }> { return realReq('GET', '/fiscal/pending'); },
+  },
+
+  // Offline-first outbox replay + delta pull.
+  sync: {
+    push(body: { device_id: string; operations: any[] }): Promise<SyncPushResult> { return realReq('POST', '/sync/push', { body }); },
+    pull(since?: string, deviceId?: string): Promise<any> { return realReq('GET', '/sync/pull', { query: { since, device_id: deviceId } }); },
+    devices(): Promise<{ devices: any[] }> { return realReq('GET', '/sync/devices'); },
+  },
+
+  // Embedded Sharia-compliant lending + the financial statements it underwrites from.
+  lending: {
+    assessment(): Promise<any> { return realReq('GET', '/lending/assessment'); },
+    offer(body: { principal: number; collection_rate?: number }): Promise<any> { return realReq('POST', '/lending/offer', { body }); },
+    advances(): Promise<{ advances: any[] }> { return realReq('GET', '/lending/advances'); },
+  },
+  ledger: {
+    trialBalance(): Promise<any> { return realReq('GET', '/accounting/trial-balance'); },
+    incomeStatement(query?: { from?: string; to?: string }): Promise<any> { return realReq('GET', '/accounting/income-statement', { query }); },
+    balanceSheet(query?: { from?: string; to?: string }): Promise<any> { return realReq('GET', '/accounting/balance-sheet', { query }); },
+  },
+
+  // Pharmacy clinical safety.
+  rx: {
+    checkInteractions(body: { drugs?: string[]; product_ids?: string[]; patient_id?: string; patient_name?: string }): Promise<{ checked: string[]; interactions: DrugInteractionResult[]; has_contraindication: boolean }> { return realReq('POST', '/pharmacy/interactions/check', { body }); },
+    interactions(): Promise<{ interactions: (DrugInteractionResult & { id: string; custom: boolean })[] }> { return realReq('GET', '/pharmacy/interactions'); },
+  },
+
+  // WhatsApp-native customer comms.
+  comms: {
+    whatsappSend(body: { to?: string; customer_id?: string; message: string; kind?: string }): Promise<any> { return realReq('POST', '/whatsapp/send', { body }); },
+    creditReminders(body?: { customer_id?: string; min_balance?: number }): Promise<any> { return realReq('POST', '/whatsapp/reminders/credit', { body: body || {} }); },
+    whatsappLog(kind?: string): Promise<{ messages: any[] }> { return realReq('GET', '/whatsapp/log', { query: { kind } }); },
   },
 };
 
