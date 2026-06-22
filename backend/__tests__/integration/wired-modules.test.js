@@ -2118,4 +2118,84 @@ describe('delivery — consumer ordering + driver dispatch (opt-in marketplace)'
   });
 });
 
+describe('M-Pesa async settlement — GL reconciliation on the STK callback', () => {
+  let token, loc, prod, bizId;
+  const at = (bal, c) => (bal.find(a => a.code === c) || { balance: 0 }).balance;
+
+  beforeAll(async () => {
+    token = await register();
+    loc = await location(token);
+    prod = await stockedProduct(token, loc, 10, 100); // price 10, cost 5
+    bizId = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString()).businessId;
+    // Stub M-Pesa: charge returns 'pending' (STK push sent, awaiting the customer PIN).
+    require('../../lib/payments').register('mpesa', {
+      name: 'M-Pesa (test stub)',
+      charge: async ({ amount, meta }) => ({ success: true, provider: 'mpesa', reference: `ck-${meta.sale_id}`, amount, status: 'pending', note: 'STK sent' }),
+      refund: async () => ({ success: true, status: 'pending' }),
+      verify: async () => ({ verified: false, status: 'pending' }),
+      getStatus: async () => ({ status: 'pending' }),
+    });
+  });
+
+  async function ringMpesaSale() {
+    const ik = (await request(app).post('/api/v1/sales/initiate').set(auth(token))).body.idempotency_key;
+    const res = await request(app).post('/api/v1/sales').set(auth(token)).send({
+      idempotency_key: ik, items: [{ product_id: prod, quantity: 2, override_price: 10 }],
+      location_id: loc, payment_method: 'mpesa', phone: '254700000001',
+    });
+    expect(res.status).toBe(201);
+    return res.body.id;
+  }
+  const refOf = async (saleId) => (await prisma.salePayment.findFirst({ where: { saleId, provider: 'mpesa' } })).providerReference;
+  const callback = (checkoutId, ok, amount) => request(app).post('/api/v1/payments/webhook/mpesa').send({
+    Body: { stkCallback: { CheckoutRequestID: checkoutId, ResultCode: ok ? 0 : 1032,
+      CallbackMetadata: { Item: [{ Name: 'MpesaReceiptNumber', Value: 'QGR7X' }, { Name: 'Amount', Value: amount }] } } },
+  });
+
+  test('pending STK books to in-transit clearing (not cash); success settles it to mobile money', async () => {
+    const saleId = await ringMpesaSale();
+    // Optimistic posting parks the money in clearing (1015), NOT real cash (1010).
+    let bal = await accounting.accountBalances(bizId);
+    expect(at(bal, '1015')).toBeCloseTo(20, 2);
+    expect(at(bal, '1010')).toBeCloseTo(0, 2);
+    expect((await prisma.sale.findUnique({ where: { id: saleId } })).status).toBe('pending');
+
+    // Customer enters PIN → success callback moves clearing into real mobile money.
+    const cb = await callback(await refOf(saleId), true, 20);
+    expect(cb.status).toBe(200);
+    expect(cb.body.ResultCode).toBe(0);
+    bal = await accounting.accountBalances(bizId);
+    expect(at(bal, '1010')).toBeCloseTo(20, 2);  // real cash now
+    expect(at(bal, '1015')).toBeCloseTo(0, 2);   // clearing emptied
+    expect((await prisma.sale.findUnique({ where: { id: saleId } })).status).toBe('completed');
+    expect((await prisma.salePayment.findFirst({ where: { saleId } })).status).toBe('completed');
+    expect((await request(app).get('/api/v1/accounting/trial-balance').set(auth(token))).body.totals.balanced).toBe(true);
+  });
+
+  test('a declined STK turns the in-transit amount into a receivable — never phantom cash', async () => {
+    const before = await accounting.accountBalances(bizId);
+    const ar0 = at(before, '1100'), cash0 = at(before, '1010');
+
+    const saleId = await ringMpesaSale();
+    expect(at(await accounting.accountBalances(bizId), '1015')).toBeCloseTo(20, 2);
+    const reference = await refOf(saleId);
+
+    // Customer declines → failure callback clears in-transit into AR (customer owes).
+    const cb = await callback(reference, false, 20);
+    expect(cb.status).toBe(200);
+    let bal = await accounting.accountBalances(bizId);
+    expect(at(bal, '1015')).toBeCloseTo(0, 2);          // clearing emptied
+    expect(at(bal, '1100') - ar0).toBeCloseTo(20, 2);   // booked as a receivable
+    expect(at(bal, '1010')).toBeCloseTo(cash0, 2);      // cash untouched — no phantom money
+    expect((await prisma.salePayment.findFirst({ where: { saleId } })).status).toBe('failed');
+    expect((await prisma.sale.findUnique({ where: { id: saleId } })).status).toBe('pending'); // unpaid
+    expect((await request(app).get('/api/v1/accounting/trial-balance').set(auth(token))).body.totals.balanced).toBe(true);
+
+    // Idempotent: a re-delivered callback finds no pending payment and changes nothing.
+    await callback(reference, false, 20);
+    bal = await accounting.accountBalances(bizId);
+    expect(at(bal, '1100') - ar0).toBeCloseTo(20, 2);
+  });
+});
+
 afterAll(async () => { await prisma.$disconnect(); });

@@ -19,6 +19,7 @@ const prisma = require('./prisma');
 const CHART = [
   { code: '1000', name: 'Cash',                type: 'asset',     normal: 'debit'  },
   { code: '1010', name: 'Mobile Money',        type: 'asset',     normal: 'debit'  },
+  { code: '1015', name: 'Mobile Money (In-Transit)', type: 'asset', normal: 'debit' },
   { code: '1020', name: 'Bank / Card',         type: 'asset',     normal: 'debit'  },
   { code: '1100', name: 'Accounts Receivable', type: 'asset',     normal: 'debit'  },
   { code: '1110', name: 'Employee Advances',   type: 'asset',     normal: 'debit'  },
@@ -118,8 +119,13 @@ async function postSale(tx, { businessId, sale, tenders, taxAmount = 0, cogs = 0
   const lines = [];
 
   // Money received (or receivable), routed by tender to the right asset/AR account.
+  // An async tender still awaiting confirmation (e.g. an M-Pesa STK push) lands in
+  // a clearing account (1015), NOT real cash — so the books never show money that
+  // hasn't actually arrived. The settlement callback moves it to cash, or to AR if
+  // it fails. (See routes/payments.js webhook.)
   for (const t of (tenders || [])) {
-    lines.push({ code: tenderAccountCode(t.method), debit: round2(t.amount), credit: 0, description: `Tender: ${t.method}` });
+    const code = t.pending ? '1015' : tenderAccountCode(t.method);
+    lines.push({ code, debit: round2(t.amount), credit: 0, description: t.pending ? `In-transit: ${t.method}` : `Tender: ${t.method}` });
   }
   // Revenue net of tax, and the tax liability.
   lines.push({ code: '4000', debit: 0, credit: round2(total - tax), description: 'Sales revenue' });

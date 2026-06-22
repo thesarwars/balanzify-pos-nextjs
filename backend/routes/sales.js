@@ -769,7 +769,16 @@ async function createSale(req) {
           },
         });
 
+        // An unconfirmed async charge (e.g. M-Pesa STK push) is "in-transit": tag
+        // the tender so the GL books it to clearing (1015), not real cash.
+        tender.pending = result.status !== 'completed';
         paymentResults.push(result);
+      }
+
+      // If any leg is still awaiting confirmation, the sale isn't settled yet —
+      // keep it pending until the provider's callback confirms (or fails) it.
+      if (paymentResults.some(r => r && r.status && r.status !== 'completed')) {
+        await tx.sale.update({ where: { id: sale.id }, data: { status: 'pending' } });
       }
 
       // ── 12. Loyalty: apply earn and redemption ────────────────────────────
