@@ -3816,6 +3816,17 @@ const API: any = {
     interactions(): Promise<{ interactions: (DrugInteractionResult & { id: string; custom: boolean })[] }> { return realReq('GET', '/pharmacy/interactions'); },
   },
 
+  // Public consumer storefront (no auth) — browse a shop and place a delivery order.
+  shop: {
+    catalog(businessId: string): Promise<{ shop: { id: string; name: string; currency: string }; products: { id: string; name: string; price: number; unit: string; image: string | null }[] }> {
+      return realReq('GET', `/shop/${businessId}/catalog`, { auth: false });
+    },
+    order(businessId: string, body: { customer_name: string; phone?: string; address: string; items: { product_id: string; quantity: number }[] }): Promise<{ order_id: string; status: string; order_amount: number; items: string[] }> {
+      return realReq('POST', `/shop/${businessId}/order`, { auth: false, body });
+    },
+    track(orderId: string): Promise<any> { return realReq('GET', `/shop/order/${orderId}/status`, { auth: false }); },
+  },
+
   // Consumer ordering + driver dispatch (opt-in marketplace).
   delivery: {
     drivers(status?: string): Promise<{ drivers: DeliveryDriver[] }> { return realReq('GET', '/delivery/drivers', { query: { status } }); },
