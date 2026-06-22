@@ -10,6 +10,7 @@ import React from 'react';
 import { Btn, Badge, Modal, Field, TextField, SelectField, FormGrid, useViewport, swatchBg } from '@/components/kit';
 import { useTweaks } from '@/components/shell';
 import { API } from '@/lib/api';
+import { outbox } from '@/lib/use-offline-sync';
 import { money } from '@/lib/theme';
 import { CASHIER, CATEGORIES, PRODUCTS, PAYMENT_METHODS } from '@/lib/data';
 import { setNavBlock } from '@/lib/nav-guard';
@@ -251,18 +252,19 @@ export function POS({ T, tweaks }: { T: any; tweaks: any }) {
     const remaining = +(total - Math.min(paid, total)).toFixed(2);
     if (remaining > 0.001 && (!customer)) { setPostErr('Select a customer to sell on credit.'); return; }
     setPostErr(null); setPosting(true);
+    const salePayload: any = {
+      location_id: (register && register.location_id) || 1, shift_id: register ? register.id : undefined, contact_id: customer ? customer.id : 1, customer_name: customer ? customer.name : 'Walk-in',
+      method: payments[0] ? payments[0].method : 'cash', amount: total, discount_amount: discount, discount_type: 'fixed', tax_amount: tax,
+      redeem_points: redeemPts,
+      coupon_id: couponOk && couponDiscount > 0 ? coupon.id : undefined,
+      coupon_discount: couponOk && couponDiscount > 0 ? couponDiscount : undefined,
+      packing_charge: packing > 0 ? packing : undefined,
+      service_type_id: svcType ? svcType.id : undefined,
+      payments: payments.filter((p: any) => Number(p.amount) > 0).map((p: any) => ({ method: p.method, amount: Number(p.amount) })),
+      lines: lines.map((l: any) => ({ product_id: l.id, variation: l.varName, quantity: l.qty, unit_price: l.price })),
+    };
     try {
-      const created = await API.sell.create({
-        location_id: (register && register.location_id) || 1, shift_id: register ? register.id : undefined, contact_id: customer ? customer.id : 1, customer_name: customer ? customer.name : 'Walk-in',
-        method: payments[0] ? payments[0].method : 'cash', amount: total, discount_amount: discount, discount_type: 'fixed', tax_amount: tax,
-        redeem_points: redeemPts,
-        coupon_id: couponOk && couponDiscount > 0 ? coupon.id : undefined,
-        coupon_discount: couponOk && couponDiscount > 0 ? couponDiscount : undefined,
-        packing_charge: packing > 0 ? packing : undefined,
-        service_type_id: svcType ? svcType.id : undefined,
-        payments: payments.filter((p: any) => Number(p.amount) > 0).map((p: any) => ({ method: p.method, amount: Number(p.amount) })),
-        lines: lines.map((l: any) => ({ product_id: l.id, variation: l.varName, quantity: l.qty, unit_price: l.price })),
-      });
+      const created = await API.sell.create(salePayload);
       setInvoice(created.invoice_no);
       setSaleId(created.id || created._id || (created._real && created._real.id) || null);
       setReceiptMsg(null);
@@ -274,7 +276,26 @@ export function POS({ T, tweaks }: { T: any; tweaks: any }) {
       // in real mode keep the panel so the cashier can print/send the receipt.
       if (!(API.config?.isReal?.())) setTimeout(() => { clear(); }, 2800);
     } catch (ex: any) {
-      setPostErr(ex.message || 'Could not record the sale.');
+      // Offline (or backend unreachable) on a live till: queue the sale locally
+      // and let /sync replay it when connectivity returns. Exactly-once is
+      // guaranteed server-side by the client-generated idempotency key.
+      const offlineish = ex?.status === 0 || (typeof navigator !== 'undefined' && !navigator.onLine);
+      if (API.config?.isReal?.() && offlineish) {
+        try {
+          await outbox().enqueueSale(API.sell.realSaleBody(salePayload));
+          setInvoice('OFFLINE');
+          setSaleId(null);
+          setChangeDue(0);
+          setCharged(methodLabel || (payments[0] ? payments[0].method : 'credit'));
+          setReceiptMsg('Saved offline — will sync when back online.');
+          setPayOpen(false); setSheetOpen(false);
+          setTimeout(() => { clear(); }, 2800);
+        } catch {
+          setPostErr('Could not save the sale offline.');
+        }
+      } else {
+        setPostErr(ex.message || 'Could not record the sale.');
+      }
     } finally { setPosting(false); }
   }
   // quick single-method full payment

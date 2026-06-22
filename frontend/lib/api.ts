@@ -214,6 +214,39 @@ async function realReq(method: string, path: string, { query, body, auth = true,
   return json;
 }
 
+// Build the backend (/api/v1/sales) sale body from the POS payload, WITHOUT the
+// idempotency key. The online path adds a server-minted key; the offline outbox
+// generates its own and replays the same body through /sync/push. Single source
+// of truth so online and offline sales are byte-for-byte the same cart.
+function buildRealSaleBody(payload: any): any {
+  const pays = (payload.payments || []).filter((p: any) => Number(p.amount) > 0);
+  const split = pays.length > 1;
+  const body: any = {
+    items: (payload.lines || []).map((l: any) => ({ product_id: l.product_id, quantity: l.quantity, override_price: l.unit_price })),
+    customer_id: isUuid(payload.contact_id) ? payload.contact_id : undefined,
+    location_id: isUuid(payload.location_id) ? payload.location_id : undefined,
+    shift_id: isUuid(payload.shift_id) ? payload.shift_id : undefined,
+    payment_method: split ? 'split' : realPayMethod((pays[0] && pays[0].method) || payload.method),
+    discount_type: payload.discount_type === 'percentage' ? 'pct' : 'flat',
+    discount_value: Number(payload.discount_amount || 0),
+    ...(payload.coupon_id ? { coupon_id: payload.coupon_id, coupon_discount: Number(payload.coupon_discount || 0) } : {}),
+    ...(Number(payload.packing_charge) > 0 ? { packing_charge: Number(payload.packing_charge) } : {}),
+    ...(isUuid(payload.service_type_id) ? { service_type_id: payload.service_type_id } : {}),
+    type: 'pos',
+  };
+  if (split) {
+    for (const p of pays) {
+      const m = realPayMethod(p.method);
+      if (m === 'cash') body.cash_amount = (body.cash_amount || 0) + Number(p.amount);
+      else if (m === 'zaad') body.zaad_amount = (body.zaad_amount || 0) + Number(p.amount);
+      else body.card_amount = (body.card_amount || 0) + Number(p.amount);
+    }
+  } else if (body.payment_method === 'cash') {
+    body.cash_tendered = Number((pays[0] && pays[0].amount) || payload.amount || 0);
+  }
+  return body;
+}
+
 // ═══════════════════════════════════════════════════════════════════
 //  Response shapes for the newer platform capabilities (live backend).
 // ═══════════════════════════════════════════════════════════════════
@@ -2666,6 +2699,8 @@ const API: any = {
 
   // /connector/api/sell
   sell: {
+    // The backend-shaped sale body (no idempotency key) for the offline outbox.
+    realSaleBody(payload: any) { return buildRealSaleBody(payload); },
     async list(params: any = {}) {
       if (REAL_MODE) {
         const res = await realReq('GET', '/sales', { query: params });
@@ -2684,36 +2719,12 @@ const API: any = {
     },
     async create(payload: any) {
       if (REAL_MODE) {
-        const pays = (payload.payments || []).filter((p: any) => Number(p.amount) > 0);
-        const split = pays.length > 1;
         // The backend requires the idempotency key to be minted server-side first
         // (POST /sales/initiate) — it must already exist in sale_keys, otherwise
-        // POST /sales rejects with "Invalid transaction token."
+        // POST /sales rejects with "Invalid transaction token." (Offline sales use
+        // a client-generated key replayed through /sync — see realSaleBody.)
         const init = await realReq('POST', '/sales/initiate');
-        const body: any = {
-          idempotency_key: init.idempotency_key,
-          items: (payload.lines || []).map((l: any) => ({ product_id: l.product_id, quantity: l.quantity, override_price: l.unit_price })),
-          customer_id: isUuid(payload.contact_id) ? payload.contact_id : undefined,
-          location_id: isUuid(payload.location_id) ? payload.location_id : undefined,
-          shift_id: isUuid(payload.shift_id) ? payload.shift_id : undefined,  // attribute the sale to the open till
-          payment_method: split ? 'split' : realPayMethod((pays[0] && pays[0].method) || payload.method),
-          discount_type: payload.discount_type === 'percentage' ? 'pct' : 'flat',
-          discount_value: Number(payload.discount_amount || 0),
-          ...(payload.coupon_id ? { coupon_id: payload.coupon_id, coupon_discount: Number(payload.coupon_discount || 0) } : {}),
-          ...(Number(payload.packing_charge) > 0 ? { packing_charge: Number(payload.packing_charge) } : {}),
-          ...(isUuid(payload.service_type_id) ? { service_type_id: payload.service_type_id } : {}),
-          type: 'pos',
-        };
-        if (split) {
-          for (const p of pays) {
-            const m = realPayMethod(p.method);
-            if (m === 'cash') body.cash_amount = (body.cash_amount || 0) + Number(p.amount);
-            else if (m === 'zaad') body.zaad_amount = (body.zaad_amount || 0) + Number(p.amount);
-            else body.card_amount = (body.card_amount || 0) + Number(p.amount);
-          }
-        } else if (body.payment_method === 'cash') {
-          body.cash_tendered = Number((pays[0] && pays[0].amount) || payload.amount || 0);
-        }
+        const body: any = { ...buildRealSaleBody(payload), idempotency_key: init.idempotency_key };
         const res = await realReq('POST', '/sales', { body });
         const s = (res && (res.sale || res.data)) || res || {};
         return {
