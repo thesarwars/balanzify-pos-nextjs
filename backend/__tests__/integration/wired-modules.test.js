@@ -1462,4 +1462,60 @@ describe('Islamic markets — Hijri calendar, Zakat, localization', () => {
   });
 });
 
+describe('delivery — consumer ordering + driver dispatch (opt-in marketplace)', () => {
+  let token, bizId;
+  beforeAll(async () => {
+    token = await register();
+    await enableModule(token, 'delivery');
+    await location(token);
+    bizId = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString()).businessId;
+  });
+
+  test('gated off by default', async () => {
+    const other = await register();
+    expect((await request(app).get('/api/v1/delivery/drivers').set(auth(other))).status).toBe(403);
+  });
+
+  test('auto-dispatch matches an available driver; a completed delivery posts the fee to the ledger', async () => {
+    const drv = await request(app).post('/api/v1/delivery/drivers').set(auth(token)).send({ name: 'Cabdi', phone: '0610001', vehicle_type: 'motorbike' });
+    expect(drv.status).toBe(201);
+    expect((await request(app).put(`/api/v1/delivery/drivers/${drv.body.id}/status`).set(auth(token)).send({ status: 'available' })).status).toBe(200);
+
+    // A WhatsApp-channel COD order with auto-assign matches the idle driver.
+    const del = await request(app).post('/api/v1/delivery').set(auth(token)).send({
+      customer_name: 'Hodan', customer_phone: '0612345', address: 'Street 5, Hargeisa',
+      channel: 'whatsapp', order_amount: 40, delivery_fee: 5, payment_mode: 'cod',
+    });
+    expect(del.status).toBe(201);
+    expect(del.body.status).toBe('assigned');
+    expect(del.body.driver_id).toBe(drv.body.id);
+    expect((await request(app).get('/api/v1/delivery/drivers').set(auth(token)).query({ status: 'busy' })).body.drivers.length).toBe(1);
+
+    expect((await request(app).put(`/api/v1/delivery/${del.body.id}/status`).set(auth(token)).send({ status: 'picked_up' })).status).toBe(200);
+    const done = await request(app).put(`/api/v1/delivery/${del.body.id}/status`).set(auth(token)).send({ status: 'delivered' });
+    expect(done.body.status).toBe('delivered');
+
+    // COD delivery fee → Dr AR (driver owes), Cr Delivery Revenue.
+    const bal = await accounting.accountBalances(bizId);
+    const at = (c) => (bal.find(a => a.code === c) || { balance: 0 }).balance;
+    expect(at('4100')).toBeCloseTo(5, 2);
+    expect(at('1100')).toBeCloseTo(5, 2);
+
+    // Driver is freed back to available once the job closes.
+    expect((await request(app).get('/api/v1/delivery/drivers').set(auth(token)).query({ status: 'available' })).body.drivers.length).toBe(1);
+  });
+
+  test('no available driver → the order stays pending for manual assignment', async () => {
+    const t2 = await register();
+    await enableModule(t2, 'delivery');
+    await location(t2);
+    const del = await request(app).post('/api/v1/delivery').set(auth(t2)).send({
+      customer_name: 'Axmed', address: 'Road 2', order_amount: 10, delivery_fee: 2,
+    });
+    expect(del.status).toBe(201);
+    expect(del.body.status).toBe('pending');
+    expect(del.body.driver_id).toBeNull();
+  });
+});
+
 afterAll(async () => { await prisma.$disconnect(); });
