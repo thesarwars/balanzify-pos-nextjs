@@ -5,6 +5,14 @@ competitor) expects. Grounded in the current codebase. Priority tags:*
 - 🔴 **day-one-critical** — a real operator in this vertical hits this in week one
 - 🟡 **competitive** — a specialist has it; you'll lose deals without it
 - ⚪ **elite** — category-leader differentiator
+- ✅ **closed** — built + integration-tested since this register was written
+
+> **Status:** every **vertical-specific 🔴** has been closed (accounting,
+> delivery, pharmacy, HRM, wholesale, construction, lending, hotel, restaurant) —
+> each built against the GL and covered by the integration suite (179 tests).
+> The only 🔴s left are **cross-cutting** and need things the sandbox can't
+> provide: **live mobile-money credentials** and the remaining **frontend
+> breadth**.
 
 ---
 
@@ -44,18 +52,20 @@ competitor) expects. Grounded in the current codebase. Priority tags:*
   serials, variants, bundles, multi-location, adjustments, supplier catalog.)*
 
 ## Accounting / GL — the spine (~65% of QuickBooks/Xero)
-- 🔴 **Manual journal entry UI** (engine posts automatically; an accountant needs to
-  post adjustments/corrections by hand).
-- 🔴 **AR/AP aging reports** (data is there; the report isn't surfaced).
+- ✅ **Manual journal entry** — `POST /accounting/journal` posts balanced ad-hoc
+  entries (validates codes + balance) with a screen wired to it.
+- ✅ **AR aging report** — `GET /accounting/aging` buckets receivables 0–30/31–60/
+  61–90/90+ by customer.
 - 🟡 **Bank reconciliation** (+ bank feeds/CSV import).
 - 🟡 Period close / ledger locking; cash-flow statement.
 - 🟡 Fixed assets & depreciation; budgeting vs actual (exists for construction only).
 - ⚪ Multi-currency consolidation; accountant/audit export packs; tax-return filing.
 
 ## Lending / Embedded finance — model complete, productization missing (~60% software)
-- 🔴 **KYC / identity capture** + blacklist/credit-history check before disbursing.
-- 🔴 **Sharia-compliant late/default handling** (no riba penalty — model a charity
-  late-fee or restructuring, not interest).
+- ✅ **KYC / identity capture + denylist + credit history** — disbursement is gated
+  on verified KYC, a not-blacklisted ID, and no prior default.
+- ✅ **Sharia-compliant late/default handling** — restructure (debt never grows) +
+  a charity late-fee booked to Charity Payable (never lender income) + default flag.
 - 🟡 Multiple concurrent advances policy; early-settlement rebate; rollover/restructure.
 - 🟡 Borrower statements & schedule documents; guarantor capture.
 - 🔴 *(non-software)* **Capital source + lending licence/partner** — the real gate.
@@ -65,9 +75,10 @@ competitor) expects. Grounded in the current codebase. Priority tags:*
 ---
 
 ## Restaurant — deep skin (~60%)
-- 🔴 **Modifiers / combos at the till** (no salt, extra cheese, set menus).
-- 🔴 **Seat-level ordering + split bill by seat/item** (split tender exists; per-seat
-  doesn't).
+- ✅ **Modifiers + combos at the till** — modifier groups/options apply at item add;
+  combos/set menus expand into apportioned component lines summing to the deal price.
+- ✅ **Seat-level ordering + split bill by seat** — items carry a seat; split-by-seat
+  produces one bill per seat (plus split-by-item, which already existed).
 - 🟡 **Table floor-plan / map UI**; course firing / coursing to the kitchen.
 - 🟡 Void/comp tracking with reasons; QR-menu / online ordering.
 - 🟡 Tips pooling & distribution to staff.
@@ -76,10 +87,13 @@ competitor) expects. Grounded in the current codebase. Priority tags:*
   kitchen tickets, service types.)*
 
 ## Hotel / PMS — moderate skin (~55%)
-- 🔴 **Availability calendar + overbooking rules** (booking safety exists; a visual
-  availability board doesn't).
-- 🔴 **Rate plans / seasonal & dynamic pricing** (flat rates only today).
-- 🔴 **Charge-to-room from POS/restaurant** (post a meal to a guest folio).
+- ✅ **Availability** — `GET /hotel/availability` returns per-room booked/free over a
+  date range (overlap-aware); a visual board can render straight from it.
+- ✅ **Rate plans / seasonal & dynamic pricing** — Best Available Rate resolver +
+  `GET /hotel/quote`; reservations auto-apply the cheapest qualifying seasonal/
+  long-stay plan.
+- ✅ **Charge-to-room from POS/restaurant** — folio charges + restaurant post-to-folio
+  post a meal to a guest folio.
 - 🟡 **Housekeeping status board**; **night audit** routine.
 - 🟡 Deposits & cancellation policies; guest profiles/history.
 - ⚪ **Channel manager** (Booking.com/Expedia OTA sync) — the big one; occupancy/ADR/RevPAR.
@@ -87,7 +101,8 @@ competitor) expects. Grounded in the current codebase. Priority tags:*
   check-in, tax/service, corporate accounts, group bookings.)*
 
 ## Pharmacy — deep skin (~60%)
-- 🔴 **Rx label printing** (dispensing legally needs a patient label).
+- ✅ **Rx label** — `GET /pharmacy/prescriptions/:id/label` returns a structured +
+  printable dispensing label (patient, drug, directions, prescriber, warnings).
 - 🟡 **Insurance / third-party adjudication & claims** (cash-only today).
 - 🟡 Allergy checking; full patient medication profile across visits (interaction
   check uses active Rx only).
@@ -98,10 +113,11 @@ competitor) expects. Grounded in the current codebase. Priority tags:*
   expiry/FIFO, drug-interaction checking, pack/unit selling.)*
 
 ## HRM / Payroll — moderate skin (~50%)
-- 🔴 **Payslip generation & distribution** (payroll computes + posts to GL; the
-  employee-facing payslip artifact is thin).
-- 🔴 **Statutory deductions & filing** per country (Kenya PAYE/NSSF/SHIF; minimal in
-  Somalia) — a Kenyan payroll is non-compliant without this.
+- ✅ **Payslip generation & distribution** — structured payslip endpoint + send over
+  WhatsApp.
+- ✅ **Statutory deductions & filing** — Kenya PAYE/NSSF/SHIF/Housing engine, preview,
+  posted to a Statutory Payable account, with a per-month filing report (KRA/NSSF/SHA).
+  Somaliland/Somalia return zero (no regime).
 - 🟡 Overtime rules engine; employee self-service (view payslip/leave balance).
 - 🟡 Contracts/documents; end-of-service gratuity.
 - ⚪ Biometric/geofenced clock-in; performance; recruitment.
@@ -109,8 +125,10 @@ competitor) expects. Grounded in the current codebase. Priority tags:*
   leave accrual/balances, advances→GL, payroll→GL with advance recovery, todos.)*
 
 ## Construction — thin skin (~45–50%)
-- 🔴 **Change orders / variations** (a job without change-order tracking loses money).
-- 🔴 **Material requisitions from inventory to a project** (link stock issue → job cost).
+- ✅ **Change orders / variations** — raise/approve/reject; approval revises the budget
+  and raises a billable milestone (debt-free until billed).
+- ✅ **Material requisitions from inventory to a project** — issue stock at FIFO cost,
+  relieve inventory (Dr COGS / Cr Inventory), roll into the project's material actuals.
 - 🟡 **Subcontractor management & payments**; progress claims/valuations.
 - 🟡 BOQ / estimating; certified payroll; snag/punch lists.
 - ⚪ RFIs/submittals/drawings; scheduling/Gantt; equipment/plant tracking.
@@ -118,8 +136,10 @@ competitor) expects. Grounded in the current codebase. Priority tags:*
   milestone billing → real AR + retention, tasks.)*
 
 ## Wholesale / Distribution — thin skin (~45%)
-- 🔴 **Backorders / partial fulfillment** (B2B orders are rarely fully in stock).
-- 🔴 **Credit notes / returns workflow** (distribution runs on returns).
+- ✅ **Backorders / partial fulfillment** — fulfil per-line quantities; short orders
+  dispatch and bill only what shipped; the shortfall is a queryable backorder.
+- ✅ **Credit notes / returns** — return against a delivered order; reverses revenue +
+  receivable, re-states the order, caps at returnable.
 - 🟡 **Van/route sales & mobile reps (DMS)** — Uzapoint has this; a real differentiator
   in the corridor.
 - 🟡 Customer-specific catalogs/contract pricing; rep commissions per route.
@@ -128,9 +148,10 @@ competitor) expects. Grounded in the current codebase. Priority tags:*
   overpayment cap, GL.)*
 
 ## Delivery / Marketplace — v1 foundation (~35%)
-- 🔴 **Distance-based delivery fee** (flat/zero today — needs zones or distance).
-- 🔴 **Customer status notifications** (WhatsApp on assigned/picked-up/delivered).
-- 🔴 **Proof of delivery** (photo/signature/OTP).
+- ✅ **Zone-based delivery fee** — delivery zones with per-zone fees set server-side on
+  order (both dispatch and public shop).
+- ✅ **Customer status notifications** — WhatsApp on assigned/picked-up/delivered.
+- ✅ **Proof of delivery** — recipient name + note + photo URL captured on delivered.
 - 🟡 **Driver mobile view** (accept job, navigate, mark delivered) — currently
   operator-driven from the dispatch board.
 - 🟡 Live driver GPS + map; ETA; driver earnings/payouts/**float** (the embedded-finance
@@ -143,10 +164,15 @@ competitor) expects. Grounded in the current codebase. Priority tags:*
 
 ## How to use this register
 
-1. **Pick the first-client vertical, then close only its 🔴 row** before onboarding —
-   typically 1–3 weeks of work per vertical.
-2. The **cross-cutting 🔴s** (live mobile money, frontend breadth) help *every* client,
-   so they rank above any single vertical's 🟡/⚪.
-3. **Retail, Restaurant, Pharmacy** have the fewest 🔴s → fastest to a happy first
-   customer. **Hotel, Construction, Wholesale, Delivery** have more → land those only
-   if the client is worth the deepening.
+1. **Every vertical's 🔴 row is now closed** — any vertical can onboard a first client
+   on the software. What's left per vertical is 🟡 (competitive) and ⚪ (elite).
+2. The remaining **🔴s are cross-cutting** and gated on the real world, not the code:
+   - **Live mobile-money settlement** needs merchant credentials + each wallet's API
+     (Daraja STK, Telebirr Fabric, Zaad/EVC USSD push). The GL, tender routing and
+     provider registry are ready; only the live keys/integration remain.
+   - **Frontend breadth** — wire the remaining CRUD screens to the live API and finish
+     mobile-responsive passes.
+   - *(non-software)* **Lending capital + licence/partner** — the real gate to
+     disbursing money, independent of the software.
+3. Next ranked work is therefore the cross-cutting 🔴s (they help *every* client),
+   then per-vertical 🟡s for whichever vertical the first paying customer is in.
