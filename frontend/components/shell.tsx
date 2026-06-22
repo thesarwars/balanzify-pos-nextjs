@@ -6,6 +6,7 @@ import { API } from '@/lib/api';
 import { useViewport } from '@/components/kit';
 import { usePathname, useRouter } from 'next/navigation';
 import { ApiPanel } from '@/components/api-panel';
+import { LanguageSwitcher } from '@/components/language-switcher';
 import { isNavBlocked, setNavBlock, navBlockMessage, navBlockTitle } from '@/lib/nav-guard';
 
 // ─────────────────────────────────────────────────────────────────
@@ -189,7 +190,8 @@ export function Sidebar({ T, screen, setScreen, collapsed, setCollapsed, onLogou
             </div>
           )}
           {!collapsed && (
-            <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+            <div style={{ display: 'flex', gap: 6, flexShrink: 0, alignItems: 'center' }}>
+              <LanguageSwitcher compact />
               {onLock && <button onClick={onLock} title="Lock / switch user" style={{
                 width: 28, height: 28, borderRadius: 7, cursor: 'pointer',
                 background: S.iconBg, border: 'none', color: S.iconText, fontSize: 13,
