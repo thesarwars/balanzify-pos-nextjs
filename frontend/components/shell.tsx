@@ -53,6 +53,7 @@ export const NAV = [
     { id: 'adjustments', label: 'Adjustments', icon: '◑' },
     { id: 'transfers', label: 'Transfers', icon: '⇄' },
     { id: 'zakat', label: 'Zakat', icon: '☪' },
+    { id: 'lending', label: 'Financing', icon: '◈' },
   ]},
   { sect: 'Operations', items: [
     { id: 'hrm', label: 'HRM / Staff', icon: '⚇' },
