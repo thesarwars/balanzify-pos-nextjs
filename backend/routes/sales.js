@@ -11,6 +11,9 @@ const webhooks         = require('../lib/webhooks');
 const { convert }        = require('../lib/currency');
 const { generateReceiptToken, receiptUrl, generateWhatsAppReceipt } = require('../lib/receipt');
 const creditEngine = require('../lib/credit');
+const accounting = require('../lib/accounting');
+const financing = require('../lib/financing');
+const fiscal = require('../lib/fiscalization');
 const router = express.Router();
 
 // ── Cart fingerprint ──────────────────────────────────────────────────────────
@@ -145,8 +148,11 @@ router.delete('/held/:id', auth, async (req, res, next) => {
 // Handles: products, variants, bundles, serialised items,
 //          coupons, loyalty earn/redeem, tips, FIFO cost layers,
 //          credit sales, split payments, customer balances, shift totals.
-router.post('/', auth, validate(SaleSchemaV3), async (req, res, next) => {
-  try {
+// Core sale-creation transaction, callable in-process by both the HTTP route
+// and the restaurant checkout. `req` is a minimal context: { user, body, ip, get }.
+// Returns the sale result (with _retry on an idempotent replay); throws errors
+// carrying a statusCode.
+async function createSale(req) {
     const {
       items = [],
       variant_items = [],
@@ -165,6 +171,7 @@ router.post('/', auth, validate(SaleSchemaV3), async (req, res, next) => {
       tip_amount = 0,
       tip_type,
       packing_charge = 0,
+      service_charge = 0,
       service_type_id,
       custom_item,
       notes,
@@ -181,10 +188,10 @@ router.post('/', auth, validate(SaleSchemaV3), async (req, res, next) => {
     ];
 
     if (!allItems.length && !custom_item) {
-      return res.status(400).json({ error: 'No items in cart.' });
+      throw Object.assign(new Error('No items in cart.'), { statusCode: 400 });
     }
     if (!idempotency_key) {
-      return res.status(400).json({ error: 'Transaction token required.' });
+      throw Object.assign(new Error('Transaction token required.'), { statusCode: 400 });
     }
 
     const result = await prisma.$transaction(async (tx) => {
@@ -283,6 +290,76 @@ router.post('/', auth, validate(SaleSchemaV3), async (req, res, next) => {
           : item.quantity;
         subtotal += lineTotal;
 
+        // ── Recipe / BOM ────────────────────────────────────────────────────
+        // If this product is a made-to-order item (has a recipe), it has no
+        // finished-good stock — selling it depletes its INGREDIENTS instead.
+        const recipe = await tx.recipe.findFirst({
+          where: { productId: item.product_id, businessId: req.user.business_id, isActive: true },
+          include: { items: true },
+        });
+        if (recipe && recipe.items.length) {
+          const yieldQty = recipe.yieldQty > 0 ? recipe.yieldQty : 1;
+          let recipeCogs = 0;
+          for (const ri of recipe.items) {
+            const deductQty = Math.round(item.quantity * parseFloat(ri.quantity) / yieldQty);
+            if (deductQty <= 0) continue;
+
+            const ingRows = await tx.$queryRaw`
+              SELECT quantity FROM stock_levels
+              WHERE product_id = ${ri.ingredientId}::uuid AND location_id = ${locId}::uuid
+              FOR UPDATE`;
+            const ingQty = ingRows[0]?.quantity ?? 0;
+            if (ingQty < deductQty) {
+              const ing = await tx.product.findUnique({ where: { id: ri.ingredientId }, select: { name: true } });
+              throw Object.assign(
+                new Error(`Insufficient ingredient stock to make ${product.name}: ${ing?.name || 'ingredient'} needs ${deductQty}, have ${ingQty}.`),
+                { statusCode: 400, code: 'INSUFFICIENT_INGREDIENT' }
+              );
+            }
+            const ingNew = ingQty - deductQty;
+            await tx.$executeRaw`
+              UPDATE stock_levels SET quantity = ${ingNew}, updated_at = NOW()
+              WHERE product_id = ${ri.ingredientId}::uuid AND location_id = ${locId}::uuid`;
+
+            // FIFO-cost the ingredient consumption for COGS
+            let ingRemaining = deductQty, ingTotalCost = 0, ingConsumed = 0;
+            const ingLayers = await tx.$queryRaw`
+              SELECT id, quantity_remaining, unit_cost FROM cost_layers
+              WHERE product_id = ${ri.ingredientId}::uuid AND business_id = ${req.user.business_id}::uuid
+                AND (location_id = ${locId}::uuid OR location_id IS NULL) AND quantity_remaining > 0
+              ORDER BY received_at ASC FOR UPDATE`;
+            for (const layer of ingLayers) {
+              if (ingRemaining <= 0) break;
+              const consume = Math.min(ingRemaining, parseInt(layer.quantity_remaining));
+              ingTotalCost += consume * parseFloat(layer.unit_cost);
+              ingConsumed += consume;
+              await tx.$executeRaw`UPDATE cost_layers SET quantity_remaining = ${parseInt(layer.quantity_remaining) - consume} WHERE id = ${layer.id}::uuid`;
+              ingRemaining -= consume;
+            }
+            recipeCogs += deductQty * (ingConsumed > 0 ? ingTotalCost / ingConsumed : 0);
+
+            await tx.stockMovement.create({
+              data: {
+                businessId: req.user.business_id, productId: ri.ingredientId, locationId: locId,
+                type: 'sale', quantity: -deductQty, balanceAfter: ingNew,
+                referenceType: 'recipe', createdById: req.user.id,
+              },
+            });
+          }
+          processed.push({
+            product_id:     item.product_id,
+            variant_id:     item.variant_id || null,
+            quantity:       item.quantity,
+            unit_price:     unitPrice,
+            original_price: basePrice,
+            cost_price:     item.quantity > 0 ? recipeCogs / item.quantity : 0,
+            total_price:    lineTotal,
+            notes:          item.notes || null,
+            serial_numbers: [],
+          });
+          return; // ingredients depleted — skip the finished-good stock/FIFO path
+        }
+
         // Serial number validation (before stock deduction)
         if (product.isSerialized) {
           if (!item.serial_numbers?.length || item.serial_numbers.length !== item.quantity) {
@@ -346,6 +423,7 @@ router.post('/', auth, validate(SaleSchemaV3), async (req, res, next) => {
           FROM cost_layers
           WHERE product_id = ${item.product_id}::uuid
             AND business_id = ${req.user.business_id}::uuid
+            AND (location_id = ${locId}::uuid OR location_id IS NULL)
             AND quantity_remaining > 0
           ORDER BY received_at ASC
           FOR UPDATE
@@ -446,19 +524,33 @@ router.post('/', auth, validate(SaleSchemaV3), async (req, res, next) => {
       // Bundles are sent as bundle_id — expand into constituent items
       // (Bundle logic hooks here if bundle_id is added to schema later)
 
-      // ── 5. Coupon — atomic lock ───────────────────────────────────────────
+      // ── 5. Coupon — atomic lock + SERVER-SIDE discount computation ────────
+      // Never trust the client's coupon_discount. Lock the coupon row, verify
+      // validity + min_purchase, and recompute the discount from the coupon's
+      // own type/value (mirrors POST /coupons/validate). This closes a money
+      // leak where any client could pass an arbitrary discount amount.
+      let couponAmt = 0;
       if (coupon_id) {
         const couponRows = await tx.$queryRaw`
-          SELECT id, max_uses, uses_count FROM coupons
+          SELECT id, type, value, min_purchase, max_uses, uses_count FROM coupons
           WHERE id = ${coupon_id}::uuid
             AND business_id = ${req.user.business_id}::uuid
             AND is_active = true
+            AND (valid_from  IS NULL OR valid_from  <= CURRENT_DATE)
+            AND (valid_until IS NULL OR valid_until >= CURRENT_DATE)
             AND (max_uses IS NULL OR uses_count < max_uses)
           FOR UPDATE
         `;
         if (!couponRows.length) {
           throw Object.assign(new Error('Coupon is no longer valid or usage limit reached.'), { statusCode: 400 });
         }
+        const c = couponRows[0];
+        if (subtotal < parseFloat(c.min_purchase)) {
+          throw Object.assign(new Error(`Minimum purchase of ${c.min_purchase} required for this coupon.`), { statusCode: 400, code: 'MIN_PURCHASE_NOT_MET' });
+        }
+        const val = parseFloat(c.value) || 0;
+        couponAmt = c.type === 'pct' ? subtotal * val / 100 : Math.min(subtotal, val);
+        couponAmt = parseFloat(couponAmt.toFixed(2));
       }
 
       // ── 6. Loyalty — validate redemption ─────────────────────────────────
@@ -496,13 +588,14 @@ router.post('/', auth, validate(SaleSchemaV3), async (req, res, next) => {
       const discAmt = discount_type === 'pct'
         ? subtotal * (parseFloat(discount_value) || 0) / 100
         : Math.min(subtotal, parseFloat(discount_value) || 0);
-      const couponAmt  = parseFloat(coupon_discount)  || 0;
+      // couponAmt was computed server-side in step 5 (never trust the client).
       const tipAmt     = tip_type === 'pct'
         ? subtotal * (parseFloat(tip_amount) || 0) / 100
         : parseFloat(tip_amount) || 0;
       const packAmt    = parseFloat(packing_charge) || 0;
+      const svcChargeAmt = parseFloat(service_charge) || 0;
 
-      const total = Math.max(0, subtotal - discAmt - couponAmt - loyaltyDiscountAmt + tipAmt + packAmt + lineTax);
+      const total = Math.max(0, subtotal - discAmt - couponAmt - loyaltyDiscountAmt + tipAmt + packAmt + svcChargeAmt + lineTax);
 
       // ── 7a. Validate all payment legs via the provider registry ──────────
       // payments[] is an array of tender lines: [{ method, amount, ... }]
@@ -522,6 +615,22 @@ router.post('/', auth, validate(SaleSchemaV3), async (req, res, next) => {
             { statusCode: 400, code: 'UNKNOWN_PAYMENT_METHOD' }
           );
         }
+        if (!(parseFloat(tender.amount) >= 0)) {
+          throw Object.assign(
+            new Error('Tender amount must be a non-negative number.'),
+            { statusCode: 400, code: 'INVALID_TENDER_AMOUNT' }
+          );
+        }
+      }
+
+      // The tender legs must add up to the order total. Without this a split
+      // sale could be recorded as fully paid while under-tendered (money leak).
+      const tenderedTotal = tenders.reduce((s, t) => s + parseFloat(t.amount), 0);
+      if (Math.abs(tenderedTotal - total) > 0.01) {
+        throw Object.assign(
+          new Error(`Payment legs (${tenderedTotal.toFixed(2)}) do not match the order total (${total.toFixed(2)}).`),
+          { statusCode: 400, code: 'TENDER_TOTAL_MISMATCH' }
+        );
       }
 
       // Legacy compatibility fields (kept for shift totals and backwards compat reporting)
@@ -563,6 +672,7 @@ router.post('/', auth, validate(SaleSchemaV3), async (req, res, next) => {
           taxAmount:     lineTax,
           tipAmount:     tipAmt,
           packingCharge: packAmt,
+          serviceCharge: svcChargeAmt,
           serviceTypeId: service_type_id || null,
           totalAmount:   total,
           amountPaid,
@@ -659,7 +769,16 @@ router.post('/', auth, validate(SaleSchemaV3), async (req, res, next) => {
           },
         });
 
+        // An unconfirmed async charge (e.g. M-Pesa STK push) is "in-transit": tag
+        // the tender so the GL books it to clearing (1015), not real cash.
+        tender.pending = result.status !== 'completed';
         paymentResults.push(result);
+      }
+
+      // If any leg is still awaiting confirmation, the sale isn't settled yet —
+      // keep it pending until the provider's callback confirms (or fails) it.
+      if (paymentResults.some(r => r && r.status && r.status !== 'completed')) {
+        await tx.sale.update({ where: { id: sale.id }, data: { status: 'pending' } });
       }
 
       // ── 12. Loyalty: apply earn and redemption ────────────────────────────
@@ -730,6 +849,22 @@ router.post('/', auth, validate(SaleSchemaV3), async (req, res, next) => {
           },
         });
       }
+
+      // ── 15b. General ledger — post the sale's double-entry journal ────────
+      // COGS = sum of the (FIFO/recipe) cost of every stocked line just sold.
+      const saleCogs = processed.reduce((s, p) => s + (p.product_id ? parseFloat(p.cost_price || 0) * p.quantity : 0), 0);
+      await accounting.postSale(tx, {
+        businessId:  req.user.business_id,
+        sale,
+        tenders,
+        taxAmount:   lineTax,
+        cogs:        saleCogs,
+        createdById: req.user.id,
+      });
+
+      // Auto-collect a fixed share of the takings toward any active financing
+      // advance (the lock-in mechanic), crediting the account the money landed in.
+      await financing.autoCollect(tx, { businessId: req.user.business_id, tenders, createdById: req.user.id });
 
       // ── 16. Shift totals ──────────────────────────────────────────────────
       if (shift_id) {
@@ -811,6 +946,20 @@ router.post('/', auth, validate(SaleSchemaV3), async (req, res, next) => {
       }
     }
 
+    // Fiscalize — sign the sale for the tax authority if the business has a fiscal
+    // device. Best-effort and offline-safe: a failure leaves the sale unsigned in
+    // the /fiscal/pending queue rather than blocking the sale. No-op when disabled.
+    if (!result._retry) {
+      try {
+        const fr = await fiscal.fiscalizeSale(result.id, req.user.business_id);
+        if (fr && !fr.skipped) {
+          result._fiscal = { invoice_label: fr.invoiceLabel, verification_code: fr.verificationCode, qr_data: fr.qrData };
+        }
+      } catch (fErr) {
+        logger.warn('auto_fiscalize_failed', { message: fErr.message, sale_id: result.id });
+      }
+    }
+
     // Emit webhook — non-blocking, never affects the response
     webhooks.emit(req.user.business_id, 'sale.completed', {
       sale_id:        result.id,
@@ -822,8 +971,14 @@ router.post('/', auth, validate(SaleSchemaV3), async (req, res, next) => {
       items_count:    result.items?.length ?? 0,
     }).catch(() => {});
 
-    res.status(201).json(result);
+    return result;
+}
 
+// Thin HTTP wrapper around the in-process sale service.
+router.post('/', auth, validate(SaleSchemaV3), async (req, res, next) => {
+  try {
+    const result = await createSale(req);
+    res.status(result._retry ? 200 : 201).json(result);
   } catch (err) {
     if (err.statusCode) return res.status(err.statusCode).json({ error: err.message });
     next(err);
@@ -908,21 +1063,60 @@ router.get('/:id', auth, async (req, res, next) => {
 });
 
 // ── POST /api/v1/sales/:id/refund ─────────────────────────────────────────────
-router.post('/:id/refund', auth, requireRole('owner', 'manager'), async (req, res, next) => {
+router.post('/:id/refund', auth, requireRole('owner', 'manager'), validate(RefundSchema), async (req, res, next) => {
   try {
     const { items, reason, refund_method, restock } = req.body;
     if (!items?.length) return res.status(400).json({ error: 'No items.' });
 
     const sale = await prisma.sale.findUnique({
       where: { id: req.params.id },
-      select: { id: true, businessId: true, locationId: true, totalAmount: true, loyaltyPointsEarned: true, customerId: true },
+      select: {
+        id: true, businessId: true, locationId: true, totalAmount: true,
+        loyaltyPointsEarned: true, customerId: true,
+        items: { select: { id: true, productId: true, quantity: true, unitPrice: true } },
+      },
     });
     if (!sale || sale.businessId !== req.user.business_id) {
       return res.status(404).json({ error: 'Sale not found.' });
     }
 
+    // Build authoritative maps from the ORIGINAL sale — never trust client price/qty.
+    const soldById = new Map(sale.items.map(si => [si.id, si]));
+
+    // How much has already been refunded per sale_item, so we can't over-refund.
+    const priorRefunds = await prisma.refundItem.groupBy({
+      by: ['saleItemId'],
+      where: { saleItemId: { in: sale.items.map(si => si.id) }, refund: { saleId: sale.id } },
+      _sum: { quantity: true },
+    });
+    const refundedById = new Map(priorRefunds.map(r => [r.saleItemId, r._sum.quantity || 0]));
+
+    // Validate + normalise each requested line against the source of truth.
+    const validItems = [];
+    for (const reqItem of items) {
+      const si = soldById.get(reqItem.sale_item_id);
+      if (!si) return res.status(400).json({ error: `Sale item ${reqItem.sale_item_id} does not belong to this sale.` });
+      const alreadyRefunded = refundedById.get(si.id) || 0;
+      const remaining = si.quantity - alreadyRefunded;
+      if (reqItem.quantity > remaining) {
+        return res.status(400).json({
+          error: `Cannot refund ${reqItem.quantity} of item ${si.id}; only ${remaining} remain (sold ${si.quantity}, already refunded ${alreadyRefunded}).`,
+          code: 'OVER_REFUND',
+        });
+      }
+      validItems.push({
+        sale_item_id: si.id,
+        product_id:   si.productId,            // from the sale, not the client
+        quantity:     reqItem.quantity,
+        unit_price:   parseFloat(si.unitPrice), // original price, not the client's
+        restock:      reqItem.restock !== false,
+      });
+    }
+
     const refund = await prisma.$transaction(async (tx) => {
-      const totalRefunded = items.reduce((s, i) => s + parseFloat(i.unit_price) * i.quantity, 0);
+      const totalRefunded = parseFloat(
+        validItems.reduce((s, i) => s + i.unit_price * i.quantity, 0).toFixed(2)
+      );
 
       const refundRecord = await tx.refund.create({
         data: {
@@ -935,20 +1129,20 @@ router.post('/:id/refund', auth, requireRole('owner', 'manager'), async (req, re
           restocked:     restock !== false,
           createdById:   req.user.id,
           items: {
-            create: items.map(item => ({
+            create: validItems.map(item => ({
               saleItemId: item.sale_item_id,
               productId:  item.product_id,
               quantity:   item.quantity,
               unitPrice:  item.unit_price,
-              totalPrice: parseFloat(item.unit_price) * item.quantity,
-              restock:    item.restock !== false,
+              totalPrice: parseFloat((item.unit_price * item.quantity).toFixed(2)),
+              restock:    item.restock,
             })),
           },
         },
       });
 
       // Restock + movements
-      for (const item of items) {
+      for (const item of validItems) {
         if (item.restock !== false && sale.locationId) {
           await tx.$executeRaw`
             INSERT INTO stock_levels (id, product_id, location_id, quantity)
@@ -1025,7 +1219,9 @@ router.post('/customer-payment', auth, requireRole('owner', 'manager'), async (r
     });
     if (!customer) return res.status(404).json({ error: 'Customer not found.' });
 
-    const newBalance = await creditEngine.postRepayment(prisma, {
+    // Run in a transaction so the balance read + ledger write are atomic;
+    // prevents concurrent repayments from both passing the balance check.
+    const newBalance = await prisma.$transaction((tx) => creditEngine.postRepayment(tx, {
       businessId:    req.user.business_id,
       customerId:    customer_id,
       amount:        parseFloat(amount),
@@ -1034,7 +1230,7 @@ router.post('/customer-payment', auth, requireRole('owner', 'manager'), async (r
       reference:     reference      || null,
       description:   notes          || 'Credit repayment',
       recordedById:  req.user.id,
-    });
+    }));
 
     res.json({ message: 'Payment recorded.', outstanding_balance: newBalance });
   } catch (err) {
@@ -1043,4 +1239,5 @@ router.post('/customer-payment', auth, requireRole('owner', 'manager'), async (r
   }
 });
 
+router.createSale = createSale; // in-process sale service (used by restaurant checkout)
 module.exports = router;

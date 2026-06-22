@@ -214,6 +214,89 @@ async function realReq(method: string, path: string, { query, body, auth = true,
   return json;
 }
 
+// Build the backend (/api/v1/sales) sale body from the POS payload, WITHOUT the
+// idempotency key. The online path adds a server-minted key; the offline outbox
+// generates its own and replays the same body through /sync/push. Single source
+// of truth so online and offline sales are byte-for-byte the same cart.
+function buildRealSaleBody(payload: any): any {
+  const pays = (payload.payments || []).filter((p: any) => Number(p.amount) > 0);
+  const split = pays.length > 1;
+  const body: any = {
+    items: (payload.lines || []).map((l: any) => ({ product_id: l.product_id, quantity: l.quantity, override_price: l.unit_price })),
+    customer_id: isUuid(payload.contact_id) ? payload.contact_id : undefined,
+    location_id: isUuid(payload.location_id) ? payload.location_id : undefined,
+    shift_id: isUuid(payload.shift_id) ? payload.shift_id : undefined,
+    payment_method: split ? 'split' : realPayMethod((pays[0] && pays[0].method) || payload.method),
+    discount_type: payload.discount_type === 'percentage' ? 'pct' : 'flat',
+    discount_value: Number(payload.discount_amount || 0),
+    ...(payload.coupon_id ? { coupon_id: payload.coupon_id, coupon_discount: Number(payload.coupon_discount || 0) } : {}),
+    ...(Number(payload.packing_charge) > 0 ? { packing_charge: Number(payload.packing_charge) } : {}),
+    ...(isUuid(payload.service_type_id) ? { service_type_id: payload.service_type_id } : {}),
+    type: 'pos',
+  };
+  if (split) {
+    for (const p of pays) {
+      const m = realPayMethod(p.method);
+      if (m === 'cash') body.cash_amount = (body.cash_amount || 0) + Number(p.amount);
+      else if (m === 'zaad') body.zaad_amount = (body.zaad_amount || 0) + Number(p.amount);
+      else body.card_amount = (body.card_amount || 0) + Number(p.amount);
+    }
+  } else if (body.payment_method === 'cash') {
+    body.cash_tendered = Number((pays[0] && pays[0].amount) || payload.amount || 0);
+  }
+  return body;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Response shapes for the newer platform capabilities (live backend).
+// ═══════════════════════════════════════════════════════════════════
+export interface HijriDate {
+  day: number; month: number; year: number; month_name: string;
+  formatted: string; iso: string; is_ramadan: boolean;
+}
+export interface ZakatAssessment {
+  base: number; assets: number; liabilities: number; rate: number;
+  nisab: number | null; meets_nisab: boolean | null; due: boolean; amount: number;
+  assetLines: { code: string; name: string; amount: number }[];
+  liabilityLines: { code: string; name: string; amount: number }[];
+  as_of_hijri: string;
+}
+export interface FiscalReceipt {
+  sale_id: string; jurisdiction: string; fiscal_number: number; invoice_label: string;
+  signature: string; verification_code: string; qr_data: string; device_serial: string | null;
+  status: string; signed_at: string; transmitted_at: string | null;
+}
+export type InteractionSeverity = 'minor' | 'moderate' | 'major' | 'contraindicated';
+export interface DrugInteractionResult {
+  drug_a: string; drug_b: string; severity: InteractionSeverity; description: string;
+}
+export interface SyncPushResult {
+  server_time: string; applied: number; total: number;
+  results: { op_id: string; status: 'applied' | 'duplicate' | 'conflict' | 'error'; sale_id?: string; sale_number?: string | null; error?: string; code?: string }[];
+}
+export interface LendingAssessment {
+  eligible: boolean; score: number; recommended_limit: number; currency: string;
+  signals: {
+    avg_monthly_revenue: number; net_margin: number; cash_on_hand: number;
+    payables: number; months_active: number; period_revenue: number; period_net_profit: number;
+  };
+}
+export interface FinancingAdvanceRow {
+  id: string; principal: string | number; feeAmount: string | number;
+  totalRepayable: string | number; amountRepaid: string | number; outstanding: number;
+  status: string; collectionRate?: string | number; createdAt: string;
+}
+export interface DeliveryDriver {
+  id: string; name: string; phone?: string | null; vehicle_type?: string | null;
+  status: 'available' | 'busy' | 'offline'; is_active: boolean;
+}
+export interface DeliveryOrder {
+  id: string; sale_id?: string | null; driver_id?: string | null; driver_name?: string | null;
+  customer_name: string; customer_phone?: string | null; address: string; channel: string;
+  items_summary?: string | null; order_amount: number; delivery_fee: number; payment_mode: string;
+  status: string; assigned_at?: string | null; delivered_at?: string | null; created_at: string;
+}
+
 // ═══════════════════════════════════════════════════════════════════
 //  MOCK BACKEND
 //  Persistent ledger + UltimatePOS-shaped serializers.
@@ -2626,6 +2709,8 @@ const API: any = {
 
   // /connector/api/sell
   sell: {
+    // The backend-shaped sale body (no idempotency key) for the offline outbox.
+    realSaleBody(payload: any) { return buildRealSaleBody(payload); },
     async list(params: any = {}) {
       if (REAL_MODE) {
         const res = await realReq('GET', '/sales', { query: params });
@@ -2644,36 +2729,12 @@ const API: any = {
     },
     async create(payload: any) {
       if (REAL_MODE) {
-        const pays = (payload.payments || []).filter((p: any) => Number(p.amount) > 0);
-        const split = pays.length > 1;
         // The backend requires the idempotency key to be minted server-side first
         // (POST /sales/initiate) — it must already exist in sale_keys, otherwise
-        // POST /sales rejects with "Invalid transaction token."
+        // POST /sales rejects with "Invalid transaction token." (Offline sales use
+        // a client-generated key replayed through /sync — see realSaleBody.)
         const init = await realReq('POST', '/sales/initiate');
-        const body: any = {
-          idempotency_key: init.idempotency_key,
-          items: (payload.lines || []).map((l: any) => ({ product_id: l.product_id, quantity: l.quantity, override_price: l.unit_price })),
-          customer_id: isUuid(payload.contact_id) ? payload.contact_id : undefined,
-          location_id: isUuid(payload.location_id) ? payload.location_id : undefined,
-          shift_id: isUuid(payload.shift_id) ? payload.shift_id : undefined,  // attribute the sale to the open till
-          payment_method: split ? 'split' : realPayMethod((pays[0] && pays[0].method) || payload.method),
-          discount_type: payload.discount_type === 'percentage' ? 'pct' : 'flat',
-          discount_value: Number(payload.discount_amount || 0),
-          ...(payload.coupon_id ? { coupon_id: payload.coupon_id, coupon_discount: Number(payload.coupon_discount || 0) } : {}),
-          ...(Number(payload.packing_charge) > 0 ? { packing_charge: Number(payload.packing_charge) } : {}),
-          ...(isUuid(payload.service_type_id) ? { service_type_id: payload.service_type_id } : {}),
-          type: 'pos',
-        };
-        if (split) {
-          for (const p of pays) {
-            const m = realPayMethod(p.method);
-            if (m === 'cash') body.cash_amount = (body.cash_amount || 0) + Number(p.amount);
-            else if (m === 'zaad') body.zaad_amount = (body.zaad_amount || 0) + Number(p.amount);
-            else body.card_amount = (body.card_amount || 0) + Number(p.amount);
-          }
-        } else if (body.payment_method === 'cash') {
-          body.cash_tendered = Number((pays[0] && pays[0].amount) || payload.amount || 0);
-        }
+        const body: any = { ...buildRealSaleBody(payload), idempotency_key: init.idempotency_key };
         const res = await realReq('POST', '/sales', { body });
         const s = (res && (res.sale || res.data)) || res || {};
         return {
@@ -3698,6 +3759,90 @@ const API: any = {
       }
       return (await transport('POST', '/business/register', { auth: false, body: payload })).data;
     },
+  },
+
+  // ═══════════════════════════════════════════════════════════════════
+  //  Newer platform capabilities — typed clients over the live /api/v1
+  //  backend. These have no UltimatePOS mock equivalent; they require
+  //  REAL_MODE (a configured backend). The UI consumes them directly.
+  // ═══════════════════════════════════════════════════════════════════
+
+  // Hijri calendar, Zakat (ledger-derived) and localization.
+  islamic: {
+    zakat(nisab?: number): Promise<ZakatAssessment> { return realReq('GET', '/islamic/zakat/assessment', { query: { nisab } }); },
+    hijriToday(): Promise<{ gregorian: string; hijri: HijriDate; is_ramadan: boolean; timezone: string }> { return realReq('GET', '/islamic/hijri/today'); },
+    hijriConvert(date: string, lang?: string): Promise<{ gregorian: string; hijri: HijriDate }> { return realReq('GET', '/islamic/hijri/convert', { query: { date, lang } }); },
+    localization(): Promise<{ language: string; is_rtl: boolean; supported: { code: string; name: string; rtl: boolean }[] }> { return realReq('GET', '/islamic/localization'); },
+  },
+
+  // Tax-authority fiscalization (eTIMS / VFD / EBM).
+  fiscal: {
+    config(): Promise<any> { return realReq('GET', '/fiscal/config'); },
+    setConfig(body: { jurisdiction: string; device_serial?: string; enabled?: boolean }): Promise<any> { return realReq('POST', '/fiscal/config', { body }); },
+    fiscalize(saleId: string): Promise<FiscalReceipt> { return realReq('POST', `/fiscal/sales/${saleId}/fiscalize`, {}); },
+    receipt(saleId: string): Promise<FiscalReceipt> { return realReq('GET', `/fiscal/receipt/${saleId}`); },
+    transmit(saleId: string): Promise<FiscalReceipt> { return realReq('POST', `/fiscal/sales/${saleId}/transmit`, {}); },
+    pending(): Promise<{ pending: number; receipts: FiscalReceipt[] }> { return realReq('GET', '/fiscal/pending'); },
+    // Public authenticity check — mounted at /fiscal/verify (no /api/v1, no auth).
+    verify(code: string): Promise<any> {
+      return fetch(BACKEND_BASE + '/fiscal/verify/' + encodeURIComponent(code))
+        .then((r) => r.json().catch(() => ({ valid: false, reason: 'bad response' })))
+        .catch(() => ({ valid: false, reason: 'network error' }));
+    },
+  },
+
+  // Offline-first outbox replay + delta pull.
+  sync: {
+    push(body: { device_id: string; operations: any[] }): Promise<SyncPushResult> { return realReq('POST', '/sync/push', { body }); },
+    pull(since?: string, deviceId?: string): Promise<any> { return realReq('GET', '/sync/pull', { query: { since, device_id: deviceId } }); },
+    devices(): Promise<{ devices: any[] }> { return realReq('GET', '/sync/devices'); },
+  },
+
+  // Embedded Sharia-compliant lending + the financial statements it underwrites from.
+  lending: {
+    assessment(): Promise<LendingAssessment> { return realReq('GET', '/lending/assessment'); },
+    offer(body: { principal: number; collection_rate?: number }): Promise<any> { return realReq('POST', '/lending/offer', { body }); },
+    advances(): Promise<{ advances: FinancingAdvanceRow[] }> { return realReq('GET', '/lending/advances'); },
+  },
+  ledger: {
+    trialBalance(): Promise<any> { return realReq('GET', '/accounting/trial-balance'); },
+    incomeStatement(query?: { from?: string; to?: string }): Promise<any> { return realReq('GET', '/accounting/income-statement', { query }); },
+    balanceSheet(query?: { from?: string; to?: string }): Promise<any> { return realReq('GET', '/accounting/balance-sheet', { query }); },
+  },
+
+  // Pharmacy clinical safety.
+  rx: {
+    checkInteractions(body: { drugs?: string[]; product_ids?: string[]; patient_id?: string; patient_name?: string }): Promise<{ checked: string[]; interactions: DrugInteractionResult[]; has_contraindication: boolean }> { return realReq('POST', '/pharmacy/interactions/check', { body }); },
+    interactions(): Promise<{ interactions: (DrugInteractionResult & { id: string; custom: boolean })[] }> { return realReq('GET', '/pharmacy/interactions'); },
+  },
+
+  // Public consumer storefront (no auth) — browse a shop and place a delivery order.
+  shop: {
+    catalog(businessId: string): Promise<{ shop: { id: string; name: string; currency: string }; products: { id: string; name: string; price: number; unit: string; image: string | null }[] }> {
+      return realReq('GET', `/shop/${businessId}/catalog`, { auth: false });
+    },
+    order(businessId: string, body: { customer_name: string; phone?: string; address: string; items: { product_id: string; quantity: number }[] }): Promise<{ order_id: string; status: string; order_amount: number; items: string[] }> {
+      return realReq('POST', `/shop/${businessId}/order`, { auth: false, body });
+    },
+    track(orderId: string): Promise<any> { return realReq('GET', `/shop/order/${orderId}/status`, { auth: false }); },
+  },
+
+  // Consumer ordering + driver dispatch (opt-in marketplace).
+  delivery: {
+    drivers(status?: string): Promise<{ drivers: DeliveryDriver[] }> { return realReq('GET', '/delivery/drivers', { query: { status } }); },
+    addDriver(body: { name: string; phone?: string; vehicle_type?: string }): Promise<DeliveryDriver> { return realReq('POST', '/delivery/drivers', { body }); },
+    setDriverStatus(id: string, status: string): Promise<DeliveryDriver> { return realReq('PUT', `/delivery/drivers/${id}/status`, { body: { status } }); },
+    orders(status?: string): Promise<{ deliveries: DeliveryOrder[] }> { return realReq('GET', '/delivery', { query: { status } }); },
+    createOrder(body: Record<string, any>): Promise<DeliveryOrder> { return realReq('POST', '/delivery', { body }); },
+    assign(id: string, driverId?: string): Promise<DeliveryOrder> { return realReq('POST', `/delivery/${id}/assign`, { body: driverId ? { driver_id: driverId } : {} }); },
+    setStatus(id: string, status: string): Promise<DeliveryOrder> { return realReq('PUT', `/delivery/${id}/status`, { body: { status } }); },
+  },
+
+  // WhatsApp-native customer comms.
+  comms: {
+    whatsappSend(body: { to?: string; customer_id?: string; message: string; kind?: string }): Promise<any> { return realReq('POST', '/whatsapp/send', { body }); },
+    creditReminders(body?: { customer_id?: string; min_balance?: number }): Promise<any> { return realReq('POST', '/whatsapp/reminders/credit', { body: body || {} }); },
+    whatsappLog(kind?: string): Promise<{ messages: any[] }> { return realReq('GET', '/whatsapp/log', { query: { kind } }); },
   },
 };
 

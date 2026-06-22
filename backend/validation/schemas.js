@@ -389,6 +389,8 @@ const PayrollSchema = z.object({
   bonus:       money.default(0),
   incentive:   money.default(0),
   deduction:   money.default(0),
+  // Optional: auto-compute statutory deductions for this country (e.g. 'KE').
+  statutory_country: z.enum(['KE', 'SO', 'none']).optional(),
 });
 const PackageSchema = z.object({
   name:      shortStr(100),
@@ -426,6 +428,7 @@ const SettingsSchema = z.object({
   receipt_header: optStr(500),
   receipt_footer: optStr(500),
   tax_number: optStr(100),
+  language: z.enum(['en', 'so', 'ar']).optional(),
 });
 
 const CategorySchema = z.object({
@@ -670,7 +673,10 @@ const SaleItemSchemaV3 = z.object({
 });
 
 const SaleSchemaV3 = z.object({
-  idempotency_key: z.string().min(10).max(256),
+  // Optional at the schema layer so the checkout service can answer a missing
+  // token with a clear domain 400 ("Transaction token required") rather than a
+  // generic 422 — the token is still enforced (existence + sale_keys lookup).
+  idempotency_key: z.string().min(10).max(256).optional(),
   items: z.array(SaleItemSchemaV3).default([]),
   variant_items: z.array(z.object({
     product_id: uuid,

@@ -28,7 +28,9 @@ const { auth } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { generatePaymentQR } = require('../lib/qrpayment');
 const { generateEscPos, generateWhatsAppReceipt, generateReceiptToken, receiptUrl } = require('../lib/receipt');
+const wa = require('../lib/whatsapp');
 const { logger } = require('../lib/logger');
+const { escapeHtml } = require('../lib/html');
 const registry = require('../lib/payments');
 const router = express.Router();
 
@@ -301,7 +303,7 @@ router.get('/r/:token', async (req, res, next) => {
 
     const itemRows = sale.items.map(i => `
       <tr>
-        <td>${i.quantity}x ${i.product?.name || 'Item'}</td>
+        <td>${i.quantity}x ${escapeHtml(i.product?.name || 'Item')}</td>
         <td style="text-align:right">${fmt(i.totalPrice)}</td>
       </tr>`).join('');
 
@@ -319,7 +321,7 @@ router.get('/r/:token', async (req, res, next) => {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Receipt — ${sale.saleNumber}</title>
+<title>Receipt — ${escapeHtml(sale.saleNumber)}</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -350,16 +352,16 @@ router.get('/r/:token', async (req, res, next) => {
 <body>
 <div class="card">
   <div class="header">
-    <h1>${business.name}</h1>
-    ${business.address ? `<p>${business.address}</p>` : ''}
-    ${business.phone   ? `<p>${business.phone}</p>`   : ''}
+    <h1>${escapeHtml(business.name)}</h1>
+    ${business.address ? `<p>${escapeHtml(business.address)}</p>` : ''}
+    ${business.phone   ? `<p>${escapeHtml(business.phone)}</p>`   : ''}
     <div class="badge">✓ Payment Confirmed</div>
   </div>
 
   <div class="section">
-    <div class="meta"><span>Order</span><span>${sale.saleNumber}</span></div>
-    <div class="meta"><span>Date</span><span>${dateStr}</span></div>
-    ${sale.customer?.name ? `<div class="meta"><span>Customer</span><span>${sale.customer.name}</span></div>` : ''}
+    <div class="meta"><span>Order</span><span>${escapeHtml(sale.saleNumber)}</span></div>
+    <div class="meta"><span>Date</span><span>${escapeHtml(dateStr)}</span></div>
+    ${sale.customer?.name ? `<div class="meta"><span>Customer</span><span>${escapeHtml(sale.customer.name)}</span></div>` : ''}
   </div>
 
   <div class="section">
@@ -370,14 +372,14 @@ router.get('/r/:token', async (req, res, next) => {
       ${tax > 0      ? `<tr><td>Tax</td><td>${fmt(tax)}</td></tr>`            : ''}
       <tr class="total-row"><td>Total</td><td>${fmt(total)}</td></tr>
       <tr><td style="color:#6B7280;font-size:12px">Payment</td>
-          <td style="color:#6B7280;font-size:12px;text-transform:uppercase">${(sale.paymentMethod || 'cash')}</td></tr>
+          <td style="color:#6B7280;font-size:12px;text-transform:uppercase">${escapeHtml(sale.paymentMethod || 'cash')}</td></tr>
       ${change > 0 ? `<tr><td style="font-size:12px">Change</td><td style="font-size:12px">${fmt(change)}</td></tr>` : ''}
     </table>
     ${points > 0 ? `<div class="points">⭐ ${points} loyalty points earned on this purchase</div>` : ''}
   </div>
 
   <div class="footer">
-    <strong>${business.receiptFooter || 'Thank you for your business!'}</strong>
+    <strong>${escapeHtml(business.receiptFooter || 'Thank you for your business!')}</strong>
     <div class="powered">Powered by Balanzify</div>
   </div>
 </div>
@@ -411,28 +413,19 @@ router.post('/receipt/:saleId/send-whatsapp', auth, async (req, res, next) => {
 
     const message = generateWhatsAppReceipt({ sale, items, business, receiptUrl: url });
 
-    // Normalize phone number
-    const normalizedPhone = phone.replace(/\D/g, '').replace(/^0/, '');
-
-    // Generate wa.me URL — works universally
-    const waUrl = `https://wa.me/${normalizedPhone}?text=${encodeURIComponent(message)}`;
-
-    // Log the WhatsApp message
-    await prisma.whatsappLog.create({
-      data: {
-        businessId:    req.user.business_id,
-        recipientPhone: normalizedPhone,
-        messageType:   'receipt',
-        content:       message,
-        referenceType: 'sale',
-        referenceId:   sale.id,
-      },
+    // Deliver through the provider registry (real send when configured, wa.me
+    // link otherwise) — tracked in WhatsappLog with provider + delivery status.
+    const r = await wa.send({
+      businessId: req.user.business_id, to: phone, text: message,
+      kind: 'receipt', referenceType: 'sale', referenceId: sale.id,
     });
 
     res.json({
-      message:   'Receipt prepared.',
-      wa_url:    waUrl,    // Cashier taps this to open WhatsApp with message pre-filled
-      wa_number: normalizedPhone,
+      message:     r.status === 'link' ? 'Receipt prepared.' : 'Receipt sent.',
+      provider:    r.provider,
+      status:      r.status,
+      wa_url:      r.wa_url,    // present for the link provider — cashier taps to send
+      wa_number:   r.phone,
       receipt_url: url,
     });
   } catch (err) { next(err); }

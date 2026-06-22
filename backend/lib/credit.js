@@ -14,6 +14,7 @@
 
 const prisma = require('./prisma');
 const crypto = require('crypto');
+const accounting = require('./accounting');
 
 /**
  * Get the current balance from the ledger (source of truth).
@@ -38,9 +39,31 @@ async function getLedgerBalance(customerId, businessId, tx = prisma) {
  * Post a debit entry — customer owes more.
  * Called when a credit sale is made.
  */
-async function postDebit(tx, { businessId, customerId, amount, currency = 'USD', saleId, description, recordedById }) {
+async function postDebit(tx, { businessId, customerId, amount, currency = 'USD', saleId, description, recordedById, allowOverLimit = false }) {
+  // Lock the customer row for the duration of the transaction. This both
+  // exposes the credit limit and serializes concurrent credit sales so two
+  // debits can't each read a stale balance and overshoot the limit together.
+  const custRows = await tx.$queryRaw`
+    SELECT credit_limit FROM customers
+    WHERE id = ${customerId}::uuid AND business_id = ${businessId}::uuid
+    FOR UPDATE
+  `;
+  if (!custRows.length) {
+    throw Object.assign(new Error('Customer not found.'), { statusCode: 404 });
+  }
+  const creditLimit = parseFloat(custRows[0].credit_limit || 0);
+
   const balance = await getLedgerBalance(customerId, businessId, tx);
   const balanceAfter = parseFloat((balance + parseFloat(amount)).toFixed(2));
+
+  // Enforce the credit limit (0 / null means "no limit set"). This was
+  // previously unenforced — the provider check was passed `undefined`.
+  if (!allowOverLimit && creditLimit > 0 && balanceAfter > creditLimit) {
+    throw Object.assign(
+      new Error(`Credit limit exceeded. Limit: ${creditLimit.toFixed(2)}, Current: ${balance.toFixed(2)}, Requested: ${parseFloat(amount).toFixed(2)}`),
+      { statusCode: 400, code: 'CREDIT_LIMIT_EXCEEDED' }
+    );
+  }
 
   await tx.creditLedger.create({
     data: {
@@ -70,6 +93,13 @@ async function postDebit(tx, { businessId, customerId, amount, currency = 'USD',
  * Post a credit entry — customer owes less (repayment).
  */
 async function postRepayment(tx, { businessId, customerId, amount, currency = 'USD', paymentMethod, reference, planItemId, diasporaPayId, description, recordedById }) {
+  // Lock the customer row so concurrent repayments serialize and can't both
+  // pass the balance check (callers must pass a transaction-scoped `tx`).
+  await tx.$queryRaw`
+    SELECT 1 FROM customers
+    WHERE id = ${customerId}::uuid AND business_id = ${businessId}::uuid
+    FOR UPDATE
+  `;
   const balance = await getLedgerBalance(customerId, businessId, tx);
 
   if (parseFloat(amount) > balance) {
@@ -105,6 +135,18 @@ async function postRepayment(tx, { businessId, customerId, amount, currency = 'U
   await tx.customer.update({
     where: { id: customerId },
     data:  { outstandingBalance: balanceAfter },
+  });
+
+  // GL: a repayment brings in cash and reduces accounts receivable. (The credit
+  // SALE already debited AR via the sale journal.)
+  await accounting.postJournal(tx, {
+    businessId,
+    description: 'Credit repayment',
+    sourceType: 'credit_repayment', sourceId: customerId, createdById: recordedById,
+    lines: [
+      { code: accounting.tenderAccountCode(paymentMethod), debit: parseFloat(amount), credit: 0, description: 'Repayment received' },
+      { code: '1100', debit: 0, credit: parseFloat(amount), description: 'Accounts receivable' },
+    ],
   });
 
   return balanceAfter;
