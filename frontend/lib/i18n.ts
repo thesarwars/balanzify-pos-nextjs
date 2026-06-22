@@ -129,6 +129,12 @@ const MESSAGES = {
   'sync.no_devices':{ en: 'No devices have synced yet.', so: 'Wali aalad lama xidhin.', ar: 'لم تتزامن أي أجهزة بعد.' },
   'sync.live_required': { en: 'Connect the live backend to view sync status.', so: 'Ku xidh server-ka.', ar: 'اتصل بالخادم.' },
 
+  // Offline / connectivity
+  'offline.offline':  { en: 'Offline', so: 'Offline', ar: 'دون اتصال' },
+  'offline.syncing':  { en: 'Syncing…', so: 'Isku xidhaya…', ar: 'جارٍ المزامنة…' },
+  'offline.queued':   { en: 'queued', so: 'safan', ar: 'في الانتظار' },
+  'offline.sync_now': { en: 'Sync now', so: 'Hadda isku xidh', ar: 'زامن الآن' },
+
   // Language picker
   'language.label': { en: 'Language', so: 'Luqadda', ar: 'اللغة' },
 } satisfies Record<string, Record<Locale, string>>;
