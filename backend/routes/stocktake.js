@@ -150,11 +150,28 @@ router.get('/:id', auth, async (req, res, next) => {
 
 router.put('/:id/items/:itemId', auth, validate(z.object({ counted_qty: z.coerce.number().int().nonnegative() })), async (req, res, next) => {
   try {
-    const item = await prisma.stockCountItem.update({
-      where: { id: req.params.itemId },
+    // Tenant isolation: the item must belong to a count in this business.
+    const result = await prisma.stockCountItem.updateMany({
+      where: { id: req.params.itemId, countId: req.params.id, count: { businessId: req.user.business_id } },
       data: { countedQty: req.body.counted_qty, countedById: req.user.id, countedAt: new Date() },
     });
+    if (result.count === 0) return res.status(404).json({ title: 'Count item not found', status: 404 });
+    const item = await prisma.stockCountItem.findUnique({ where: { id: req.params.itemId } });
     res.json(item);
+  } catch (err) { next(err); }
+});
+
+// Transition an in-progress count to 'completed' so it can be approved.
+// Without this endpoint the approval path was unreachable (approve requires
+// status 'completed', which nothing ever set).
+router.post('/:id/complete', auth, requireRole('owner', 'manager'), async (req, res, next) => {
+  try {
+    const result = await prisma.stockCount.updateMany({
+      where: { id: req.params.id, businessId: req.user.business_id, status: 'in_progress' },
+      data: { status: 'completed' },
+    });
+    if (result.count === 0) return res.status(409).json({ title: 'Count not found or not in progress', status: 409 });
+    res.json({ message: 'Stocktake marked complete. Ready for approval.' });
   } catch (err) { next(err); }
 });
 

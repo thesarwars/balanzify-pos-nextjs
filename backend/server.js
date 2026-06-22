@@ -28,6 +28,24 @@ try {
   console.error(paymentErr);
 }
 
+// ── Startup config guard — fail fast on missing/weak secrets ──────────────────
+// A misconfigured JWT_SECRET silently breaks auth at first login (runtime),
+// not at boot. Validate critical config up front so deploys fail loudly.
+(function validateConfig() {
+  const isProd = process.env.NODE_ENV === 'production';
+  const secret = process.env.JWT_SECRET || '';
+  const weak = !secret || secret.length < 32 || /^change[_-]?me$/i.test(secret);
+  if (weak) {
+    const msg = '❌ JWT_SECRET is missing or weak (need ≥32 chars). Generate with: openssl rand -hex 64';
+    if (isProd) { console.error(msg); process.exit(1); }
+    else { console.warn('⚠️  ' + msg + ' — continuing in non-production.'); }
+  }
+  if (isProd && (process.env.ALLOWED_ORIGINS || process.env.FRONTEND_URL || '').split(',').filter(Boolean).length === 0) {
+    console.error('❌ No ALLOWED_ORIGINS/FRONTEND_URL set in production — all cross-origin requests will be denied.');
+    process.exit(1);
+  }
+})();
+
 const app = express();
 
 // ── Security headers ──────────────────────────────────────────────────────────
@@ -61,8 +79,10 @@ app.use(cors({
     if (!origin) return cb(null, true);
     // In development, allow everything
     if (process.env.NODE_ENV !== 'production') return cb(null, true);
-    // In production, only allow configured origins
-    if (allowedOrigins.length === 0 || allowedOrigins.includes(origin)) return cb(null, true);
+    // In production, only allow explicitly configured origins. Fail CLOSED:
+    // if ALLOWED_ORIGINS/FRONTEND_URL is misconfigured (empty), deny rather
+    // than silently allowing every site to make credentialed requests.
+    if (allowedOrigins.includes(origin)) return cb(null, true);
     return cb(new Error('Not allowed by CORS'));
   },
   credentials: true,
@@ -109,6 +129,8 @@ try {
   const salesRoutes = require('./routes/sales');
   const purchaseOrderRoutes = require('./routes/purchaseOrders');
   const exportRoutes  = require('./routes/exports');
+  const accountingRoutes = require('./routes/accounting');
+  const lendingRoutes = require('./routes/lending');
   const paymentRoutes  = require('./routes/payments');
   const taxRoutes      = require('./routes/tax');
   const webhookRoutes  = require('./routes/webhooks');
@@ -168,6 +190,7 @@ try {
   app.use('/api/v1/billing',    apiLimiter, billingRoutes);
   app.use('/api/v1/wholesale',  apiLimiter, gateAuth, requireModule('wholesale'), wholesaleRoutes);
   app.use('/api/v1/construction', apiLimiter, gateAuth, requireModule('construction'), constructionRoutes);
+  app.use('/api/v1/delivery', apiLimiter, gateAuth, requireModule('delivery'), require('./routes/delivery'));
   app.use('/api/v1/checkout',   apiLimiter, checkoutRoutes);
   app.use('/api/v1/insights',   apiLimiter, gateAuth, requireModule('insights'), insightsRoutes);
   app.use('/api/v1/credit',     apiLimiter, gateAuth, requireModule('credit'), creditRoutes);
@@ -178,7 +201,15 @@ try {
   // Public digital receipt — no auth, no rate limit (token is unguessable)
   app.use('/r', checkoutRoutes);
   
+  app.use('/api/v1/sync', apiLimiter, require('./routes/sync'));
+  const fiscalRoutes = require('./routes/fiscal');
+  app.use('/api/v1/fiscal', apiLimiter, fiscalRoutes);
+  app.use('/fiscal', fiscalRoutes.publicRouter); // public QR verification
+  app.use('/api/v1/shop', apiLimiter, require('./routes/shop')); // public consumer ordering (no auth)
+  app.use('/api/v1/islamic', apiLimiter, require('./routes/islamic'));
   app.use('/api/v1/export', apiLimiter, exportRoutes);
+  app.use('/api/v1/accounting', apiLimiter, accountingRoutes);
+  app.use('/api/v1/lending', apiLimiter, lendingRoutes);
   app.use('/api/v1/upload', apiLimiter, uploadRoutes);
   app.use('/api/v1/stocktake', apiLimiter, stocktakeRoutes);
   app.use('/api/v1/currency', apiLimiter, currencyRoutes);

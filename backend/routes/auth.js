@@ -9,6 +9,7 @@ const { validate } = require('../middleware/validate');
 const { issueTokens, rotateRefreshToken, revokeAllSessions } = require('../lib/tokens');
 const { audit, security } = require('../lib/logger');
 const { trackLogin } = require('../lib/metrics');
+const { isLockedOut, recordFailedAttempt, recordSuccess } = require('../lib/bruteforce');
 const {
   RegisterSchema, LoginSchema, PinLoginSchema,
   ChangePasswordSchema, RefreshTokenSchema, VerifyMfaSchema,
@@ -60,20 +61,32 @@ router.post('/login', validate(LoginSchema), async (req, res, next) => {
     const { email, password } = req.body;
     const ip = req.ip;
 
+    // Per-account + per-IP lockout (in addition to the IP rate limiter).
+    const lock = await isLockedOut(email, ip);
+    if (lock.locked) {
+      return res.status(429).json({
+        title: 'Too many failed attempts. Try again later.',
+        status: 429, code: 'ACCOUNT_LOCKED', retry_after: lock.retryAfter,
+      });
+    }
+
     const user = await prisma.user.findUnique({
       where: { email },
       include: { business: { select: { id: true, name: true, currency: true } } },
     });
 
     if (!user || !user.isActive) {
+      await recordFailedAttempt(email, ip);
       return res.status(401).json({ title: 'Invalid credentials', status: 401 });
     }
 
     const valid = await bcrypt.compare(password, user.password);
     if (!valid) {
+      await recordFailedAttempt(email, ip);
       security('failed_login', { email, ip });
       return res.status(401).json({ title: 'Invalid credentials', status: 401 });
     }
+    await recordSuccess(email);
 
     if (user.mfaEnabled) {
       const { generatePreMfaToken } = require('../lib/tokens');
@@ -202,12 +215,41 @@ router.post('/change-password', auth, validate(ChangePasswordSchema), async (req
 router.post('/pin-login', validate(PinLoginSchema), async (req, res, next) => {
   try {
     const { pin, business_id } = req.body;
-    const user = await prisma.user.findFirst({
-      where: { businessId: business_id, pin, isActive: true },
+    const ip = req.ip;
+    const lockId = `pin:${business_id}`;
+
+    // Brute-force guard — PINs are short, so lock the (business, ip) aggressively.
+    const lock = await isLockedOut(lockId, ip);
+    if (lock.locked) {
+      return res.status(429).json({ title: 'Too many failed PIN attempts. Try again later.', status: 429, code: 'PIN_LOCKED', retry_after: lock.retryAfter });
+    }
+
+    // PINs are stored hashed, so we can't query by them — load active users in
+    // the business that have a PIN set and compare in constant-ish time.
+    const candidates = await prisma.user.findMany({
+      where: { businessId: business_id, isActive: true, pin: { not: null } },
       include: { business: { select: { name: true, currency: true } } },
     });
-    if (!user) return res.status(401).json({ title: 'Invalid PIN', status: 401 });
-    const tokens = await issueTokens(user, req.ip, req.get('user-agent'));
+    let user = null;
+    for (const c of candidates) {
+      if (await bcrypt.compare(String(pin), c.pin)) { user = c; break; }
+    }
+
+    if (!user) {
+      await recordFailedAttempt(lockId, ip);
+      security('failed_pin_login', { business_id, ip });
+      return res.status(401).json({ title: 'Invalid PIN', status: 401 });
+    }
+    await recordSuccess(lockId);
+
+    // PIN must not bypass 2FA — if MFA is on, require the second factor.
+    if (user.mfaEnabled) {
+      const { generatePreMfaToken } = require('../lib/tokens');
+      return res.json({ mfa_required: true, pre_token: generatePreMfaToken(user) });
+    }
+
+    await prisma.user.update({ where: { id: user.id }, data: { lastLogin: new Date() } });
+    const tokens = await issueTokens(user, ip, req.get('user-agent'));
     res.json({ user: { id: user.id, name: user.name, role: user.role }, ...tokens });
   } catch (err) { next(err); }
 });
@@ -232,7 +274,10 @@ router.post('/forgot-password', validate(z.object({ email: z.string().email() })
     const { sendPasswordReset } = require('../lib/email');
     const base = (process.env.FRONTEND_URL || '').replace(/\/$/, '');
     const resetUrl = `${base}/reset-password?token=${rawToken}`;
-    await sendPasswordReset(user.email, user.name, resetUrl).catch(() => {});
+    // Fire-and-forget: never block (or delay) the HTTP response on SMTP. A slow
+    // or unreachable mail server must not hang the request, and keeping the
+    // response time constant preserves the enumeration-safe behaviour.
+    sendPasswordReset(user.email, user.name, resetUrl).catch(() => {});
     res.json({ message: 'If that email is registered, a reset link has been sent.' });
   } catch (err) { next(err); }
 });

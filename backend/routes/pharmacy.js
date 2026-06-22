@@ -24,6 +24,7 @@
 const express = require('express');
 const { z } = require('zod');
 const prisma = require('../lib/prisma');
+const interactions = require('../lib/druginteractions');
 const { auth, requireRole } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 
@@ -302,6 +303,75 @@ router.post('/dispense-check', auth, validate(z.object({
   } catch (err) { next(err); }
 });
 
+// ── DRUG INTERACTIONS ─────────────────────────────────────────────
+
+// The generic (or trade) names of a patient's other active medications — the
+// basket we check a new drug against. Patient is matched by id when present,
+// otherwise by name (walk-in patients without a record).
+async function patientDrugNames(businessId, { patientId, patientName, excludeRxId } = {}) {
+  if (!patientId && !patientName) return [];
+  const rxs = await prisma.prescription.findMany({
+    where: {
+      businessId, status: 'active',
+      ...(excludeRxId && { id: { not: excludeRxId } }),
+      ...(patientId ? { patientId } : { patientName }),
+    },
+    include: { product: { select: { name: true, genericName: true } } },
+    take: 100,
+  });
+  return rxs.map(r => r.product?.genericName || r.product?.name).filter(Boolean);
+}
+
+// Ad-hoc interaction check: pass explicit drug names, product_ids, and/or a
+// patient to fold in their active medications.
+router.post('/interactions/check', auth, validate(z.object({
+  drugs: z.array(z.string().max(120)).optional(),
+  product_ids: z.array(uuid).optional(),
+  patient_id: uuid.optional().nullable(),
+  patient_name: z.string().max(255).optional().nullable(),
+})), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const names = [...(req.body.drugs || [])];
+    if (req.body.product_ids?.length) {
+      const prods = await prisma.product.findMany({ where: { id: { in: req.body.product_ids }, businessId }, select: { name: true, genericName: true } });
+      names.push(...prods.map(p => p.genericName || p.name));
+    }
+    if (req.body.patient_id || req.body.patient_name) {
+      names.push(...await patientDrugNames(businessId, { patientId: req.body.patient_id, patientName: req.body.patient_name }));
+    }
+    const found = await interactions.check(businessId, names);
+    res.json({ checked: [...new Set(names.map(n => n.trim()).filter(Boolean))], interactions: found, has_contraindication: interactions.hasContraindication(found) });
+  } catch (err) { next(err); }
+});
+
+// Browse the knowledge base (shipped + this business's custom rows).
+router.get('/interactions', auth, async (req, res, next) => {
+  try {
+    const rows = await prisma.drugInteraction.findMany({
+      where: { OR: [{ businessId: null }, { businessId: req.user.business_id }] },
+      orderBy: [{ drugA: 'asc' }, { drugB: 'asc' }], take: 500,
+    });
+    res.json({ interactions: rows.map(r => ({ id: r.id, drug_a: r.drugA, drug_b: r.drugB, severity: r.severity, description: r.description, custom: r.businessId != null })) });
+  } catch (err) { next(err); }
+});
+
+// Add a business-specific interaction (e.g. a local formulary rule).
+router.post('/interactions', auth, requireRole('owner', 'manager'), validate(z.object({
+  drug_a: z.string().trim().min(1).max(120),
+  drug_b: z.string().trim().min(1).max(120),
+  severity: z.enum(['minor', 'moderate', 'major', 'contraindicated']),
+  description: z.string().trim().min(1).max(1000),
+})), async (req, res, next) => {
+  try {
+    const [a, b] = [req.body.drug_a, req.body.drug_b].map(s => s.trim().toLowerCase()).sort();
+    const row = await prisma.drugInteraction.create({
+      data: { businessId: req.user.business_id, drugA: a, drugB: b, severity: req.body.severity, description: req.body.description },
+    });
+    res.status(201).json({ id: row.id, drug_a: row.drugA, drug_b: row.drugB, severity: row.severity, description: row.description });
+  } catch (err) { next(err); }
+});
+
 // ── FAST MOVERS / REORDER URGENCY ────────────────────────────────
 
 router.get('/fast-movers', auth, async (req, res, next) => {
@@ -390,6 +460,178 @@ router.post('/pull-expired', auth, requireRole('owner', 'manager'), validate(z.o
       message: `${qty} units of ${batch.product.name} written off (expired batch pulled).`,
       write_off_value_at_cost: parseFloat(writeOffValue.toFixed(2)),
     });
+  } catch (err) { next(err); }
+});
+
+// ── PRESCRIPTIONS & DISPENSING ────────────────────────────────────
+
+// Create a prescription (the clinical record an Rx drug is dispensed against).
+router.post('/prescriptions', auth, requireRole('owner', 'manager'), validate(z.object({
+  product_id:         uuid,
+  patient_id:         uuid.optional().nullable(),
+  patient_name:       z.string().trim().min(1).max(255),
+  patient_phone:      z.string().max(50).optional().nullable(),
+  prescriber_name:    z.string().trim().min(1).max(255),
+  prescriber_reg:     z.string().max(100).optional().nullable(),
+  sig:                z.string().max(500).optional().nullable(),
+  quantity:           z.coerce.number().int().positive(),
+  refills_authorized: z.coerce.number().int().min(0).max(12).default(0),
+  daw:                z.boolean().default(false),
+})), async (req, res, next) => {
+  try {
+    const b = req.body;
+    const drug = await prisma.product.findFirst({ where: { id: b.product_id, businessId: req.user.business_id }, select: { id: true } });
+    if (!drug) return res.status(404).json({ error: 'Drug not found.' });
+    const rx = await prisma.prescription.create({
+      data: {
+        businessId: req.user.business_id, rxNumber: `RX-${Date.now()}`, productId: b.product_id,
+        patientId: b.patient_id || null, patientName: b.patient_name, patientPhone: b.patient_phone || null,
+        prescriberName: b.prescriber_name, prescriberReg: b.prescriber_reg || null, sig: b.sig || null,
+        quantity: b.quantity, refillsAuthorized: b.refills_authorized, daw: b.daw, createdById: req.user.id,
+      },
+    });
+    res.status(201).json({ ...rx, refills_remaining: 1 + rx.refillsAuthorized });
+  } catch (err) { next(err); }
+});
+
+router.get('/prescriptions', auth, async (req, res, next) => {
+  try {
+    const list = await prisma.prescription.findMany({
+      where: { businessId: req.user.business_id, ...(req.query.status && { status: req.query.status }), ...(req.query.patient_id && { patientId: req.query.patient_id }) },
+      include: { product: { select: { name: true, genericName: true, controlledSchedule: true } }, _count: { select: { dispenses: true } } },
+      orderBy: { issuedAt: 'desc' }, take: 200,
+    });
+    res.json({ prescriptions: list });
+  } catch (err) { next(err); }
+});
+
+router.get('/prescriptions/:id', auth, async (req, res, next) => {
+  try {
+    const rx = await prisma.prescription.findFirst({
+      where: { id: req.params.id, businessId: req.user.business_id },
+      include: { product: { select: { name: true, genericName: true, strength: true, controlledSchedule: true } }, dispenses: { orderBy: { dispensedAt: 'desc' } } },
+    });
+    if (!rx) return res.status(404).json({ error: 'Prescription not found.' });
+    res.json({ ...rx, refills_remaining: Math.max(0, 1 + rx.refillsAuthorized - rx.refillsUsed) });
+  } catch (err) { next(err); }
+});
+
+// Dispensing label — the patient-facing label a pharmacist must affix. Returns a
+// structured payload plus a ready-to-print `label_text` (thermal/sticker).
+router.get('/prescriptions/:id/label', auth, async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const [rx, business] = await Promise.all([
+      prisma.prescription.findFirst({
+        where: { id: req.params.id, businessId },
+        include: { product: { select: { name: true, genericName: true, strength: true, formulation: true, controlledSchedule: true } } },
+      }),
+      prisma.business.findUnique({ where: { id: businessId }, select: { name: true, address: true, phone: true } }),
+    ]);
+    if (!rx) return res.status(404).json({ error: 'Prescription not found.' });
+
+    const warnings = ['Keep out of reach of children.'];
+    if (rx.product.controlledSchedule) warnings.unshift(`CONTROLLED (${rx.product.controlledSchedule}) — dispense per regulation.`);
+    if (rx.product.isPrescriptionDrug !== false) warnings.push('Use only as directed by your prescriber.');
+
+    const dispensedOn = new Date().toISOString().slice(0, 10);
+    const label = {
+      pharmacy: { name: business?.name || 'Pharmacy', address: business?.address || '', phone: business?.phone || '' },
+      rx_number: rx.rxNumber, dispensed_on: dispensedOn,
+      patient: { name: rx.patientName, phone: rx.patientPhone || '' },
+      drug: { name: rx.product.name, generic: rx.product.genericName || '', strength: rx.product.strength || '', form: rx.product.formulation || '' },
+      directions: rx.sig || 'Take as directed.',
+      quantity: rx.quantity,
+      refills_remaining: Math.max(0, 1 + rx.refillsAuthorized - rx.refillsUsed),
+      prescriber: { name: rx.prescriberName, reg: rx.prescriberReg || '' },
+      controlled: rx.product.controlledSchedule || null,
+      warnings,
+    };
+    const W = 40, line = '-'.repeat(W);
+    label.label_text = [
+      (business?.name || 'Pharmacy').toUpperCase(), business?.address || '', business?.phone || '', line,
+      `Rx: ${rx.rxNumber}    ${dispensedOn}`,
+      `Patient: ${rx.patientName}`, line,
+      `${rx.product.name} ${rx.product.strength || ''}`.trim(),
+      rx.product.genericName ? `(${rx.product.genericName})` : '',
+      `Qty: ${rx.quantity}`,
+      `Directions: ${rx.sig || 'Take as directed.'}`, line,
+      `Prescriber: ${rx.prescriberName}`,
+      ...warnings.map(w => `! ${w}`),
+    ].filter(Boolean).join('\n');
+
+    res.json(label);
+  } catch (err) { next(err); }
+});
+
+// Dispense against a prescription: enforces refill limits, requires a second-
+// person verification for controlled substances, and deducts stock.
+router.post('/prescriptions/:id/dispense', auth, requireRole('owner', 'manager'), validate(z.object({
+  location_id: uuid,
+  quantity:    z.coerce.number().int().positive().optional(),
+  verified_by: uuid.optional().nullable(),
+  override:    z.boolean().optional(), // override a contraindication (documented decision)
+})), async (req, res, next) => {
+  try {
+    const out = await prisma.$transaction(async (tx) => {
+      const rx = await tx.prescription.findFirst({
+        where: { id: req.params.id, businessId: req.user.business_id },
+        include: { product: { select: { id: true, name: true, genericName: true, controlledSchedule: true } } },
+      });
+      if (!rx) return { code: 404, error: 'Prescription not found.' };
+      if (rx.status !== 'active') return { code: 400, error: 'Prescription is not active.' };
+
+      const allowed = 1 + rx.refillsAuthorized; // original fill + authorised refills
+      if (rx.refillsUsed >= allowed) return { code: 400, error: 'No refills remaining on this prescription.' };
+
+      // Clinical safety: check this drug against the patient's other active meds.
+      // A contraindication blocks the dispense unless explicitly overridden.
+      const otherMeds = await patientDrugNames(req.user.business_id, { patientId: rx.patientId, patientName: rx.patientName, excludeRxId: rx.id });
+      const interWarnings = await interactions.check(req.user.business_id, [rx.product.genericName || rx.product.name, ...otherMeds]);
+      if (interactions.hasContraindication(interWarnings) && !req.body.override) {
+        return { code: 409, error: 'Contraindicated drug interaction — dispensing blocked. Resolve, or pass override=true to proceed on a documented clinical decision.', interactions: interWarnings };
+      }
+
+      // Controlled substances require a different second user to verify.
+      if (rx.product.controlledSchedule) {
+        if (!req.body.verified_by) return { code: 400, error: `Controlled substance (${rx.product.controlledSchedule}) requires a second-person verification (verified_by).` };
+        if (req.body.verified_by === req.user.id) return { code: 400, error: 'The verifier must be a different user than the dispenser.' };
+        const verifier = await tx.user.findFirst({ where: { id: req.body.verified_by, businessId: req.user.business_id, isActive: true }, select: { id: true } });
+        if (!verifier) return { code: 400, error: 'Verifier not found.' };
+      }
+
+      const qty = req.body.quantity || rx.quantity;
+      const rows = await tx.$queryRaw`SELECT quantity FROM stock_levels WHERE product_id = ${rx.product.id}::uuid AND location_id = ${req.body.location_id}::uuid FOR UPDATE`;
+      const have = rows[0]?.quantity ?? 0;
+      if (have < qty) return { code: 400, error: `Insufficient stock to dispense ${rx.product.name}: need ${qty}, have ${have}.` };
+      const newQty = have - qty;
+      await tx.$executeRaw`UPDATE stock_levels SET quantity = ${newQty}, updated_at = NOW() WHERE product_id = ${rx.product.id}::uuid AND location_id = ${req.body.location_id}::uuid`;
+      await tx.stockMovement.create({ data: { businessId: req.user.business_id, productId: rx.product.id, locationId: req.body.location_id, type: 'out', quantity: -qty, balanceAfter: newQty, referenceType: 'dispense', referenceId: rx.id, createdById: req.user.id } });
+
+      const dispense = await tx.dispenseRecord.create({ data: { businessId: req.user.business_id, prescriptionId: rx.id, productId: rx.product.id, quantity: qty, dispensedById: req.user.id, verifiedById: req.body.verified_by || null } });
+      const newUsed = rx.refillsUsed + 1;
+      await tx.prescription.update({ where: { id: rx.id }, data: { refillsUsed: newUsed, status: newUsed >= allowed ? 'completed' : 'active' } });
+
+      return { dispense, refills_remaining: Math.max(0, allowed - newUsed), interactions: interWarnings };
+    });
+    if (out.error) return res.status(out.code).json({ error: out.error, ...(out.interactions && { interactions: out.interactions }) });
+    res.status(201).json({ message: 'Dispensed.', dispense: out.dispense, refills_remaining: out.refills_remaining, interactions: out.interactions || [] });
+  } catch (err) { next(err); }
+});
+
+// Controlled-substance dispensing register (audit trail for scheduled drugs).
+router.get('/controlled-register', auth, requireRole('owner', 'manager'), async (req, res, next) => {
+  try {
+    const records = await prisma.dispenseRecord.findMany({
+      where: { businessId: req.user.business_id, product: { controlledSchedule: { not: null } } },
+      include: { product: { select: { name: true, controlledSchedule: true } }, prescription: { select: { rxNumber: true, patientName: true, prescriberName: true } } },
+      orderBy: { dispensedAt: 'desc' }, take: 500,
+    });
+    res.json({ register: records.map(r => ({
+      dispensed_at: r.dispensedAt, drug: r.product.name, schedule: r.product.controlledSchedule,
+      quantity: r.quantity, rx_number: r.prescription.rxNumber, patient: r.prescription.patientName,
+      prescriber: r.prescription.prescriberName, dispensed_by: r.dispensedById, verified_by: r.verifiedById,
+    })) });
   } catch (err) { next(err); }
 });
 

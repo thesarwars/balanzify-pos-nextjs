@@ -37,11 +37,13 @@
  */
 
 const express  = require('express');
+const crypto   = require('crypto');
 const { z }    = require('zod');
 const prisma   = require('../lib/prisma');
 const { auth, requireRole } = require('../middleware/auth');
 const { validate }          = require('../middleware/validate');
 const webhooks = require('../lib/webhooks');
+const { createSale } = require('./sales');
 const router   = express.Router();
 
 const uuid    = z.string().uuid();
@@ -329,18 +331,207 @@ router.get('/orders/:id', auth, async (req, res, next) => {
 });
 
 // Add item to order
+// ── COFFEE-SHOP QUICK START ───────────────────────────────────────
+// A café runs on this restaurant engine; this one call scaffolds the tedious
+// part — the milk/size/temperature/extras modifier groups, a starter drink +
+// pastry menu (drinks routed to the bar station), the modifiers wired onto every
+// drink, and a coffee-and-pastry combo. Idempotent: anything already present by
+// name is reused, so it's safe to re-run.
+const COFFEE_PRESET = {
+  groups: [
+    { name: 'Size', isRequired: true, minSelect: 1, maxSelect: 1, options: [
+      { name: 'Small', priceAdjustment: 0, isDefault: false, sortOrder: 0 },
+      { name: 'Medium', priceAdjustment: 0.50, isDefault: true, sortOrder: 1 },
+      { name: 'Large', priceAdjustment: 1.00, isDefault: false, sortOrder: 2 },
+    ] },
+    { name: 'Milk', isRequired: true, minSelect: 1, maxSelect: 1, options: [
+      { name: 'Whole Milk', priceAdjustment: 0, isDefault: true, sortOrder: 0 },
+      { name: 'Skim Milk', priceAdjustment: 0, isDefault: false, sortOrder: 1 },
+      { name: 'Oat Milk', priceAdjustment: 0.50, isDefault: false, sortOrder: 2 },
+      { name: 'Almond Milk', priceAdjustment: 0.50, isDefault: false, sortOrder: 3 },
+    ] },
+    { name: 'Temperature', isRequired: true, minSelect: 1, maxSelect: 1, options: [
+      { name: 'Hot', priceAdjustment: 0, isDefault: true, sortOrder: 0 },
+      { name: 'Iced', priceAdjustment: 0, isDefault: false, sortOrder: 1 },
+      { name: 'Extra Hot', priceAdjustment: 0, isDefault: false, sortOrder: 2 },
+    ] },
+    { name: 'Extras', isRequired: false, minSelect: 0, maxSelect: 5, options: [
+      { name: 'Extra Shot', priceAdjustment: 0.75, isDefault: false, sortOrder: 0 },
+      { name: 'Vanilla Syrup', priceAdjustment: 0.50, isDefault: false, sortOrder: 1 },
+      { name: 'Caramel Syrup', priceAdjustment: 0.50, isDefault: false, sortOrder: 2 },
+      { name: 'Whipped Cream', priceAdjustment: 0.50, isDefault: false, sortOrder: 3 },
+      { name: 'Decaf', priceAdjustment: 0, isDefault: false, sortOrder: 4 },
+    ] },
+  ],
+  drinks: [
+    { name: 'Espresso', price: 2.00 }, { name: 'Americano', price: 2.50 },
+    { name: 'Latte', price: 3.00 }, { name: 'Cappuccino', price: 3.00 },
+    { name: 'Flat White', price: 3.20 }, { name: 'Mocha', price: 3.50 },
+    { name: 'Tea', price: 2.00 }, { name: 'Hot Chocolate', price: 3.00 },
+  ],
+  food: [ { name: 'Croissant', price: 2.00 }, { name: 'Blueberry Muffin', price: 2.50 } ],
+  combo: { name: 'Coffee & Croissant', price: 4.50, items: ['Latte', 'Croissant'] },
+};
+
+router.post('/presets/coffeeshop', auth, requireRole('owner', 'manager'), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const summary = { groups_created: 0, products_created: 0, modifiers_attached: 0, combo_created: false, reused: true };
+
+    const result = await prisma.$transaction(async (tx) => {
+      // Modifier groups (reuse by name).
+      const groupIds = {};
+      for (const g of COFFEE_PRESET.groups) {
+        let group = await tx.modifierGroup.findFirst({ where: { businessId, name: g.name } });
+        if (!group) {
+          group = await tx.modifierGroup.create({
+            data: { businessId, name: g.name, isRequired: g.isRequired, minSelect: g.minSelect, maxSelect: g.maxSelect,
+                    options: { create: g.options } },
+          });
+          summary.groups_created += 1;
+        }
+        groupIds[g.name] = group.id;
+      }
+
+      // Starter products (reuse by name); drinks fire to the bar, food to the kitchen.
+      const productId = {};
+      const mkProduct = async (name, price, station) => {
+        let p = await tx.product.findFirst({ where: { businessId, name } });
+        if (!p) {
+          p = await tx.product.create({ data: { businessId, name, sellingPrice: price, kitchenStation: station, isActive: true } });
+          summary.products_created += 1;
+        }
+        productId[name] = p.id;
+      };
+      for (const d of COFFEE_PRESET.drinks) await mkProduct(d.name, d.price, 'bar');
+      for (const f of COFFEE_PRESET.food)   await mkProduct(f.name, f.price, 'kitchen');
+
+      // Wire all four modifier groups onto every drink (skip if already linked).
+      const links = [];
+      for (const d of COFFEE_PRESET.drinks) {
+        let sort = 0;
+        for (const gName of ['Size', 'Milk', 'Temperature', 'Extras']) links.push({ productId: productId[d.name], groupId: groupIds[gName], sortOrder: sort++ });
+      }
+      const attached = await tx.productModifierGroup.createMany({ data: links, skipDuplicates: true });
+      summary.modifiers_attached = attached.count;
+
+      // Coffee + pastry combo (reuse by name).
+      const existingCombo = await tx.combo.findFirst({ where: { businessId, name: COFFEE_PRESET.combo.name } });
+      if (!existingCombo) {
+        await tx.combo.create({
+          data: { businessId, name: COFFEE_PRESET.combo.name, price: COFFEE_PRESET.combo.price,
+                  items: { create: COFFEE_PRESET.combo.items.map(n => ({ productId: productId[n], quantity: 1 })) } },
+        });
+        summary.combo_created = true;
+      }
+      return summary;
+    });
+
+    result.reused = result.groups_created === 0 && result.products_created === 0;
+    res.status(201).json({ message: 'Coffee-shop menu scaffolded.', ...result });
+  } catch (err) { next(err); }
+});
+
+// ── COMBOS / SET MENUS ────────────────────────────────────────────
+router.get('/combos', auth, async (req, res, next) => {
+  try {
+    const combos = await prisma.combo.findMany({
+      where: { businessId: req.user.business_id, isActive: true },
+      include: { items: true }, orderBy: { name: 'asc' },
+    });
+    // Attach product names for display.
+    const pids = [...new Set(combos.flatMap(c => c.items.map(i => i.productId)))];
+    const prods = pids.length ? await prisma.product.findMany({ where: { id: { in: pids } }, select: { id: true, name: true } }) : [];
+    const name = Object.fromEntries(prods.map(p => [p.id, p.name]));
+    res.json({ combos: combos.map(c => ({ ...c, items: c.items.map(i => ({ ...i, product_name: name[i.productId] || '' })) })) });
+  } catch (err) { next(err); }
+});
+
+router.post('/combos', auth, requireRole('owner', 'manager'), validate(z.object({
+  name:  z.string().trim().min(1).max(150),
+  price: z.coerce.number().positive(),
+  items: z.array(z.object({ product_id: uuid, quantity: z.coerce.number().int().positive().default(1) })).min(1),
+})), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const prods = await prisma.product.findMany({ where: { id: { in: req.body.items.map(i => i.product_id) }, businessId }, select: { id: true } });
+    if (prods.length !== new Set(req.body.items.map(i => i.product_id)).size) return res.status(400).json({ error: 'Unknown product in combo.' });
+    const combo = await prisma.combo.create({
+      data: { businessId, name: req.body.name, price: req.body.price, items: { create: req.body.items.map(i => ({ productId: i.product_id, quantity: i.quantity })) } },
+      include: { items: true },
+    });
+    res.status(201).json(combo);
+  } catch (err) { next(err); }
+});
+
+// Add a combo to an order: expands into component lines (each fires to the
+// kitchen) with the deal price apportioned by each item's normal price, so the
+// line totals sum exactly to price × quantity.
+router.post('/orders/:id/combo', auth, validate(z.object({
+  comboId:  uuid,
+  quantity: z.coerce.number().int().positive().default(1),
+  seat:     z.coerce.number().int().positive().max(50).optional().nullable(),
+})), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const order = await prisma.restaurantOrder.findFirst({ where: { id: req.params.id, businessId, status: { in: ['pending','sent','preparing','ready','served'] } } });
+    if (!order) return res.status(404).json({ error: 'Active order not found.' });
+    const combo = await prisma.combo.findFirst({ where: { id: req.body.comboId, businessId, isActive: true }, include: { items: true } });
+    if (!combo) return res.status(404).json({ error: 'Combo not found.' });
+
+    const prods = await prisma.product.findMany({ where: { id: { in: combo.items.map(i => i.productId) }, businessId }, select: { id: true, name: true, sellingPrice: true } });
+    const byId = Object.fromEntries(prods.map(p => [p.id, p]));
+    const qty = req.body.quantity;
+    const dealTotal = +(parseFloat(combo.price) * qty).toFixed(2);
+
+    // Apportion the deal total across components by their normal menu value.
+    const comps = combo.items.map(ci => {
+      const p = byId[ci.productId];
+      const lineQty = ci.quantity * qty;
+      return { productId: ci.productId, name: p?.name || '', lineQty, weight: parseFloat(p?.sellingPrice || 0) * lineQty };
+    });
+    const weightSum = comps.reduce((s, c) => s + c.weight, 0) || comps.length;
+    let allocated = 0;
+    comps.forEach((c, idx) => {
+      // Last line absorbs the rounding remainder so the sum is exact.
+      c.lineTotal = idx === comps.length - 1 ? +(dealTotal - allocated).toFixed(2)
+        : +(dealTotal * (weightSum ? c.weight / weightSum : 1 / comps.length)).toFixed(2);
+      allocated = +(allocated + c.lineTotal).toFixed(2);
+      c.unitPrice = c.lineQty > 0 ? +(c.lineTotal / c.lineQty).toFixed(2) : 0;
+    });
+
+    const created = await prisma.$transaction(async (tx) => {
+      const items = [];
+      for (const c of comps) {
+        const i = await tx.orderItem.create({
+          data: {
+            orderId: order.id, productId: c.productId, quantity: c.lineQty,
+            unitPrice: c.unitPrice, modifierTotal: 0, lineTotal: c.lineTotal,
+            notes: `Combo: ${combo.name}`, course: 1, seat: req.body.seat || null,
+          },
+        });
+        items.push(i);
+      }
+      await tx.restaurantOrder.update({ where: { id: order.id }, data: { subtotal: { increment: dealTotal }, totalAmount: { increment: dealTotal } } });
+      return items;
+    });
+    res.status(201).json({ message: `Added combo ${combo.name}.`, combo: combo.name, deal_total: dealTotal, items: created });
+  } catch (err) { next(err); }
+});
+
 router.post('/orders/:id/items', auth, validate(z.object({
   productId:  uuid,
   variantId:  uuid.optional().nullable(),
   quantity:   z.coerce.number().int().positive().default(1),
   notes:      z.string().max(500).optional().nullable(),
   course:     z.coerce.number().int().min(1).max(5).default(1),
+  seat:       z.coerce.number().int().positive().max(50).optional().nullable(),
   modifiers:  z.array(z.object({
     optionId: uuid,
   })).default([]),
 })), async (req, res, next) => {
   try {
-    const { productId, variantId, quantity, notes, course, modifiers } = req.body;
+    const { productId, variantId, quantity, notes, course, seat, modifiers } = req.body;
 
     // Check order is still open
     const order = await prisma.restaurantOrder.findFirst({
@@ -351,6 +542,11 @@ router.post('/orders/:id/items', auth, validate(z.object({
     // Get product price
     const product = await prisma.product.findUnique({ where: { id: productId }, select: { sellingPrice: true, name: true } });
     if (!product) return res.status(404).json({ error: 'Product not found.' });
+
+    // Reject items that are 86'd (marked unavailable) today.
+    const today = new Date(new Date().toISOString().slice(0, 10));
+    const eightySixed = await prisma.eightySix.findFirst({ where: { productId, date: today } });
+    if (eightySixed) return res.status(400).json({ error: `${product.name} is 86'd (unavailable) today.`, code: 'ITEM_86' });
 
     // Get variant price if applicable
     let unitPrice = parseFloat(product.sellingPrice);
@@ -384,6 +580,7 @@ router.post('/orders/:id/items', auth, validate(z.object({
           lineTotal,
           notes:         notes || null,
           course,
+          seat:          seat || null,
           modifiers:     { create: modifierData },
         },
         include: {
@@ -528,12 +725,6 @@ router.post('/orders/:id/checkout', auth, validate(z.object({
     if (!order) return res.status(404).json({ error: 'Active order not found.' });
     if (!order.items.length) return res.status(400).json({ error: 'Order has no items.' });
 
-    // Get a fresh idempotency key for the sale
-    const keyRes = await fetch(`http://localhost:${process.env.PORT || 5000}/api/v1/sales/initiate`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${req.headers.authorization?.replace('Bearer ','') || ''}` },
-    });
-
     // Build sale payload from order items
     const saleItems = order.items.map(i => ({
       product_id:     i.productId,
@@ -546,47 +737,46 @@ router.post('/orders/:id/checkout', auth, validate(z.object({
     const { payment_method, cash_tendered, payments, loyalty_points_redeemed,
             discount_type, discount_value, coupon_id, coupon_discount, tip_amount } = req.body;
 
-    let idempotency_key;
-    if (keyRes.ok) {
-      const keyData = await keyRes.json();
-      idempotency_key = keyData.idempotency_key;
-    } else {
-      // Fallback: generate a key directly
-      const { default: crypto } = await import('crypto');
-      idempotency_key = `${req.user.id}-${Date.now()}-${crypto.randomUUID()}`;
-      await prisma.saleKey.create({
-        data: { key: idempotency_key, cashierId: req.user.id, businessId: req.user.business_id, expiresAt: new Date(Date.now() + 10 * 60 * 1000) },
-      });
-    }
+    // Service charge: a % of the order subtotal, from the business setting
+    // (accepts 10 or 0.10). Added to the bill total by the sale service.
+    const biz = await prisma.business.findUnique({ where: { id: req.user.business_id }, select: { serviceChargePct: true } });
+    const rawPct = parseFloat(biz?.serviceChargePct || 0);
+    const scPct = rawPct > 1 ? rawPct / 100 : rawPct;
+    const serviceCharge = scPct > 0 ? parseFloat((parseFloat(order.subtotal) * scPct).toFixed(2)) : 0;
 
-    // Create the sale by posting to the sales route internally
-    const saleRes = await fetch(`http://localhost:${process.env.PORT || 5000}/api/v1/sales`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${req.headers.authorization?.replace('Bearer ','') || ''}` },
-      body: JSON.stringify({
-        idempotency_key,
-        items: saleItems,
-        payment_method,
-        cash_tendered,
-        payments,
-        loyalty_points_redeemed,
-        discount_type,
-        discount_value,
-        coupon_id,
-        coupon_discount,
-        tip_amount,
-        customer_id: order.customerId,
-        type: 'pos',
-        notes: `Order ${order.orderNumber}${order.table ? ` — Table ${order.table.number}` : ''}`,
-      }),
+    // Mint the idempotency key in-process (no loopback HTTP hop to /sales/initiate,
+    // which broke behind a proxy/cluster). Equivalent to what initiate does.
+    const idempotency_key = `${req.user.id}-${Date.now()}-${crypto.randomUUID()}`;
+    await prisma.saleKey.create({
+      data: { key: idempotency_key, cashierId: req.user.id, businessId: req.user.business_id, expiresAt: new Date(Date.now() + 10 * 60 * 1000) },
     });
 
-    if (!saleRes.ok) {
-      const err = await saleRes.json();
-      return res.status(saleRes.status).json(err);
+    // Create the sale in-process (no loopback HTTP) via the shared sale service.
+    let sale;
+    try {
+      sale = await createSale({
+        user: req.user, ip: req.ip, get: (h) => req.get(h),
+        body: {
+          idempotency_key,
+          items: saleItems,
+          payment_method,
+          cash_tendered,
+          payments,
+          loyalty_points_redeemed,
+          discount_type,
+          discount_value,
+          coupon_id,
+          coupon_discount,
+          tip_amount,
+          service_charge: serviceCharge,
+          customer_id: order.customerId,
+          type: 'pos',
+          notes: `Order ${order.orderNumber}${order.table ? ` — Table ${order.table.number}` : ''}`,
+        },
+      });
+    } catch (e) {
+      return res.status(e.statusCode || 500).json({ error: e.message });
     }
-
-    const sale = await saleRes.json();
 
     // Mark order completed, free table
     await prisma.$transaction(async (tx) => {
@@ -909,6 +1099,69 @@ router.post('/orders/:id/split', auth, validate(z.object({
   } catch (err) { next(err); }
 });
 
+// ── SPLIT BILL BY SEAT ────────────────────────────────────────────
+// Groups the order's items by their seat number and produces one bill per seat —
+// the common "everyone pays for what they had" request. Items with no seat are
+// kept together on a shared bill. Needs at least two distinct buckets to split.
+router.post('/orders/:id/split-by-seat', auth, async (req, res, next) => {
+  try {
+    const order = await prisma.restaurantOrder.findFirst({
+      where: { id: req.params.id, businessId: req.user.business_id,
+               status: { in: ['pending','sent','preparing','ready','served'] } },
+      include: { items: { include: { modifiers: true } } },
+    });
+    if (!order) return res.status(404).json({ error: 'Active order not found.' });
+    if (!order.items.length) return res.status(400).json({ error: 'Order has no items to split.' });
+
+    // Bucket items by seat (null → 'shared').
+    const buckets = new Map();
+    for (const it of order.items) {
+      const key = it.seat == null ? 'shared' : `seat-${it.seat}`;
+      if (!buckets.has(key)) buckets.set(key, []);
+      buckets.get(key).push(it);
+    }
+    if (buckets.size < 2) return res.status(400).json({ error: 'Assign items to at least two seats before splitting by seat.', code: 'NEEDS_SEATS' });
+
+    const newOrders = await prisma.$transaction(async (tx) => {
+      const created = [];
+      let i = 0;
+      for (const [key, items] of buckets) {
+        i += 1;
+        const subtotal = items.reduce((s, item) => s + parseFloat(item.lineTotal), 0);
+        const label = key === 'shared' ? 'Shared' : `Seat ${key.split('-')[1]}`;
+        const o = await tx.restaurantOrder.create({
+          data: {
+            businessId:  req.user.business_id,
+            orderNumber: `${order.orderNumber}-${key === 'shared' ? 'SH' : 'S' + key.split('-')[1]}`,
+            tableId:     order.tableId,
+            staffId:     req.user.id,
+            status:      order.status,
+            type:        order.type,
+            covers:      1,
+            notes:       `${label} — split from ${order.orderNumber}`,
+            subtotal,
+            totalAmount: subtotal,
+            items: {
+              create: items.map(item => ({
+                productId: item.productId, variantId: item.variantId, quantity: item.quantity,
+                unitPrice: item.unitPrice, modifierTotal: item.modifierTotal, lineTotal: item.lineTotal,
+                notes: item.notes, course: item.course, seat: item.seat, status: item.status,
+                modifiers: { create: item.modifiers.map(m => ({ optionId: m.optionId, name: m.name, priceAdjustment: m.priceAdjustment })) },
+              })),
+            },
+          },
+          include: { items: true },
+        });
+        created.push({ id: o.id, order_number: o.orderNumber, label, total: o.totalAmount });
+      }
+      await tx.restaurantOrder.update({ where: { id: order.id }, data: { status: 'void', notes: `Split by seat into ${buckets.size} bills` } });
+      return created;
+    });
+
+    res.status(201).json({ message: `Split into ${newOrders.length} seat bills.`, new_orders: newOrders });
+  } catch (err) { next(err); }
+});
+
 // ── MOVE ORDER TO DIFFERENT TABLE ─────────────────────────────────
 
 router.post('/orders/:id/move-table', auth, validate(z.object({
@@ -1158,45 +1411,50 @@ router.put('/tables/:id/waiter', auth, validate(z.object({
   waiter_id: uuid.optional().nullable(),
 })), async (req, res, next) => {
   try {
-    // Store waiter assignment in table notes for now
-    // (a dedicated waiter_id field on RestaurantTable would be a schema addition)
-    await prisma.restaurantTable.updateMany({
+    // If assigning, the waiter must be a user in this business.
+    if (req.body.waiter_id) {
+      const u = await prisma.user.findFirst({ where: { id: req.body.waiter_id, businessId: req.user.business_id }, select: { id: true } });
+      if (!u) return res.status(400).json({ error: 'Waiter not found.' });
+    }
+    const r = await prisma.restaurantTable.updateMany({
       where: { id: req.params.id, businessId: req.user.business_id },
-      data: { name: req.body.waiter_id ? `waiter:${req.body.waiter_id}` : null },
+      data: { waiterId: req.body.waiter_id || null },
     });
-    res.json({ message: 'Waiter assigned.' });
+    if (!r.count) return res.status(404).json({ error: 'Table not found.' });
+    res.json({ message: req.body.waiter_id ? 'Waiter assigned.' : 'Waiter cleared.' });
   } catch (err) { next(err); }
 });
 
-// ── 86 ITEM (mark out of stock on menu) ───────────────────────────
-// Quick way to mark a menu item unavailable for today
+// ── 86 ITEM (mark a menu item unavailable for the day) ────────────
+// Per-day availability (optionally per location) — does NOT deactivate the
+// product globally; it auto-clears the next day.
 
-router.post('/products/:id/86', auth, async (req, res, next) => {
+router.post('/products/:id/86', auth, validate(z.object({
+  available:   z.boolean().optional(), // false (or omitted) = 86 it; true = un-86
+  location_id: uuid.optional().nullable(),
+  reason:      z.string().max(255).optional().nullable(),
+})), async (req, res, next) => {
   try {
-    // Toggle isActive on the product for this business
-    const product = await prisma.product.findFirst({
-      where: { id: req.params.id, businessId: req.user.business_id },
-      select: { isActive: true, name: true },
-    });
+    const product = await prisma.product.findFirst({ where: { id: req.params.id, businessId: req.user.business_id }, select: { id: true, name: true } });
     if (!product) return res.status(404).json({ error: 'Product not found.' });
 
-    const newStatus = req.body.available !== undefined ? req.body.available : !product.isActive;
-    await prisma.product.update({ where: { id: req.params.id }, data: { isActive: newStatus } });
+    const today = new Date(new Date().toISOString().slice(0, 10));
+    const make86 = req.body.available === undefined ? true : !req.body.available;
 
-    // Notify kitchen via a system ticket
-    if (!newStatus) {
+    if (make86) {
+      await prisma.eightySix.upsert({
+        where:  { productId_date: { productId: product.id, date: today } },
+        update: { reason: req.body.reason || null, locationId: req.body.location_id || null },
+        create: { businessId: req.user.business_id, productId: product.id, locationId: req.body.location_id || null, date: today, reason: req.body.reason || null, createdById: req.user.id },
+      });
       await prisma.kitchenTicket.create({
-        data: {
-          businessId: req.user.business_id,
-          orderId:    req.body.order_id || null,
-          course:     0,
-          status:     'pending',
-          items:      JSON.stringify([{ name: `86: ${product.name} — OUT OF STOCK`, quantity: 0, notes: "Item marked unavailable", modifiers: [] }]),
-        },
-      }).catch(() => {}); // Non-critical
+        data: { businessId: req.user.business_id, orderId: req.body.order_id || null, course: 0, status: 'pending',
+          items: JSON.stringify([{ name: `86: ${product.name} — OUT OF STOCK`, quantity: 0, notes: 'Item marked unavailable today', modifiers: [] }]) },
+      }).catch(() => {});
+    } else {
+      await prisma.eightySix.deleteMany({ where: { productId: product.id, date: today } });
     }
-
-    res.json({ message: `${product.name} marked ${newStatus ? "available" : "unavailable (86d)"}`, available: newStatus });
+    res.json({ message: `${product.name} marked ${make86 ? 'unavailable (86d) for today' : 'available'}`, available: !make86 });
   } catch (err) { next(err); }
 });
 
@@ -1332,12 +1590,19 @@ router.post('/table-reservations', auth, validate(z.object({
     });
     if (!table) return res.status(404).json({ error: 'Table not found.' });
 
-    // Store as a reserved table with notes containing booking details
-    const reservationNote = `BOOKED: ${req.body.guest_name} | ${req.body.guest_phone} | ${req.body.date} ${req.body.time} | ${req.body.covers} covers${req.body.notes ? ` | ${req.body.notes}` : ''}`;
-
-    await prisma.restaurantTable.update({
-      where: { id: req.body.table_id },
-      data: { status: 'reserved', name: reservationNote },
+    // Create a real reservation record (does NOT clobber the table's name).
+    const reservedAt = new Date(`${req.body.date}T${req.body.time}:00`);
+    const reservation = await prisma.tableReservation.create({
+      data: {
+        businessId: req.user.business_id,
+        tableId:    req.body.table_id,
+        guestName:  req.body.guest_name,
+        guestPhone: req.body.guest_phone,
+        reservedAt,
+        covers:     req.body.covers,
+        notes:      req.body.notes || null,
+        createdById: req.user.id,
+      },
     });
 
     // Notify via WhatsApp if business has a phone
@@ -1369,10 +1634,90 @@ We look forward to seeing you!`;
     });
 
     res.status(201).json({
-      message:   'Table reserved.',
-      table:     table.number,
-      wa_url:    `https://wa.me/${guestPhone}?text=${encodeURIComponent(msg)}`,
+      message:        'Table reserved.',
+      reservation_id: reservation.id,
+      table:          table.number,
+      wa_url:         `https://wa.me/${guestPhone}?text=${encodeURIComponent(msg)}`,
     });
+  } catch (err) { next(err); }
+});
+
+// List table reservations (optionally filter by date).
+router.get('/table-reservations', auth, async (req, res, next) => {
+  try {
+    const where = { businessId: req.user.business_id };
+    if (req.query.date) {
+      const d = new Date(`${req.query.date}T00:00:00`);
+      where.reservedAt = { gte: d, lt: new Date(d.getTime() + 86400000) };
+    }
+    const reservations = await prisma.tableReservation.findMany({
+      where, include: { table: { select: { number: true } } }, orderBy: { reservedAt: 'asc' }, take: 200,
+    });
+    res.json({ reservations });
+  } catch (err) { next(err); }
+});
+
+// List items 86'd (unavailable) today.
+router.get('/eighty-six', auth, async (req, res, next) => {
+  try {
+    const today = new Date(new Date().toISOString().slice(0, 10));
+    const items = await prisma.eightySix.findMany({
+      where: { businessId: req.user.business_id, date: today },
+      include: { product: { select: { name: true } } },
+    });
+    res.json({ items: items.map(i => ({ product_id: i.productId, name: i.product.name, location_id: i.locationId, reason: i.reason })) });
+  } catch (err) { next(err); }
+});
+
+// ── RECIPES / BILL-OF-MATERIALS ───────────────────────────────────
+// A menu item's recipe lists the ingredient products it consumes. Selling the
+// item depletes those ingredients (handled in the sales transaction).
+
+router.get('/products/:id/recipe', auth, async (req, res, next) => {
+  try {
+    const recipe = await prisma.recipe.findFirst({
+      where: { productId: req.params.id, businessId: req.user.business_id },
+      include: { items: { include: { ingredient: { select: { id: true, name: true, sku: true, costPrice: true } } } } },
+    });
+    if (!recipe) return res.status(404).json({ error: 'No recipe for this product.' });
+    res.json(recipe);
+  } catch (err) { next(err); }
+});
+
+router.put('/products/:id/recipe', auth, requireRole('owner', 'manager'), validate(z.object({
+  yieldQty: z.coerce.number().int().positive().default(1),
+  isActive: z.boolean().default(true),
+  items:    z.array(z.object({ ingredient_id: uuid, quantity: z.coerce.number().positive() })).min(1),
+})), async (req, res, next) => {
+  try {
+    const product = await prisma.product.findFirst({ where: { id: req.params.id, businessId: req.user.business_id }, select: { id: true } });
+    if (!product) return res.status(404).json({ error: 'Product not found.' });
+
+    // Every ingredient must belong to this business; none may be the item itself.
+    const ingIds = [...new Set(req.body.items.map(i => i.ingredient_id))];
+    if (ingIds.includes(req.params.id)) return res.status(400).json({ error: 'A recipe cannot include its own product as an ingredient.' });
+    const validIng = await prisma.product.count({ where: { id: { in: ingIds }, businessId: req.user.business_id } });
+    if (validIng !== ingIds.length) return res.status(400).json({ error: 'One or more ingredients were not found.' });
+
+    const recipe = await prisma.$transaction(async (tx) => {
+      const r = await tx.recipe.upsert({
+        where:  { productId: req.params.id },
+        update: { yieldQty: req.body.yieldQty, isActive: req.body.isActive },
+        create: { businessId: req.user.business_id, productId: req.params.id, yieldQty: req.body.yieldQty, isActive: req.body.isActive },
+      });
+      await tx.recipeItem.deleteMany({ where: { recipeId: r.id } });
+      await tx.recipeItem.createMany({ data: req.body.items.map(i => ({ recipeId: r.id, ingredientId: i.ingredient_id, quantity: i.quantity })) });
+      return tx.recipe.findUnique({ where: { id: r.id }, include: { items: { include: { ingredient: { select: { id: true, name: true, sku: true } } } } } });
+    });
+    res.json(recipe);
+  } catch (err) { next(err); }
+});
+
+router.delete('/products/:id/recipe', auth, requireRole('owner', 'manager'), async (req, res, next) => {
+  try {
+    const r = await prisma.recipe.deleteMany({ where: { productId: req.params.id, businessId: req.user.business_id } });
+    if (!r.count) return res.status(404).json({ error: 'No recipe to delete.' });
+    res.json({ message: 'Recipe removed.' });
   } catch (err) { next(err); }
 });
 

@@ -16,10 +16,18 @@ const prisma  = require('../../lib/prisma');
 
 const auth = (token) => ({ Authorization: `Bearer ${token}` });
 
-async function registerBusiness(suffix = Date.now()) {
-  const email = `owner_${suffix}@balanzify.test`;
+// A per-run salt so the few fixed-suffix registrations don't collide if a prior
+// run's best-effort cleanup couldn't fully unwind the RESTRICT history FKs.
+const RUN = `${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+
+async function registerBusiness(arg = Date.now()) {
+  // Accept either a full email (when a test needs a specific address) or a
+  // suffix used to build one. Previously the email arg was silently treated as
+  // a suffix, so the duplicate-email and login tests asserted a different
+  // address than was registered.
+  const email = String(arg).includes('@') ? arg : `owner_${arg}@balanzify.test`;
   const res = await request(app).post('/api/v1/auth/register').send({
-    businessName: `Test Business ${suffix}`,
+    businessName: `Test Business ${arg}`,
     email,
     password: 'SecureTestPass123!',
   });
@@ -81,17 +89,31 @@ async function checkout(token, payload) {
 let ownerToken, businessId, locationId;
 
 beforeAll(async () => {
-  const reg = await registerBusiness('shared');
+  const reg = await registerBusiness(`shared_${RUN}`);
   expect(reg.access_token).toBeTruthy();
   ownerToken = reg.access_token;
   businessId = reg.business.id;
 
-  const locRes = await request(app).get('/api/v1/locations').set(auth(ownerToken));
+  // Registration doesn't seed a location, so create one for opening-stock /
+  // checkout tests (mirrors what the wired-modules suite does for its business).
+  let locRes = await request(app).get('/api/v1/locations').set(auth(ownerToken));
+  if (!locRes.body.locations?.length) {
+    await request(app).post('/api/v1/locations').set(auth(ownerToken)).send({ name: 'Main', type: 'store' });
+    locRes = await request(app).get('/api/v1/locations').set(auth(ownerToken));
+  }
   locationId = locRes.body.locations?.[0]?.id;
 }, 20000);
 
 afterAll(async () => {
   if (businessId) {
+    // Several FKs are RESTRICT so financial history outlives the things it
+    // references (refund → sale, sale_item → product). A straight business delete
+    // is blocked by that chain, so unwind it in dependency order: refunds, then
+    // sales (cascades sale_items), then the business cascades cleanly. Without
+    // this the DB is left polluted and the NEXT run fails spuriously.
+    await prisma.refund.deleteMany({ where: { sale: { businessId } } }).catch(() => {});
+    await prisma.sale.deleteMany({ where: { businessId } }).catch(() => {});
+    await prisma.purchaseOrder.deleteMany({ where: { businessId } }).catch(() => {});
     await prisma.business.deleteMany({ where: { id: businessId } }).catch(() => {});
   }
   await prisma.$disconnect();
@@ -103,7 +125,7 @@ afterAll(async () => {
 
 describe('Auth — register', () => {
   test('returns 201 with tokens, user, and business', async () => {
-    const res = await registerBusiness('reg_test');
+    const res = await registerBusiness(`reg_test_${RUN}`);
     expect(res.access_token).toBeTruthy();
     expect(res.refresh_token).toBeTruthy();
     expect(res.token_type).toBe('Bearer');
@@ -150,7 +172,7 @@ describe('Auth — login', () => {
 
 describe('Auth — refresh token rotation', () => {
   test('issues new tokens and invalidates old refresh token', async () => {
-    const reg = await registerBusiness('refresh_test');
+    const reg = await registerBusiness(`refresh_test_${RUN}`);
     const r1 = await request(app).post('/api/v1/auth/refresh').send({ refresh_token: reg.refresh_token });
     expect(r1.status).toBe(200);
     expect(r1.body.access_token).toBeTruthy();
@@ -705,6 +727,34 @@ describe('Purchase orders — receive stock', () => {
     expect(movement).toBeTruthy();
     expect(movement.quantity).toBe(50);
   });
+
+  test('receiving the PO posts Dr Inventory / Cr Accounts Payable', async () => {
+    const entry = await prisma.journalEntry.findFirst({
+      where: { sourceType: 'purchase', sourceId: poId },
+      include: { lines: { include: { account: true } } },
+    });
+    expect(entry).toBeTruthy();
+    const by = {};
+    for (const l of entry.lines) by[l.account.code] = l;
+    expect(parseFloat(by['1200'].debit)).toBeCloseTo(900, 2);  // Inventory  (50 x 18)
+    expect(parseFloat(by['2000'].credit)).toBeCloseTo(900, 2); // Accounts Payable
+  });
+
+  test('paying the supplier posts Dr Accounts Payable / Cr Cash', async () => {
+    const pay = await request(app).post(`/api/v1/purchase-orders/${poId}/payment`)
+      .set(auth(ownerToken)).send({ amount: 900, payment_method: 'cash' });
+    expect(pay.status).toBe(201);
+    const entry = await prisma.journalEntry.findFirst({
+      where: { sourceType: 'po_payment', sourceId: poId },
+      include: { lines: { include: { account: true } } },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect(entry).toBeTruthy();
+    const by = {};
+    for (const l of entry.lines) by[l.account.code] = l;
+    expect(parseFloat(by['2000'].debit)).toBeCloseTo(900, 2);  // Accounts Payable settled
+    expect(parseFloat(by['1000'].credit)).toBeCloseTo(900, 2); // Cash out
+  });
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -896,5 +946,93 @@ describe('Error handling', () => {
       .send({ selling_price: -1 }); // missing name, negative price
     expect(res.status).toBe(422);
     expect(Array.isArray(res.body.errors)).toBe(true);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// GENERAL LEDGER (accounting spine)
+// ══════════════════════════════════════════════════════════════════════════════
+describe('General ledger — sale posting', () => {
+  let product, saleId, total, tax;
+
+  beforeAll(async () => {
+    product = await createProductWithStock(ownerToken, { locationId, stock: 50, sellingPrice: 20, costPrice: 12 });
+  });
+
+  test('a cash sale posts a balanced double-entry journal', async () => {
+    const res = await checkout(ownerToken, {
+      items: [{ product_id: product.id, quantity: 2 }],
+      payment_method: 'cash', cash_tendered: 100, location_id: locationId,
+    });
+    expect(res.status).toBe(201);
+    saleId = res.body.id;
+    total = parseFloat(res.body.totalAmount ?? res.body.total_amount);
+    tax   = parseFloat(res.body.taxAmount ?? res.body.tax_amount ?? 0);
+
+    const entry = await prisma.journalEntry.findFirst({
+      where: { sourceType: 'sale', sourceId: saleId },
+      include: { lines: { include: { account: true } } },
+    });
+    expect(entry).toBeTruthy();
+
+    const debit  = entry.lines.reduce((s, l) => s + parseFloat(l.debit), 0);
+    const credit = entry.lines.reduce((s, l) => s + parseFloat(l.credit), 0);
+    expect(debit).toBeCloseTo(credit, 2); // the books balance
+
+    const by = {};
+    for (const l of entry.lines) by[l.account.code] = l;
+    expect(parseFloat(by['1000'].debit)).toBeCloseTo(total, 2);        // Cash = total received
+    expect(parseFloat(by['4000'].credit)).toBeCloseTo(total - tax, 2); // Sales Revenue = net of tax
+    expect(parseFloat(by['5000'].debit)).toBeCloseTo(24, 2);           // COGS = 2 x 12
+    expect(parseFloat(by['1200'].credit)).toBeCloseTo(24, 2);          // Inventory relief
+  });
+
+  test('trial balance is balanced', async () => {
+    const tb = await request(app).get('/api/v1/accounting/trial-balance').set(auth(ownerToken));
+    expect(tb.status).toBe(200);
+    expect(tb.body.totals.balanced).toBe(true);
+    expect(tb.body.totals.debit).toBeCloseTo(tb.body.totals.credit, 2);
+  });
+});
+
+describe('General ledger — accounts receivable (credit)', () => {
+  let product, customerId;
+
+  beforeAll(async () => {
+    product = await createProductWithStock(ownerToken, { locationId, stock: 50, sellingPrice: 20, costPrice: 12 });
+    const cust = await request(app).post('/api/v1/customers').set(auth(ownerToken)).send({ name: 'Credit Cust', credit_limit: 1000 });
+    customerId = cust.body.id;
+  });
+
+  test('a credit sale debits AR; repayment credits AR', async () => {
+    const sale = await checkout(ownerToken, {
+      items: [{ product_id: product.id, quantity: 2 }],
+      payment_method: 'credit', customer_id: customerId, location_id: locationId,
+    });
+    expect(sale.status).toBe(201);
+    const total = parseFloat(sale.body.totalAmount ?? sale.body.total_amount);
+
+    const saleEntry = await prisma.journalEntry.findFirst({
+      where: { sourceType: 'sale', sourceId: sale.body.id },
+      include: { lines: { include: { account: true } } },
+    });
+    const sBy = {};
+    for (const l of saleEntry.lines) sBy[l.account.code] = l;
+    expect(parseFloat(sBy['1100'].debit)).toBeCloseTo(total, 2); // credit sale debits Accounts Receivable
+
+    const pay = await request(app).post('/api/v1/sales/customer-payment')
+      .set(auth(ownerToken)).send({ customer_id: customerId, amount: total, payment_method: 'cash' });
+    expect(pay.status).toBe(200);
+
+    const repay = await prisma.journalEntry.findFirst({
+      where: { sourceType: 'credit_repayment', sourceId: customerId },
+      include: { lines: { include: { account: true } } },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect(repay).toBeTruthy();
+    const rBy = {};
+    for (const l of repay.lines) rBy[l.account.code] = l;
+    expect(parseFloat(rBy['1000'].debit)).toBeCloseTo(total, 2);  // cash in
+    expect(parseFloat(rBy['1100'].credit)).toBeCloseTo(total, 2); // AR reduced
   });
 });

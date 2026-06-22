@@ -1,6 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const prisma = require('../lib/prisma');
+const accounting = require('../lib/accounting');
 const { auth, requireRole } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const {
@@ -111,7 +112,7 @@ function mapSupplier(b) {
 // ── STOCK (adjustments, transfers) ───────────────────────────────────────────
 const stockRouter = express.Router();
 
-stockRouter.post('/adjustments', auth, validate(AdjustmentSchema), async (req, res, next) => {
+stockRouter.post('/adjustments', auth, requireRole('owner', 'manager'), validate(AdjustmentSchema), async (req, res, next) => {
   try {
     const { product_id, location_id, type, quantity, reason, photo_url } = req.body;
     const adj = await prisma.stockAdjustment.create({
@@ -174,72 +175,97 @@ stockRouter.post('/adjustments/:id/approve', auth, requireRole('owner', 'manager
   } catch (err) { next(err); }
 });
 
-stockRouter.post('/transfers', auth, validate(TransferSchema), async (req, res, next) => {
+stockRouter.post('/transfers', auth, requireRole('owner', 'manager'), validate(TransferSchema), async (req, res, next) => {
   try {
     const { from_location_id, to_location_id, items, notes } = req.body;
-    
+    if (from_location_id === to_location_id) {
+      return res.status(400).json({ title: 'Source and destination must differ', status: 400 });
+    }
+
+    // Both locations must belong to the caller's business.
+    const locs = await prisma.location.findMany({
+      where: { id: { in: [from_location_id, to_location_id] }, businessId: req.user.business_id },
+      select: { id: true },
+    });
+    if (locs.length !== 2) return res.status(404).json({ title: 'Location not found', status: 404 });
+
     const transfer = await prisma.$transaction(async (tx) => {
       const t = await tx.stockTransfer.create({
         data: {
           businessId: req.user.business_id,
           transferNumber: `TRF-${Date.now()}`,
-          fromLocationId: from_location_id, 
+          fromLocationId: from_location_id,
           toLocationId: to_location_id,
-          notes, 
-          status: 'received', 
+          notes,
+          status: 'received',
           createdById: req.user.id,
-          items: { 
-            create: items.map(i => ({ 
-              productId: i.product_id, 
-              requestedQty: i.qty, 
-              dispatchedQty: i.qty, 
-              receivedQty: i.qty 
-            })) 
+          items: {
+            create: items.map(i => ({
+              productId: i.product_id,
+              requestedQty: i.qty,
+              dispatchedQty: i.qty,
+              receivedQty: i.qty,
+            })),
           },
         },
       });
 
-      // Loop through each item using only the exact columns present in stock_levels
       for (const item of items) {
-        // Deduct quantity from source location
-        await tx.$executeRaw`
-          INSERT INTO stock_levels (id, product_id, location_id, quantity, updated_at) 
-          VALUES (
-            gen_random_uuid(), 
-            ${item.product_id}::uuid, 
-            ${from_location_id}::uuid, 
-            0, 
-            NOW()
-          )
-          ON CONFLICT (product_id, location_id) 
-          DO UPDATE SET 
-            quantity = GREATEST(0, stock_levels.quantity - ${item.qty}), 
-            updated_at = NOW()
+        // Lock the source row and verify there is enough to move — never clamp
+        // at 0 (which would "transfer" stock that doesn't exist and create it at
+        // the destination out of nothing).
+        const srcRows = await tx.$queryRaw`
+          SELECT quantity FROM stock_levels
+          WHERE product_id = ${item.product_id}::uuid AND location_id = ${from_location_id}::uuid
+          FOR UPDATE
         `;
+        const srcQty = srcRows[0]?.quantity ?? 0;
+        if (srcQty < item.qty) {
+          throw Object.assign(
+            new Error(`Insufficient stock to transfer: product ${item.product_id} has ${srcQty} at source, requested ${item.qty}.`),
+            { statusCode: 400, code: 'INSUFFICIENT_STOCK' }
+          );
+        }
 
-        // Add quantity to destination location
+        // Deduct from source
         await tx.$executeRaw`
-          INSERT INTO stock_levels (id, product_id, location_id, quantity, updated_at) 
-          VALUES (
-            gen_random_uuid(), 
-            ${item.product_id}::uuid, 
-            ${to_location_id}::uuid, 
-            ${item.qty}, 
-            NOW()
-          )
-          ON CONFLICT (product_id, location_id) 
-          DO UPDATE SET 
-            quantity = stock_levels.quantity + ${item.qty}, 
-            updated_at = NOW()
+          UPDATE stock_levels SET quantity = quantity - ${item.qty}, updated_at = NOW()
+          WHERE product_id = ${item.product_id}::uuid AND location_id = ${from_location_id}::uuid
         `;
+        await tx.stockMovement.create({
+          data: {
+            businessId: req.user.business_id, productId: item.product_id, locationId: from_location_id,
+            type: 'transfer_out', quantity: -item.qty, balanceAfter: srcQty - item.qty,
+            referenceId: t.id, referenceType: 'stock_transfer', createdById: req.user.id,
+          },
+        });
+
+        // Add to destination
+        const destRows = await tx.$executeRaw`
+          INSERT INTO stock_levels (id, product_id, location_id, quantity, updated_at)
+          VALUES (gen_random_uuid(), ${item.product_id}::uuid, ${to_location_id}::uuid, ${item.qty}, NOW())
+          ON CONFLICT (product_id, location_id)
+          DO UPDATE SET quantity = stock_levels.quantity + ${item.qty}, updated_at = NOW()
+        `;
+        const destQty = (await tx.$queryRaw`
+          SELECT quantity FROM stock_levels
+          WHERE product_id = ${item.product_id}::uuid AND location_id = ${to_location_id}::uuid
+        `)[0]?.quantity ?? item.qty;
+        await tx.stockMovement.create({
+          data: {
+            businessId: req.user.business_id, productId: item.product_id, locationId: to_location_id,
+            type: 'transfer_in', quantity: item.qty, balanceAfter: destQty,
+            referenceId: t.id, referenceType: 'stock_transfer', createdById: req.user.id,
+          },
+        });
       }
-      
+
       return t;
     });
 
     res.status(201).json(transfer);
-  } catch (err) { 
-    next(err); 
+  } catch (err) {
+    next(err);
   }
 });
 // ======= GET ALL TRANSFERS =======
@@ -283,7 +309,7 @@ stockRouter.get('/transfers/:id', auth, async (req, res, next) => {
 });
 
 // ======= UPDATE TRANSFER (Reconciles quantities dynamically) =======
-stockRouter.put('/transfers/:id', auth, validate(TransferSchema), async (req, res, next) => {
+stockRouter.put('/transfers/:id', auth, requireRole('owner', 'manager'), validate(TransferSchema), async (req, res, next) => {
   try {
     const { from_location_id, to_location_id, items, notes } = req.body;
     const transferId = req.params.id;
@@ -345,7 +371,7 @@ stockRouter.put('/transfers/:id', auth, validate(TransferSchema), async (req, re
 });
 
 // ======= DELETE TRANSFER (Reverts inventory levels cleanly) =======
-stockRouter.delete('/transfers/:id', auth, async (req, res, next) => {
+stockRouter.delete('/transfers/:id', auth, requireRole('owner', 'manager'), async (req, res, next) => {
   try {
     const transferId = req.params.id;
 
@@ -912,8 +938,9 @@ usersRouter.post('/', auth, requireRole('owner'), validate(CreateUserSchema), as
     const exists = await prisma.user.findUnique({ where: { email } });
     if (exists) return res.status(409).json({ title: 'Email already in use', status: 409 });
     const hashed = await bcrypt.hash(password, 12);
+    const hashedPin = pin ? await bcrypt.hash(String(pin), 10) : null;
     const user = await prisma.user.create({
-      data: { businessId: req.user.business_id, name, email, password: hashed, role, pin: pin || null, commissionPercent: commission_percent ?? 0 },
+      data: { businessId: req.user.business_id, name, email, password: hashed, role, pin: hashedPin, commissionPercent: commission_percent ?? 0 },
       select: { id: true, name: true, email: true, role: true, isActive: true, commissionPercent: true },
     });
     res.status(201).json(user);
@@ -922,9 +949,31 @@ usersRouter.post('/', auth, requireRole('owner'), validate(CreateUserSchema), as
 
 usersRouter.put('/:id', auth, requireRole('owner'), validate(UpdateUserSchema), async (req, res, next) => {
   try {
+    // Tenant isolation: only operate on users within the caller's business.
+    const target = await prisma.user.findFirst({
+      where: { id: req.params.id, businessId: req.user.business_id },
+      select: { id: true, role: true },
+    });
+    if (!target) return res.status(404).json({ title: 'User not found', status: 404 });
+
+    // Guardrail: never let the last active owner be demoted or deactivated,
+    // which would lock the business out of its own admin functions.
+    const demotingOrDisabling =
+      (req.body.role !== undefined && req.body.role !== 'owner') ||
+      req.body.is_active === false;
+    if (target.role === 'owner' && demotingOrDisabling) {
+      const otherOwners = await prisma.user.count({
+        where: { businessId: req.user.business_id, role: 'owner', isActive: true, id: { not: target.id } },
+      });
+      if (otherOwners === 0) {
+        return res.status(409).json({ title: 'Cannot remove the last active owner', status: 409 });
+      }
+    }
+
+    const hashedPin = req.body.pin ? await bcrypt.hash(String(req.body.pin), 10) : null;
     const user = await prisma.user.update({
-      where: { id: req.params.id },
-      data: { name: req.body.name, role: req.body.role, isActive: req.body.is_active, ...(req.body.pin !== undefined && { pin: req.body.pin || null }), ...(req.body.commission_percent !== undefined && { commissionPercent: req.body.commission_percent }) },
+      where: { id: target.id },
+      data: { name: req.body.name, role: req.body.role, isActive: req.body.is_active, ...(req.body.pin !== undefined && { pin: hashedPin }), ...(req.body.commission_percent !== undefined && { commissionPercent: req.body.commission_percent }) },
       select: { id: true, name: true, email: true, role: true, isActive: true, commissionPercent: true },
     });
     res.json(user);
@@ -954,7 +1003,13 @@ categoriesRouter.post('/', auth, requireRole('owner', 'manager'), validate(requi
 
 categoriesRouter.put('/:id', auth, requireRole('owner', 'manager'), async (req, res, next) => {
   try {
-    const cat = await prisma.category.update({ where: { id: req.params.id }, data: { name: req.body.name, description: req.body.description, color: req.body.color } });
+    // Tenant isolation: scope the update to the caller's business.
+    const result = await prisma.category.updateMany({
+      where: { id: req.params.id, businessId: req.user.business_id },
+      data: { name: req.body.name, description: req.body.description, color: req.body.color },
+    });
+    if (result.count === 0) return res.status(404).json({ title: 'Category not found', status: 404 });
+    const cat = await prisma.category.findUnique({ where: { id: req.params.id } });
     res.json(cat);
   } catch (err) { next(err); }
 });
@@ -1022,7 +1077,13 @@ customersRouter.post('/', auth, validate(CustomerSchema), async (req, res, next)
 
 customersRouter.put('/:id', auth, validate(CustomerSchema.partial()), async (req, res, next) => {
   try {
-    const customer = await prisma.customer.update({ where: { id: req.params.id }, data: { name: req.body.name, phone: req.body.phone, whatsapp: req.body.whatsapp, email: req.body.email, address: req.body.address, creditLimit: req.body.credit_limit, customerGroupId: req.body.customer_group_id, notes: req.body.notes } });
+    // Tenant isolation: scope the update to the caller's business.
+    const result = await prisma.customer.updateMany({
+      where: { id: req.params.id, businessId: req.user.business_id },
+      data: { name: req.body.name, phone: req.body.phone, whatsapp: req.body.whatsapp, email: req.body.email, address: req.body.address, creditLimit: req.body.credit_limit, customerGroupId: req.body.customer_group_id, notes: req.body.notes },
+    });
+    if (result.count === 0) return res.status(404).json({ title: 'Customer not found', status: 404 });
+    const customer = await prisma.customer.findUnique({ where: { id: req.params.id } });
     res.json(customer);
   } catch (err) { next(err); }
 });
@@ -1043,7 +1104,15 @@ const settingsRouter = express.Router();
 
 settingsRouter.get('/', auth, async (req, res, next) => {
   try {
-    const biz = await prisma.business.findUnique({ where: { id: req.user.business_id } });
+    // Whitelist the fields returned — never leak internal columns
+    // (enabledModules, market flags, billing linkage, raw timestamps).
+    const biz = await prisma.business.findUnique({
+      where: { id: req.user.business_id },
+      select: {
+        id: true, name: true, phone: true, address: true, city: true, country: true,
+        currency: true, receiptHeader: true, receiptFooter: true, taxNumber: true, language: true,
+      },
+    });
     res.json(biz);
   } catch (err) { next(err); }
 });
@@ -1052,7 +1121,7 @@ settingsRouter.put('/', auth, requireRole('owner'), validate(SettingsSchema), as
   try {
     const biz = await prisma.business.update({
       where: { id: req.user.business_id },
-      data: { name: req.body.name, phone: req.body.phone, address: req.body.address, city: req.body.city, country: req.body.country, currency: req.body.currency, receiptHeader: req.body.receipt_header, receiptFooter: req.body.receipt_footer, taxNumber: req.body.tax_number },
+      data: { name: req.body.name, phone: req.body.phone, address: req.body.address, city: req.body.city, country: req.body.country, currency: req.body.currency, receiptHeader: req.body.receipt_header, receiptFooter: req.body.receipt_footer, taxNumber: req.body.tax_number, ...(req.body.language !== undefined && { language: req.body.language }) },
     });
     res.json(biz);
   } catch (err) { next(err); }
@@ -1073,7 +1142,13 @@ notificationsRouter.get('/', auth, async (req, res, next) => {
 
 notificationsRouter.put('/:id/read', auth, async (req, res, next) => {
   try {
-    await prisma.notification.update({ where: { id: req.params.id }, data: { isRead: true } });
+    // Tenant isolation: only notifications belonging to this business and
+    // addressed to this user (or broadcast) can be marked read.
+    const result = await prisma.notification.updateMany({
+      where: { id: req.params.id, businessId: req.user.business_id, OR: [{ userId: req.user.id }, { userId: null }] },
+      data: { isRead: true },
+    });
+    if (result.count === 0) return res.status(404).json({ title: 'Notification not found', status: 404 });
     res.json({ message: 'Marked as read.' });
   } catch (err) { next(err); }
 });
@@ -1102,21 +1177,31 @@ expensesRouter.get('/', auth, async (req, res, next) => {
 expensesRouter.post('/', auth, validate(ExpenseSchema), async (req, res, next) => {
   try {
     const { category_id, location_id, amount, date, payment_status, expense_for, note, is_refund } = req.body;
-    const expense = await prisma.expense.create({
-      data: {
-        businessId: req.user.business_id,
-        categoryId: category_id || null,
-        locationId: location_id || null,
-        expenseNumber: `EXP-${Date.now()}`,
-        amount,
-        paymentStatus: payment_status || 'paid',
-        expenseFor: expense_for || null,
-        note: note || null,
-        isRefund: is_refund || false,
-        expenseDate: date ? new Date(date) : new Date(),
-        createdById: req.user.id,
-      },
-      include: { category: { select: { name: true } }, location: { select: { name: true } } },
+    const expense = await prisma.$transaction(async (tx) => {
+      const e = await tx.expense.create({
+        data: {
+          businessId: req.user.business_id,
+          categoryId: category_id || null,
+          locationId: location_id || null,
+          expenseNumber: `EXP-${Date.now()}`,
+          amount,
+          paymentStatus: payment_status || 'paid',
+          expenseFor: expense_for || null,
+          note: note || null,
+          isRefund: is_refund || false,
+          expenseDate: date ? new Date(date) : new Date(),
+          createdById: req.user.id,
+        },
+        include: { category: { select: { name: true } }, location: { select: { name: true } } },
+      });
+      // GL: record the expense against cash (or payables if unpaid).
+      await accounting.postExpense(tx, {
+        businessId: req.user.business_id, amount,
+        paid: (payment_status || 'paid') === 'paid', isRefund: is_refund || false,
+        description: e.category?.name ? `Expense — ${e.category.name}` : 'Operating expense',
+        sourceId: e.id, createdById: req.user.id,
+      });
+      return e;
     });
     res.status(201).json(expense);
   } catch (err) { next(err); }
