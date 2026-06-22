@@ -7,6 +7,8 @@ import { useViewport } from '@/components/kit';
 import { usePathname, useRouter } from 'next/navigation';
 import { ApiPanel } from '@/components/api-panel';
 import { LanguageSwitcher } from '@/components/language-switcher';
+import { useLocale } from '@/lib/locale-context';
+import { navLabel } from '@/lib/i18n';
 import { isNavBlocked, setNavBlock, navBlockMessage, navBlockTitle } from '@/lib/nav-guard';
 
 // ─────────────────────────────────────────────────────────────────
@@ -78,6 +80,7 @@ const NAV_MODULE: Record<string, string> = {
 };
 
 export function Sidebar({ T, screen, setScreen, collapsed, setCollapsed, onLogout, onLock, mobile, enabledMods }: any) {
+  const { locale } = useLocale();
   const W = collapsed ? 68 : 244;
   const S = T.side;
   // Show a module's nav item only when it's enabled. `enabledMods === 'all'`
@@ -134,7 +137,7 @@ export function Sidebar({ T, screen, setScreen, collapsed, setCollapsed, onLogou
               <div style={{
                 fontSize: 9.5, letterSpacing: 1.5, fontWeight: 700, textTransform: 'uppercase',
                 color: S.section, padding: '12px 20px 5px',
-              } as React.CSSProperties}>{group.sect}</div>
+              } as React.CSSProperties}>{navLabel(locale, group.sect, group.sect)}</div>
             )}
             {group.sect && collapsed && <div style={{ height: 1, background: S.line, margin: '8px 16px' }} />}
             {group.items.map((item: any) => {
@@ -158,7 +161,7 @@ export function Sidebar({ T, screen, setScreen, collapsed, setCollapsed, onLogou
                   onMouseLeave={e => { if (!active) e.currentTarget.style.background = item.highlight ? S.highlight : 'transparent'; }}
                 >
                   <span style={{ fontSize: 16, width: 20, textAlign: 'center', flexShrink: 0, opacity: active ? 1 : 0.8 } as React.CSSProperties}>{item.icon}</span>
-                  {!collapsed && <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.label}</span>}
+                  {!collapsed && <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{navLabel(locale, item.id, item.label)}</span>}
                   {!collapsed && item.badge && (
                     <span style={{
                       fontSize: 8.5, fontWeight: 800, letterSpacing: 0.5, padding: '2px 6px', borderRadius: 20,

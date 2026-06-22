@@ -70,6 +70,49 @@ const MESSAGES = {
 
 export type MessageKey = keyof typeof MESSAGES;
 
+// ── Navigation labels ──────────────────────────────────────────────
+// Keyed by nav id / section name, this is a SEPARATE, partial map: items we have
+// a confident Somali/Arabic term for are translated, the long tail falls back to
+// the English label. Partial translation with graceful fallback is a normal i18n
+// adoption state — better than shipping a shaky guess for every technical term.
+const NAV_LABELS: Record<string, Partial<Record<Locale, string>>> = {
+  // sections
+  'Inventory':   { so: 'Alaabta', ar: 'المخزون' },
+  'Sales':       { so: 'Iibinta', ar: 'المبيعات' },
+  'Verticals':   { so: 'Qaybaha', ar: 'القطاعات' },
+  'Finance':     { so: 'Maaliyadda', ar: 'المالية' },
+  'Team':        { so: 'Kooxda', ar: 'الفريق' },
+  'Insights':    { so: 'Fahamka', ar: 'التحليلات' },
+  'Admin':       { so: 'Maamulka', ar: 'الإدارة' },
+  // items
+  'dashboard':       { so: 'Shaxda guud', ar: 'لوحة التحكم' },
+  'pos':             { so: 'Iibka', ar: 'نقطة البيع' },
+  'locations':       { so: 'Goobaha', ar: 'المواقع' },
+  'categories':      { so: 'Qaybaha', ar: 'الفئات' },
+  'products':        { so: 'Alaabta', ar: 'المنتجات' },
+  'stock':           { so: 'Bakhaarka', ar: 'المخزون' },
+  'suppliers':       { so: 'Alaab-qeybiyeyaasha', ar: 'الموردون' },
+  'sales':           { so: 'Taariikhda iibka', ar: 'سجل المبيعات' },
+  'customers':       { so: 'Macaamiisha', ar: 'العملاء' },
+  'loyalty':         { so: 'Daacadnimada', ar: 'الولاء' },
+  'discounts':       { so: 'Qiimo-dhimista', ar: 'الخصومات' },
+  'hotel':           { so: 'Hudheelka', ar: 'الفندق' },
+  'restaurant':      { so: 'Maqaaxida', ar: 'المطعم' },
+  'pharmacy':        { so: 'Farmashiyaha', ar: 'الصيدلية' },
+  'wholesale':       { so: 'Jumlada', ar: 'الجملة' },
+  'construction':    { so: 'Dhismaha', ar: 'الإنشاءات' },
+  'expenses':        { so: 'Kharashaadka', ar: 'المصروفات' },
+  'reports':         { so: 'Warbixinno', ar: 'التقارير' },
+  'users':           { so: 'Isticmaalayaasha', ar: 'المستخدمون' },
+  'settings':        { so: 'Dejinta', ar: 'الإعدادات' },
+};
+
+/** Localize a nav item/section label, falling back to the English label given. */
+export function navLabel(locale: Locale, idOrSection: string, fallback: string): string {
+  if (locale === 'en') return fallback;
+  return NAV_LABELS[idOrSection]?.[locale] ?? fallback;
+}
+
 /**
  * Translate a key for a locale, falling back to English, then the key itself.
  * Supports `{name}`-style interpolation.
