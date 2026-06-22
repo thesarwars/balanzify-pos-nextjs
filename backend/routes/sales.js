@@ -13,6 +13,7 @@ const { generateReceiptToken, receiptUrl, generateWhatsAppReceipt } = require('.
 const creditEngine = require('../lib/credit');
 const accounting = require('../lib/accounting');
 const financing = require('../lib/financing');
+const fiscal = require('../lib/fiscalization');
 const router = express.Router();
 
 // ── Cart fingerprint ──────────────────────────────────────────────────────────
@@ -933,6 +934,20 @@ async function createSale(req) {
         }
       } catch (waErr) {
         logger.warn('auto_whatsapp_receipt_failed', { message: waErr.message, sale_id: result.id });
+      }
+    }
+
+    // Fiscalize — sign the sale for the tax authority if the business has a fiscal
+    // device. Best-effort and offline-safe: a failure leaves the sale unsigned in
+    // the /fiscal/pending queue rather than blocking the sale. No-op when disabled.
+    if (!result._retry) {
+      try {
+        const fr = await fiscal.fiscalizeSale(result.id, req.user.business_id);
+        if (fr && !fr.skipped) {
+          result._fiscal = { invoice_label: fr.invoiceLabel, verification_code: fr.verificationCode, qr_data: fr.qrData };
+        }
+      } catch (fErr) {
+        logger.warn('auto_fiscalize_failed', { message: fErr.message, sale_id: result.id });
       }
     }
 

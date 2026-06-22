@@ -262,6 +262,8 @@ model Business {
   notifications      Notification[]
   saleKeys           SaleKey[]
   syncDevices        SyncDevice[]
+  fiscalConfig       FiscalConfig?
+  fiscalReceipts     FiscalReceipt[]
   refreshTokens      RefreshToken[]
   exchangeRates      ExchangeRate[]
   reorderSuggestions ReorderSuggestion[]
@@ -1629,10 +1631,56 @@ model Sale {
   payments      SalePayment[]
   creditLedger  CreditLedger[]
   paymentPlans  PaymentPlan[]
+  fiscalReceipt FiscalReceipt?
 
   @@index([businessId, createdAt])
   @@index([shiftId])
   @@map("sales")
+}
+
+// Per-business fiscalization device. African tax authorities (Kenya eTIMS,
+// Tanzania VFD, Rwanda EBM) require every sale to be signed by a registered
+// fiscal device and reported. We model the on-device signer + a tamper-evident
+// signature chain (each receipt signs over the previous), which is offline-first
+// by design: sign locally now, transmit when connectivity returns.
+model FiscalConfig {
+  id               String   @id @default(uuid()) @db.Uuid
+  businessId       String   @unique @map("business_id") @db.Uuid
+  jurisdiction     String   @default("none") @db.VarChar(20) // none|etims|efd|ebm
+  deviceSerial     String?  @map("device_serial") @db.VarChar(64)
+  deviceKey        String?  @map("device_key") @db.VarChar(128)
+  enabled          Boolean  @default(false)
+  lastFiscalNumber Int      @default(0) @map("last_fiscal_number")
+  lastSignature    String?  @map("last_signature") @db.VarChar(128)
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @default(now()) @updatedAt @map("updated_at")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@map("fiscal_config")
+}
+
+model FiscalReceipt {
+  id               String    @id @default(uuid()) @db.Uuid
+  businessId       String    @map("business_id") @db.Uuid
+  saleId           String    @unique @map("sale_id") @db.Uuid
+  jurisdiction     String    @db.VarChar(20)
+  fiscalNumber     Int       @map("fiscal_number")
+  invoiceLabel     String    @map("invoice_label") @db.VarChar(48)
+  signature        String    @db.VarChar(128)
+  verificationCode String    @unique @map("verification_code") @db.VarChar(48)
+  qrData           String    @map("qr_data")
+  deviceSerial     String?   @map("device_serial") @db.VarChar(64)
+  prevSignature    String?   @map("prev_signature") @db.VarChar(128)
+  status           String    @default("signed") @db.VarChar(20) // signed|transmitted|failed
+  transmittedAt    DateTime? @map("transmitted_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  sale     Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+
+  @@index([businessId, status])
+  @@map("fiscal_receipts")
 }
 
 model SaleItem {
