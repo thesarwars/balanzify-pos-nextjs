@@ -1066,6 +1066,70 @@ describe('pharmacy prescriptions & controlled substances', () => {
   });
 });
 
+describe('pharmacy drug-interaction checking (clinical safety)', () => {
+  let token, loc;
+  beforeAll(async () => {
+    token = await register();
+    await enableModule(token, 'pharmacy');
+    loc = await location(token);
+  });
+  async function drug(generic) {
+    const id = await stockedProduct(token, loc, 5, 100);
+    await prisma.product.update({ where: { id }, data: { genericName: generic, isPrescriptionDrug: true } });
+    return id;
+  }
+
+  test('ad-hoc check flags a major interaction from the shipped KB', async () => {
+    const r = await request(app).post('/api/v1/pharmacy/interactions/check').set(auth(token))
+      .send({ drugs: ['warfarin', 'Aspirin 100mg'] }); // brand/strength still matches the generic
+    expect(r.status).toBe(200);
+    expect(r.body.interactions.length).toBeGreaterThan(0);
+    expect(r.body.interactions[0].severity).toBe('major');
+    expect(r.body.has_contraindication).toBe(false);
+  });
+
+  test('check by product ids detects a contraindication', async () => {
+    const clari = await drug('clarithromycin');
+    const simva = await drug('simvastatin');
+    const r = await request(app).post('/api/v1/pharmacy/interactions/check').set(auth(token))
+      .send({ product_ids: [clari, simva] });
+    expect(r.body.has_contraindication).toBe(true);
+    expect(r.body.interactions[0].severity).toBe('contraindicated');
+  });
+
+  test('dispense is blocked by a contraindication with the patient\'s active meds, unless overridden', async () => {
+    const simva = await drug('simvastatin');
+    const clari = await drug('clarithromycin');
+    // patient is already on simvastatin (an active prescription = their med list)
+    await request(app).post('/api/v1/pharmacy/prescriptions').set(auth(token)).send({
+      product_id: simva, patient_name: 'Khadija', prescriber_name: 'Dr Nur', quantity: 30,
+    });
+    // now a clarithromycin script for the same patient
+    const rx = (await request(app).post('/api/v1/pharmacy/prescriptions').set(auth(token)).send({
+      product_id: clari, patient_name: 'Khadija', prescriber_name: 'Dr Nur', quantity: 14,
+    })).body;
+
+    // dispensing it is blocked — contraindicated with the patient's simvastatin
+    const blocked = await request(app).post(`/api/v1/pharmacy/prescriptions/${rx.id}/dispense`).set(auth(token)).send({ location_id: loc });
+    expect(blocked.status).toBe(409);
+    expect(blocked.body.interactions[0].severity).toBe('contraindicated');
+
+    // an explicit override proceeds, surfacing the warning on the record
+    const ok = await request(app).post(`/api/v1/pharmacy/prescriptions/${rx.id}/dispense`).set(auth(token)).send({ location_id: loc, override: true });
+    expect(ok.status).toBe(201);
+    expect(ok.body.interactions.length).toBeGreaterThan(0);
+  });
+
+  test('a business can add its own interaction rule', async () => {
+    const add = await request(app).post('/api/v1/pharmacy/interactions').set(auth(token))
+      .send({ drug_a: 'localdrugx', drug_b: 'localdrugy', severity: 'major', description: 'House formulary rule.' });
+    expect(add.status).toBe(201);
+    const r = await request(app).post('/api/v1/pharmacy/interactions/check').set(auth(token))
+      .send({ drugs: ['LocalDrugX', 'localdrugy 50mg'] });
+    expect(r.body.interactions.find(i => i.severity === 'major')).toBeTruthy();
+  });
+});
+
 describe('restaurant checkout (in-process sale service — no HTTP self-call)', () => {
   let token, loc, prod;
   beforeAll(async () => {
