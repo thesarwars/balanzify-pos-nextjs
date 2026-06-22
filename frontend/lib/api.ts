@@ -2797,6 +2797,11 @@ const API: any = {
     async updateDrug(id: any, body: any) { if (REAL_MODE) return await realReq('PUT', '/pharmacy/drugs/' + id, { body }); throw new ApiError(501, 'Pharmacy needs the live backend.'); },
     async fastMovers(days?: any) { if (REAL_MODE) { const r = await realReq('GET', '/pharmacy/fast-movers', { query: days ? { days } : undefined }); return r.fast_movers || []; } return []; },
     async pullExpired(batchId: any, notes?: any) { if (REAL_MODE) return await realReq('POST', '/pharmacy/pull-expired', { body: { batch_id: batchId, notes } }); throw new ApiError(501, 'Pharmacy needs the live backend.'); },
+    async createDrug(body: any) { if (REAL_MODE) return await realReq('POST', '/pharmacy/drugs', { body }); throw new ApiError(501, 'Pharmacy needs the live backend.'); },
+    async receiveBatch(body: any) { if (REAL_MODE) return await realReq('POST', '/pharmacy/batches', { body }); throw new ApiError(501, 'Pharmacy needs the live backend.'); },
+    async prescriptions(query?: any) { if (REAL_MODE) { const r = await realReq('GET', '/pharmacy/prescriptions', { query }); return r.prescriptions || []; } return []; },
+    async createPrescription(body: any) { if (REAL_MODE) return await realReq('POST', '/pharmacy/prescriptions', { body }); throw new ApiError(501, 'Pharmacy needs the live backend.'); },
+    async dispensePrescription(id: any, body: any) { if (REAL_MODE) return await realReq('POST', '/pharmacy/prescriptions/' + id + '/dispense', { body }); throw new ApiError(501, 'Pharmacy needs the live backend.'); },
   },
 
   // Wholesale (/api/v1/wholesale) — gated by the wholesale module. Real only.
