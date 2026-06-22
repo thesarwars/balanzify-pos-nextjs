@@ -3814,6 +3814,8 @@ const API: any = {
   rx: {
     checkInteractions(body: { drugs?: string[]; product_ids?: string[]; patient_id?: string; patient_name?: string }): Promise<{ checked: string[]; interactions: DrugInteractionResult[]; has_contraindication: boolean }> { return realReq('POST', '/pharmacy/interactions/check', { body }); },
     interactions(): Promise<{ interactions: (DrugInteractionResult & { id: string; custom: boolean })[] }> { return realReq('GET', '/pharmacy/interactions'); },
+    addInteraction(body: { drug_a: string; drug_b: string; severity: InteractionSeverity; description: string }): Promise<DrugInteractionResult & { id: string }> { return realReq('POST', '/pharmacy/interactions', { body }); },
+    deleteInteraction(id: string): Promise<{ ok: boolean }> { return realReq('DELETE', '/pharmacy/interactions/' + id); },
   },
 
   // Public consumer storefront (no auth) — browse a shop and place a delivery order.
