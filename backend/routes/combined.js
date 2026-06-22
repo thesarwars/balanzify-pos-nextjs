@@ -1110,7 +1110,7 @@ settingsRouter.get('/', auth, async (req, res, next) => {
       where: { id: req.user.business_id },
       select: {
         id: true, name: true, phone: true, address: true, city: true, country: true,
-        currency: true, receiptHeader: true, receiptFooter: true, taxNumber: true,
+        currency: true, receiptHeader: true, receiptFooter: true, taxNumber: true, language: true,
       },
     });
     res.json(biz);
@@ -1121,7 +1121,7 @@ settingsRouter.put('/', auth, requireRole('owner'), validate(SettingsSchema), as
   try {
     const biz = await prisma.business.update({
       where: { id: req.user.business_id },
-      data: { name: req.body.name, phone: req.body.phone, address: req.body.address, city: req.body.city, country: req.body.country, currency: req.body.currency, receiptHeader: req.body.receipt_header, receiptFooter: req.body.receipt_footer, taxNumber: req.body.tax_number },
+      data: { name: req.body.name, phone: req.body.phone, address: req.body.address, city: req.body.city, country: req.body.country, currency: req.body.currency, receiptHeader: req.body.receipt_header, receiptFooter: req.body.receipt_footer, taxNumber: req.body.tax_number, ...(req.body.language !== undefined && { language: req.body.language }) },
     });
     res.json(biz);
   } catch (err) { next(err); }

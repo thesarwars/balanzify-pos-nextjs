@@ -230,6 +230,7 @@ model Business {
   city          String?  @db.VarChar(100)
   country       String?  @default("Somaliland") @db.VarChar(100)
   currency      String?  @default("USD") @db.VarChar(10)
+  language      String   @default("en") @db.VarChar(5) // en | so | ar (ar drives RTL)
   logoUrl       String?  @map("logo_url")
   logoKey       String?  @map("logo_key")
   receiptHeader String?  @map("receipt_header")

@@ -426,6 +426,7 @@ const SettingsSchema = z.object({
   receipt_header: optStr(500),
   receipt_footer: optStr(500),
   tax_number: optStr(100),
+  language: z.enum(['en', 'so', 'ar']).optional(),
 });
 
 const CategorySchema = z.object({
