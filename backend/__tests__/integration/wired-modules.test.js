@@ -1343,4 +1343,59 @@ describe('fiscalization (tax-authority compliance: eTIMS / VFD / EBM)', () => {
   });
 });
 
+describe('Islamic markets — Hijri calendar, Zakat, localization', () => {
+  let token, loc, prod;
+  beforeAll(async () => {
+    token = await register();
+    loc = await location(token);
+    prod = await stockedProduct(token, loc, 20, 100);
+  });
+
+  test('Hijri: a Gregorian date converts via Umm al-Qura, with localized month names', async () => {
+    const r = await request(app).get('/api/v1/islamic/hijri/convert').set(auth(token)).query({ date: '2025-03-01', lang: 'en' });
+    expect(r.status).toBe(200);
+    expect(r.body.hijri.year).toBe(1446);
+    expect(r.body.hijri.month).toBe(9);          // Ramadan
+    expect(r.body.hijri.is_ramadan).toBe(true);
+    expect(r.body.hijri.month_name).toBe('Ramadan');
+    // Arabic month name for the RTL markets
+    const ar = await request(app).get('/api/v1/islamic/hijri/convert').set(auth(token)).query({ date: '2025-03-01', lang: 'ar' });
+    expect(ar.body.hijri.month_name).toBe('رمضان');
+    // a non-Ramadan date
+    const dec = await request(app).get('/api/v1/islamic/hijri/convert').set(auth(token)).query({ date: '2025-12-01' });
+    expect(dec.body.hijri.is_ramadan).toBe(false);
+  });
+
+  test('localization reflects the business language and the RTL flag follows Arabic', async () => {
+    let l = (await request(app).get('/api/v1/islamic/localization').set(auth(token))).body;
+    expect(l.language).toBe('en');
+    expect(l.is_rtl).toBe(false);
+    expect(l.supported.find(s => s.code === 'so')).toBeTruthy();
+
+    const upd = await request(app).put('/api/v1/settings').set(auth(token)).send({ name: 'Suuq', currency: 'USD', language: 'ar' });
+    expect(upd.status).toBe(200);
+    l = (await request(app).get('/api/v1/islamic/localization').set(auth(token))).body;
+    expect(l.language).toBe('ar');
+    expect(l.is_rtl).toBe(true);
+  });
+
+  test('Zakat is derived from the ledger at 2.5%, gated by nisab', async () => {
+    await makeSale(token, loc, prod, { qty: 5, price: 20 }); // posts 100 cash into the GL
+    const a = (await request(app).get('/api/v1/islamic/zakat/assessment').set(auth(token)).query({ nisab: 10 })).body;
+    expect(a.rate).toBe(0.025);
+    expect(a.assets).toBeGreaterThan(0);
+    expect(a.base).toBeCloseTo(a.assets - a.liabilities, 2);      // base = zakatable assets − liabilities
+    expect(a.meets_nisab).toBe(true);
+    expect(a.due).toBe(true);
+    expect(a.amount).toBeCloseTo(+(a.base * 0.025).toFixed(2), 2); // 2.5%
+    expect(a.as_of_hijri).toMatch(/AH$/);
+
+    // wealth below nisab → not due, nothing payable
+    const b = (await request(app).get('/api/v1/islamic/zakat/assessment').set(auth(token)).query({ nisab: 1000000 })).body;
+    expect(b.meets_nisab).toBe(false);
+    expect(b.due).toBe(false);
+    expect(b.amount).toBe(0);
+  });
+});
+
 afterAll(async () => { await prisma.$disconnect(); });
