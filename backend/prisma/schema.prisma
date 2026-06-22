@@ -122,8 +122,11 @@ enum PaymentMethod {
   cash
   zaad
   evc
+  edahab
   mpesa
   telebirr
+  cbe_birr
+  mobile_money
   visa
   mastercard
   split

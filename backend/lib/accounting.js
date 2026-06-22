@@ -44,8 +44,8 @@ const CHART = [
 function tenderAccountCode(method) {
   switch ((method || 'cash').toLowerCase()) {
     case 'cash':                                   return '1000';
-    case 'zaad': case 'evc': case 'mpesa':
-    case 'telebirr': case 'mobile_money':          return '1010';
+    case 'zaad': case 'evc': case 'edahab': case 'mpesa':
+    case 'telebirr': case 'cbe_birr': case 'mobile_money': return '1010';
     case 'card': case 'stripe': case 'visa':
     case 'mastercard': case 'moov': case 'bank':   return '1020';
     case 'credit':                                 return '1100'; // billed to customer account
