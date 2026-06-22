@@ -37,9 +37,11 @@ router.get('/:businessId/catalog', async (req, res, next) => {
       select: { id: true, name: true, sellingPrice: true, unitOfMeasure: true, imageUrl: true },
       orderBy: { name: 'asc' }, take: 500,
     });
+    const zones = await prisma.deliveryZone.findMany({ where: { businessId: biz.id, isActive: true }, orderBy: { name: 'asc' } });
     res.json({
       shop: { id: biz.id, name: biz.name, currency: biz.currency || 'USD' },
       products: products.map(p => ({ id: p.id, name: p.name, price: parseFloat(p.sellingPrice), unit: p.unitOfMeasure, image: p.imageUrl || null })),
+      zones: zones.map(z => ({ id: z.id, name: z.name, fee: parseFloat(z.fee) })),
     });
   } catch (err) { next(err); }
 });
@@ -50,11 +52,19 @@ router.post('/:businessId/order', validate(z.object({
   phone: z.string().trim().max(50).optional().nullable(),
   address: z.string().trim().min(1),
   items: z.array(z.object({ product_id: z.string().uuid(), quantity: z.coerce.number().int().positive().max(999) })).min(1).max(100),
+  zone_id: z.string().uuid().optional().nullable(),
   note: z.string().max(500).optional().nullable(),
 })), async (req, res, next) => {
   try {
     const biz = await openShop(req.params.businessId);
     if (!biz) return res.status(404).json({ title: 'Shop not found or not accepting orders', status: 404 });
+
+    // Delivery fee comes from the chosen zone (server-side; consumer can't set it).
+    let fee = 0, zoneId = null;
+    if (req.body.zone_id) {
+      const zone = await prisma.deliveryZone.findFirst({ where: { id: req.body.zone_id, businessId: biz.id, isActive: true } });
+      if (zone) { fee = parseFloat(zone.fee); zoneId = zone.id; }
+    }
 
     const ids = [...new Set(req.body.items.map(i => i.product_id))];
     const prods = await prisma.product.findMany({ where: { businessId: biz.id, id: { in: ids }, isActive: true }, select: { id: true, name: true, sellingPrice: true } });
@@ -72,11 +82,11 @@ router.post('/:businessId/order', validate(z.object({
     const delivery = await prisma.delivery.create({
       data: {
         businessId: biz.id, customerName: req.body.customer_name, customerPhone: req.body.phone || null,
-        address: req.body.address, channel: 'web', itemsSummary: lines.join(', '),
-        orderAmount: +amount.toFixed(2), deliveryFee: 0, paymentMode: 'cod', status: 'pending',
+        address: req.body.address, channel: 'web', itemsSummary: lines.join(', '), zoneId,
+        orderAmount: +amount.toFixed(2), deliveryFee: fee, paymentMode: 'cod', status: 'pending',
       },
     });
-    res.status(201).json({ order_id: delivery.id, status: delivery.status, order_amount: parseFloat(delivery.orderAmount), items: lines });
+    res.status(201).json({ order_id: delivery.id, status: delivery.status, order_amount: parseFloat(delivery.orderAmount), delivery_fee: fee, items: lines });
   } catch (err) { next(err); }
 });
 
