@@ -116,6 +116,16 @@ const MODULES = {
     routes: ['/api/v1/construction'],
   },
 
+  delivery: {
+    key: 'delivery',
+    default: false,
+    name: 'Balanzify Delivery',
+    description: 'Consumer ordering + driver dispatch: take delivery orders (WhatsApp/web/POS), auto-match an available driver, track pickup→delivery, and post the delivery fee to the ledger. Built on the merchants and catalogs already on the platform.',
+    standalone: false,
+    requires: ['core', 'pos'],
+    routes: ['/api/v1/delivery'],
+  },
+
   operations: {
     key: 'operations',
     name: 'Balanzify Operations',
@@ -149,7 +159,7 @@ const MODULES = {
 // Monthly price (USD) for each paid add-on — authoritative source for billing.
 const MODULE_PRICES = {
   pharmacy: 15, hotel: 25, restaurant: 19, credit: 9, insights: 12,
-  wholesale: 14, construction: 22, hrm: 18, superadmin: 39,
+  wholesale: 14, construction: 22, hrm: 18, superadmin: 39, delivery: 12,
 };
 const modulePrice = (key) => MODULE_PRICES[key] || 0;
 
