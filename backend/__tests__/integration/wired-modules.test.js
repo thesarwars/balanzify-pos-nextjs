@@ -921,6 +921,61 @@ describe('financial statements (P&L + balance sheet from the ledger)', () => {
   });
 });
 
+describe('accounting — manual journal entry + AR aging', () => {
+  let token, bizId;
+  beforeAll(async () => {
+    token = await register();
+    bizId = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString()).businessId;
+  });
+
+  test('manual journal: balanced posts, unbalanced and unknown-code are rejected', async () => {
+    // balanced adjustment: Dr Operating Expenses 15 / Cr Cash 15
+    const ok = await request(app).post('/api/v1/accounting/journal').set(auth(token)).send({
+      description: 'Owner reimbursement', lines: [
+        { code: '5200', debit: 15, description: 'Sundry' },
+        { code: '1000', credit: 15 },
+      ],
+    });
+    expect(ok.status).toBe(201);
+
+    // it shows up and the books stay balanced
+    const tb = (await request(app).get('/api/v1/accounting/trial-balance').set(auth(token))).body;
+    expect(tb.totals.balanced).toBe(true);
+    expect(tb.accounts.find(a => a.code === '5200').balance).toBeCloseTo(15, 2);
+
+    // unbalanced → 400
+    expect((await request(app).post('/api/v1/accounting/journal').set(auth(token)).send({
+      description: 'bad', lines: [{ code: '5200', debit: 10 }, { code: '1000', credit: 7 }],
+    })).status).toBe(400);
+
+    // unknown account code → 400
+    expect((await request(app).post('/api/v1/accounting/journal').set(auth(token)).send({
+      description: 'bad', lines: [{ code: '9999', debit: 5 }, { code: '1000', credit: 5 }],
+    })).status).toBe(400);
+  });
+
+  test('AR aging buckets open charges by age, applying payments FIFO', async () => {
+    const cust = (await request(app).post('/api/v1/customers').set(auth(token)).send({ name: 'Ageing Cust', phone: '0612000' })).body;
+    const day = 86400000;
+    const at = (d) => new Date(Date.now() - d * day);
+    // two charges (100 old @ 75 days, 60 recent @ 10 days) and a 40 payment → FIFO clears
+    // the oldest first: 100-40 = 60 left in 61-90, plus 60 in 0-30.
+    await prisma.creditLedger.createMany({ data: [
+      { businessId: bizId, customerId: cust.id, type: 'purchase', amount: 100, direction: 'debit', balanceAfter: 100, createdAt: at(75) },
+      { businessId: bizId, customerId: cust.id, type: 'purchase', amount: 60, direction: 'debit', balanceAfter: 160, createdAt: at(10) },
+      { businessId: bizId, customerId: cust.id, type: 'repayment', amount: 40, direction: 'credit', balanceAfter: 120, createdAt: at(5) },
+    ] });
+
+    const aging = (await request(app).get('/api/v1/accounting/aging').set(auth(token))).body;
+    const row = aging.customers.find(c => c.customer_id === cust.id);
+    expect(row).toBeTruthy();
+    expect(row.b61_90).toBeCloseTo(60, 2);   // 100 charge − 40 payment (FIFO)
+    expect(row.b0_30).toBeCloseTo(60, 2);     // recent charge untouched
+    expect(row.total).toBeCloseTo(120, 2);
+    expect(aging.totals.total).toBeGreaterThanOrEqual(120);
+  });
+});
+
 describe('lending — underwriting from the ledger', () => {
   test('a fresh business with no activity is not eligible', async () => {
     const token = await register();
