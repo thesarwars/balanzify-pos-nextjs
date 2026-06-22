@@ -24,6 +24,7 @@
 const express = require('express');
 const { z } = require('zod');
 const prisma = require('../lib/prisma');
+const interactions = require('../lib/druginteractions');
 const { auth, requireRole } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 
@@ -302,6 +303,75 @@ router.post('/dispense-check', auth, validate(z.object({
   } catch (err) { next(err); }
 });
 
+// ── DRUG INTERACTIONS ─────────────────────────────────────────────
+
+// The generic (or trade) names of a patient's other active medications — the
+// basket we check a new drug against. Patient is matched by id when present,
+// otherwise by name (walk-in patients without a record).
+async function patientDrugNames(businessId, { patientId, patientName, excludeRxId } = {}) {
+  if (!patientId && !patientName) return [];
+  const rxs = await prisma.prescription.findMany({
+    where: {
+      businessId, status: 'active',
+      ...(excludeRxId && { id: { not: excludeRxId } }),
+      ...(patientId ? { patientId } : { patientName }),
+    },
+    include: { product: { select: { name: true, genericName: true } } },
+    take: 100,
+  });
+  return rxs.map(r => r.product?.genericName || r.product?.name).filter(Boolean);
+}
+
+// Ad-hoc interaction check: pass explicit drug names, product_ids, and/or a
+// patient to fold in their active medications.
+router.post('/interactions/check', auth, validate(z.object({
+  drugs: z.array(z.string().max(120)).optional(),
+  product_ids: z.array(uuid).optional(),
+  patient_id: uuid.optional().nullable(),
+  patient_name: z.string().max(255).optional().nullable(),
+})), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const names = [...(req.body.drugs || [])];
+    if (req.body.product_ids?.length) {
+      const prods = await prisma.product.findMany({ where: { id: { in: req.body.product_ids }, businessId }, select: { name: true, genericName: true } });
+      names.push(...prods.map(p => p.genericName || p.name));
+    }
+    if (req.body.patient_id || req.body.patient_name) {
+      names.push(...await patientDrugNames(businessId, { patientId: req.body.patient_id, patientName: req.body.patient_name }));
+    }
+    const found = await interactions.check(businessId, names);
+    res.json({ checked: [...new Set(names.map(n => n.trim()).filter(Boolean))], interactions: found, has_contraindication: interactions.hasContraindication(found) });
+  } catch (err) { next(err); }
+});
+
+// Browse the knowledge base (shipped + this business's custom rows).
+router.get('/interactions', auth, async (req, res, next) => {
+  try {
+    const rows = await prisma.drugInteraction.findMany({
+      where: { OR: [{ businessId: null }, { businessId: req.user.business_id }] },
+      orderBy: [{ drugA: 'asc' }, { drugB: 'asc' }], take: 500,
+    });
+    res.json({ interactions: rows.map(r => ({ id: r.id, drug_a: r.drugA, drug_b: r.drugB, severity: r.severity, description: r.description, custom: r.businessId != null })) });
+  } catch (err) { next(err); }
+});
+
+// Add a business-specific interaction (e.g. a local formulary rule).
+router.post('/interactions', auth, requireRole('owner', 'manager'), validate(z.object({
+  drug_a: z.string().trim().min(1).max(120),
+  drug_b: z.string().trim().min(1).max(120),
+  severity: z.enum(['minor', 'moderate', 'major', 'contraindicated']),
+  description: z.string().trim().min(1).max(1000),
+})), async (req, res, next) => {
+  try {
+    const [a, b] = [req.body.drug_a, req.body.drug_b].map(s => s.trim().toLowerCase()).sort();
+    const row = await prisma.drugInteraction.create({
+      data: { businessId: req.user.business_id, drugA: a, drugB: b, severity: req.body.severity, description: req.body.description },
+    });
+    res.status(201).json({ id: row.id, drug_a: row.drugA, drug_b: row.drugB, severity: row.severity, description: row.description });
+  } catch (err) { next(err); }
+});
+
 // ── FAST MOVERS / REORDER URGENCY ────────────────────────────────
 
 router.get('/fast-movers', auth, async (req, res, next) => {
@@ -452,18 +522,27 @@ router.post('/prescriptions/:id/dispense', auth, requireRole('owner', 'manager')
   location_id: uuid,
   quantity:    z.coerce.number().int().positive().optional(),
   verified_by: uuid.optional().nullable(),
+  override:    z.boolean().optional(), // override a contraindication (documented decision)
 })), async (req, res, next) => {
   try {
     const out = await prisma.$transaction(async (tx) => {
       const rx = await tx.prescription.findFirst({
         where: { id: req.params.id, businessId: req.user.business_id },
-        include: { product: { select: { id: true, name: true, controlledSchedule: true } } },
+        include: { product: { select: { id: true, name: true, genericName: true, controlledSchedule: true } } },
       });
       if (!rx) return { code: 404, error: 'Prescription not found.' };
       if (rx.status !== 'active') return { code: 400, error: 'Prescription is not active.' };
 
       const allowed = 1 + rx.refillsAuthorized; // original fill + authorised refills
       if (rx.refillsUsed >= allowed) return { code: 400, error: 'No refills remaining on this prescription.' };
+
+      // Clinical safety: check this drug against the patient's other active meds.
+      // A contraindication blocks the dispense unless explicitly overridden.
+      const otherMeds = await patientDrugNames(req.user.business_id, { patientId: rx.patientId, patientName: rx.patientName, excludeRxId: rx.id });
+      const interWarnings = await interactions.check(req.user.business_id, [rx.product.genericName || rx.product.name, ...otherMeds]);
+      if (interactions.hasContraindication(interWarnings) && !req.body.override) {
+        return { code: 409, error: 'Contraindicated drug interaction — dispensing blocked. Resolve, or pass override=true to proceed on a documented clinical decision.', interactions: interWarnings };
+      }
 
       // Controlled substances require a different second user to verify.
       if (rx.product.controlledSchedule) {
@@ -485,10 +564,10 @@ router.post('/prescriptions/:id/dispense', auth, requireRole('owner', 'manager')
       const newUsed = rx.refillsUsed + 1;
       await tx.prescription.update({ where: { id: rx.id }, data: { refillsUsed: newUsed, status: newUsed >= allowed ? 'completed' : 'active' } });
 
-      return { dispense, refills_remaining: Math.max(0, allowed - newUsed) };
+      return { dispense, refills_remaining: Math.max(0, allowed - newUsed), interactions: interWarnings };
     });
-    if (out.error) return res.status(out.code).json({ error: out.error });
-    res.status(201).json({ message: 'Dispensed.', dispense: out.dispense, refills_remaining: out.refills_remaining });
+    if (out.error) return res.status(out.code).json({ error: out.error, ...(out.interactions && { interactions: out.interactions }) });
+    res.status(201).json({ message: 'Dispensed.', dispense: out.dispense, refills_remaining: out.refills_remaining, interactions: out.interactions || [] });
   } catch (err) { next(err); }
 });
 
