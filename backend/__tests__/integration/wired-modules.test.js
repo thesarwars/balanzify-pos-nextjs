@@ -1609,6 +1609,42 @@ describe('delivery — consumer ordering + driver dispatch (opt-in marketplace)'
     const bid = JSON.parse(Buffer.from(t3.split('.')[1], 'base64').toString()).businessId;
     expect((await request(app).get(`/api/v1/shop/${bid}/catalog`)).status).toBe(404);
   });
+
+  test('zone sets the delivery fee on a consumer order, and proof-of-delivery is captured', async () => {
+    // merchant defines a delivery zone
+    const zone = await request(app).post('/api/v1/delivery/zones').set(auth(token)).send({ name: 'Hargeisa Central', fee: 3 });
+    expect(zone.status).toBe(201);
+    expect(zone.body.fee).toBe(3);
+
+    const loc = await location(token);
+    const prod = await stockedProduct(token, loc, 8, 50);
+    // catalog exposes zones to the consumer
+    const cat = await request(app).get(`/api/v1/shop/${bizId}/catalog`);
+    expect(cat.body.zones.find(z => z.id === zone.body.id)).toBeTruthy();
+
+    // consumer orders with a zone → fee comes from the zone (server-side)
+    const order = await request(app).post(`/api/v1/shop/${bizId}/order`).send({
+      customer_name: 'Samira', phone: '0613999', address: 'St 9', zone_id: zone.body.id,
+      items: [{ product_id: prod, quantity: 2 }],
+    });
+    expect(order.status).toBe(201);
+    expect(order.body.delivery_fee).toBe(3);
+
+    // assign a driver, then deliver WITH proof of delivery
+    const drv = await request(app).post('/api/v1/delivery/drivers').set(auth(token)).send({ name: 'Maxamed' });
+    await request(app).put(`/api/v1/delivery/drivers/${drv.body.id}/status`).set(auth(token)).send({ status: 'available' });
+    await request(app).post(`/api/v1/delivery/${order.body.order_id}/assign`).set(auth(token)).send({});
+    await request(app).put(`/api/v1/delivery/${order.body.order_id}/status`).set(auth(token)).send({ status: 'picked_up' });
+    const done = await request(app).put(`/api/v1/delivery/${order.body.order_id}/status`).set(auth(token))
+      .send({ status: 'delivered', recipient_name: 'Samira', pod_note: 'Left at gate' });
+    expect(done.body.status).toBe('delivered');
+    expect(done.body.recipient_name).toBe('Samira');
+    expect(done.body.pod_note).toBe('Left at gate');
+
+    // the fee (zone = 3) posted to delivery revenue
+    const bal = await accounting.accountBalances(bizId);
+    expect((bal.find(a => a.code === '4100') || { balance: 0 }).balance).toBeGreaterThanOrEqual(3);
+  });
 });
 
 afterAll(async () => { await prisma.$disconnect(); });
