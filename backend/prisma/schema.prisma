@@ -1823,6 +1823,8 @@ model Project {
   laborEntries LaborEntry[]       @relation("project_labor")
   siteLogs          SiteLog[]          @relation("project_site_logs")
   projectMilestones ProjectMilestone[] @relation("project_milestones")
+  changeOrders      ChangeOrder[]         @relation("project_change_orders")
+  requisitions      MaterialRequisition[] @relation("project_requisitions")
   @@map("projects")
 }
 
@@ -3751,4 +3753,59 @@ model ProjectMilestone {
 
   project Project @relation("project_milestones", fields: [projectId], references: [id], onDelete: Cascade)
   @@map("project_milestones")
+}
+
+// Change order / variation: a scope change to the contract. costImpact moves the
+// approved budget; priceImpact is what the client is billed (becomes a milestone
+// on approval). Variations untracked are where construction jobs quietly bleed.
+model ChangeOrder {
+  id          String    @id @default(uuid()) @db.Uuid
+  projectId   String    @map("project_id") @db.Uuid
+  coNumber    String    @map("co_number") @db.VarChar(40)
+  description String    @db.VarChar(500)
+  category    String    @default("other") @db.VarChar(30) // budget category the cost impact lands in
+  costImpact  Decimal   @default(0) @map("cost_impact") @db.Decimal(12, 2)
+  priceImpact Decimal   @default(0) @map("price_impact") @db.Decimal(12, 2)
+  status      String    @default("pending") @db.VarChar(20) // pending|approved|rejected
+  approvedAt  DateTime? @map("approved_at")
+  milestoneId String?   @map("milestone_id") @db.Uuid // billable milestone created on approval
+  createdById String?   @map("created_by") @db.Uuid
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  project Project @relation("project_change_orders", fields: [projectId], references: [id], onDelete: Cascade)
+  @@index([projectId])
+  @@map("change_orders")
+}
+
+// Material requisition: stock issued from inventory to a job. Relieves inventory
+// at cost (GL: COGS↔Inventory) and rolls into the project's material actuals, so
+// stock issued to a build links straight to job cost.
+model MaterialRequisition {
+  id         String   @id @default(uuid()) @db.Uuid
+  projectId  String   @map("project_id") @db.Uuid
+  reqNumber  String   @map("req_number") @db.VarChar(40)
+  status     String   @default("issued") @db.VarChar(20)
+  totalCost  Decimal  @default(0) @map("total_cost") @db.Decimal(12, 2)
+  notes      String?  @db.VarChar(500)
+  issuedById String?  @map("issued_by") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  project Project                   @relation("project_requisitions", fields: [projectId], references: [id], onDelete: Cascade)
+  items   MaterialRequisitionItem[]
+  @@index([projectId])
+  @@map("material_requisitions")
+}
+
+model MaterialRequisitionItem {
+  id            String  @id @default(uuid()) @db.Uuid
+  requisitionId String  @map("requisition_id") @db.Uuid
+  productId     String  @map("product_id") @db.Uuid
+  locationId    String  @map("location_id") @db.Uuid
+  quantity      Int
+  unitCost      Decimal @map("unit_cost") @db.Decimal(12, 2)
+  lineCost      Decimal @map("line_cost") @db.Decimal(12, 2)
+
+  requisition MaterialRequisition @relation(fields: [requisitionId], references: [id], onDelete: Cascade)
+  @@index([requisitionId])
+  @@map("material_requisition_items")
 }

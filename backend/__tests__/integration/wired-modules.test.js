@@ -771,6 +771,89 @@ describe('construction (job costing)', () => {
     expect(upd.status).toBe(200);
     expect(upd.body.status).toBe('completed');
   });
+
+  test('change orders: variation revises the budget and raises a billable milestone', async () => {
+    const t = await register();
+    await enableModule(t, 'construction');
+    const p = await request(app).post('/api/v1/projects').set(auth(t)).send({ name: 'Variation Job', budget: 1000, status: 'active' });
+    const id = p.body.id;
+    await request(app).post(`/api/v1/construction/${id}/budget-lines`).set(auth(t)).send({ category: 'materials', budgeted: 1000 });
+
+    const co = await request(app).post(`/api/v1/construction/${id}/change-orders`).set(auth(t))
+      .send({ description: 'Add retaining wall', category: 'materials', cost_impact: 500, price_impact: 800 });
+    expect(co.status).toBe(201);
+    expect(co.body.status).toBe('pending');
+
+    let listed = await request(app).get(`/api/v1/construction/${id}/change-orders`).set(auth(t));
+    expect(listed.body.summary.pending_count).toBe(1);
+
+    // approve → budget revised, milestone raised
+    const appr = await request(app).put(`/api/v1/construction/change-orders/${co.body.id}/status`).set(auth(t)).send({ status: 'approved' });
+    expect(appr.status).toBe(200);
+    expect(appr.body.status).toBe('approved');
+    expect(appr.body.milestoneId).toBeTruthy();
+
+    const costing = await request(app).get(`/api/v1/construction/${id}/costing`).set(auth(t));
+    expect(costing.body.totals.budgeted).toBe(1500); // 1000 base + 500 variation
+
+    const ms = (await request(app).get(`/api/v1/construction/${id}/milestones`).set(auth(t))).body.milestones;
+    expect(Number(ms.find(m => m.id === appr.body.milestoneId).amount)).toBe(800);
+
+    listed = await request(app).get(`/api/v1/construction/${id}/change-orders`).set(auth(t));
+    expect(listed.body.summary.approved_cost_impact).toBe(500);
+    expect(listed.body.summary.approved_price_impact).toBe(800);
+
+    // re-deciding a settled variation is rejected
+    expect((await request(app).put(`/api/v1/construction/change-orders/${co.body.id}/status`).set(auth(t)).send({ status: 'approved' })).status).toBe(422);
+
+    // a rejected variation has no budget effect
+    const co2 = await request(app).post(`/api/v1/construction/${id}/change-orders`).set(auth(t)).send({ description: 'Scope cut', cost_impact: 200, price_impact: 0 });
+    expect((await request(app).put(`/api/v1/construction/change-orders/${co2.body.id}/status`).set(auth(t)).send({ status: 'rejected' })).status).toBe(200);
+    const costing2 = await request(app).get(`/api/v1/construction/${id}/costing`).set(auth(t));
+    expect(costing2.body.totals.budgeted).toBe(1500); // unchanged by the rejected CO
+  });
+
+  test('material requisition: issues stock to the job — relieves inventory, books COGS, rolls into job cost', async () => {
+    const t = await register();
+    await enableModule(t, 'construction');
+    const l = await location(t);
+    const prod = await stockedProduct(t, l, 20, 100); // cost 5, stock 100
+    const p = await request(app).post('/api/v1/projects').set(auth(t)).send({ name: 'Build', budget: 1000, status: 'active' });
+    const id = p.body.id;
+    const bizId = (await prisma.project.findUnique({ where: { id } })).businessId;
+    const atOf = (bal, c) => (bal.find(a => a.code === c) || { balance: 0 }).balance;
+    const inv0 = atOf(await accounting.accountBalances(bizId), '1200');
+
+    // issue 10 units (cost 5 each = 50) to the job
+    const r = await request(app).post(`/api/v1/construction/${id}/requisitions`).set(auth(t))
+      .send({ location_id: l, notes: 'Foundation pour', items: [{ product_id: prod, quantity: 10 }] });
+    expect(r.status).toBe(201);
+    expect(Number(r.body.totalCost)).toBe(50);
+    expect(r.body.items[0].quantity).toBe(10);
+
+    // stock relieved: 100 - 10 = 90
+    const lvl = await prisma.stockLevel.findFirst({ where: { productId: prod, locationId: l } });
+    expect(lvl.quantity).toBe(90);
+
+    // GL: COGS +50, inventory -50, books balanced
+    const after = await accounting.accountBalances(bizId);
+    expect(atOf(after, '5000')).toBeCloseTo(50, 2);
+    expect(atOf(after, '1200') - inv0).toBeCloseTo(-50, 2);
+
+    // job cost rolls up the issue under materials actual
+    const costing = await request(app).get(`/api/v1/construction/${id}/costing`).set(auth(t));
+    expect(costing.body.totals.actual).toBeCloseTo(50, 2);
+
+    // can't over-issue what isn't on hand
+    const over = await request(app).post(`/api/v1/construction/${id}/requisitions`).set(auth(t))
+      .send({ location_id: l, items: [{ product_id: prod, quantity: 9999 }] });
+    expect(over.status).toBe(400);
+
+    // list reflects the issued requisition
+    const list = await request(app).get(`/api/v1/construction/${id}/requisitions`).set(auth(t));
+    expect(list.status).toBe(200);
+    expect(list.body.total_cost).toBeCloseTo(50, 2);
+  });
 });
 
 describe('wholesale', () => {

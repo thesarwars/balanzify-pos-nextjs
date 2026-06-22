@@ -253,4 +253,205 @@ router.put('/milestones/:msId/status', auth, validate(z.object({
   } catch (err) { next(err); }
 });
 
+// ── Change orders / variations ──────────────────────────────────────
+const coNum  = () => `CO-${Date.now().toString(36).toUpperCase()}${Math.floor(Math.random() * 99)}`;
+const reqNum = () => `REQ-${Date.now().toString(36).toUpperCase()}${Math.floor(Math.random() * 99)}`;
+
+// Raise a variation against the contract.
+router.post('/:id/change-orders', auth, requireRole('owner', 'manager'), validate(z.object({
+  description: z.string().min(1).max(500),
+  category: z.enum(['materials', 'labor', 'subcontract', 'equipment', 'other']).default('other'),
+  cost_impact: z.coerce.number().default(0),   // +/- to the job's budgeted cost
+  price_impact: z.coerce.number().default(0),  // +/- billed to the client
+})), async (req, res, next) => {
+  try {
+    const project = await ownProject(req, res); if (!project) return;
+    const co = await prisma.changeOrder.create({
+      data: {
+        projectId: project.id, coNumber: coNum(), description: req.body.description,
+        category: req.body.category, costImpact: req.body.cost_impact, priceImpact: req.body.price_impact,
+        createdById: req.user.id,
+      },
+    });
+    res.status(201).json(co);
+  } catch (err) { next(err); }
+});
+
+// List variations + revised-contract summary.
+router.get('/:id/change-orders', auth, async (req, res, next) => {
+  try {
+    const project = await ownProject(req, res); if (!project) return;
+    const cos = await prisma.changeOrder.findMany({ where: { projectId: project.id }, orderBy: { createdAt: 'desc' } });
+    const approved = cos.filter(c => c.status === 'approved');
+    const sum = (arr, k) => +arr.reduce((s, c) => s + parseFloat(c[k]), 0).toFixed(2);
+    res.json({
+      change_orders: cos,
+      summary: {
+        approved_cost_impact:  sum(approved, 'costImpact'),
+        approved_price_impact: sum(approved, 'priceImpact'),
+        pending_count: cos.filter(c => c.status === 'pending').length,
+      },
+    });
+  } catch (err) { next(err); }
+});
+
+// Approve or reject a variation. Approval moves the budget (a new budget line) and,
+// when it changes the contract price, raises a billable milestone — so the variation
+// flows through the existing stage-billing/GL path. Idempotent on the pending→ edge.
+router.put('/change-orders/:coId/status', auth, requireRole('owner', 'manager'), validate(z.object({
+  status: z.enum(['approved', 'rejected']),
+})), async (req, res, next) => {
+  try {
+    const co = await prisma.changeOrder.findFirst({
+      where: { id: req.params.coId, project: { businessId: req.user.business_id } },
+    });
+    if (!co) return res.status(404).json({ title: 'Change order not found', status: 404 });
+    if (co.status !== 'pending') return res.status(422).json({ title: `Change order already ${co.status}`, status: 422 });
+
+    if (req.body.status === 'rejected') {
+      const updated = await prisma.changeOrder.update({ where: { id: co.id }, data: { status: 'rejected' } });
+      return res.json(updated);
+    }
+
+    const cost = parseFloat(co.costImpact);
+    const price = parseFloat(co.priceImpact);
+    const updated = await prisma.$transaction(async (tx) => {
+      // Revise the budget: the variation's cost becomes a budget line of its own.
+      if (cost !== 0) {
+        await tx.projectBudgetLine.create({
+          data: { projectId: co.projectId, category: co.category, description: `${co.coNumber}: ${co.description}`.slice(0, 255), budgeted: cost },
+        });
+        await tx.project.update({ where: { id: co.projectId }, data: { budget: { increment: cost } } });
+      }
+      // Make the variation billable to the client via a milestone.
+      let milestoneId = null;
+      if (price !== 0) {
+        const ms = await tx.projectMilestone.create({
+          data: { projectId: co.projectId, name: `${co.coNumber}: ${co.description}`.slice(0, 255), amount: price, status: 'pending' },
+        });
+        milestoneId = ms.id;
+      }
+      return tx.changeOrder.update({ where: { id: co.id }, data: { status: 'approved', approvedAt: new Date(), milestoneId } });
+    });
+    res.json(updated);
+  } catch (err) { next(err); }
+});
+
+// ── Material requisitions: issue stock from inventory to the job ─────
+// Relieves inventory at FIFO cost (falls back to standard cost), books the cost
+// to COGS against inventory, and rolls into the project's material actuals.
+router.post('/:id/requisitions', auth, requireRole('owner', 'manager'), validate(z.object({
+  location_id: uuid,
+  notes: z.string().max(500).optional(),
+  items: z.array(z.object({ product_id: uuid, quantity: z.coerce.number().int().positive() })).min(1),
+})), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const project = await ownProject(req, res); if (!project) return;
+
+    const loc = await prisma.location.findFirst({ where: { id: req.body.location_id, businessId } });
+    if (!loc) return res.status(400).json({ title: 'Unknown location', status: 400 });
+
+    const prods = await prisma.product.findMany({
+      where: { id: { in: req.body.items.map(i => i.product_id) }, businessId },
+      select: { id: true, name: true, costPrice: true },
+    });
+    if (prods.length !== req.body.items.length) return res.status(400).json({ title: 'Unknown product in requisition', status: 400 });
+    const byId = Object.fromEntries(prods.map(p => [p.id, p]));
+
+    try {
+      const result = await prisma.$transaction(async (tx) => {
+        const lineRecords = [];
+        let totalCost = 0;
+        for (const it of req.body.items) {
+          // Stock must be on hand at this location.
+          const level = await tx.stockLevel.findFirst({ where: { productId: it.product_id, locationId: loc.id } });
+          const onHand = level?.quantity || 0;
+          if (onHand < it.quantity) {
+            throw Object.assign(new Error(`Insufficient stock for ${byId[it.product_id].name}. On hand: ${onHand}`), { statusCode: 400 });
+          }
+
+          // FIFO cost: consume oldest cost layers; fall back to standard cost.
+          let remaining = it.quantity, costAccrued = 0, consumed = 0;
+          const layers = await tx.costLayer.findMany({
+            where: { businessId, productId: it.product_id, quantityRemaining: { gt: 0 }, OR: [{ locationId: loc.id }, { locationId: null }] },
+            orderBy: { receivedAt: 'asc' },
+          });
+          for (const layer of layers) {
+            if (remaining <= 0) break;
+            const take = Math.min(remaining, layer.quantityRemaining);
+            costAccrued += take * parseFloat(layer.unitCost);
+            consumed += take;
+            await tx.costLayer.update({ where: { id: layer.id }, data: { quantityRemaining: layer.quantityRemaining - take } });
+            remaining -= take;
+          }
+          const stdCost = parseFloat(byId[it.product_id].costPrice);
+          // Whatever FIFO couldn't cover values at standard cost.
+          if (remaining > 0) costAccrued += remaining * stdCost;
+          const unitCost = it.quantity > 0 ? +(costAccrued / it.quantity).toFixed(2) : 0;
+          const lineCost = +costAccrued.toFixed(2);
+          totalCost += lineCost;
+
+          // Relieve stock + movement trail.
+          const newQty = onHand - it.quantity;
+          await tx.stockLevel.update({ where: { id: level.id }, data: { quantity: newQty } });
+          await tx.stockMovement.create({
+            data: {
+              businessId, productId: it.product_id, locationId: loc.id, type: 'out',
+              quantity: -it.quantity, balanceAfter: newQty,
+              referenceType: 'material_requisition', notes: `Issued to project ${project.name}`.slice(0, 255),
+              createdById: req.user.id,
+            },
+          });
+          lineRecords.push({ productId: it.product_id, locationId: loc.id, quantity: it.quantity, unitCost, lineCost });
+        }
+        totalCost = +totalCost.toFixed(2);
+
+        const requisition = await tx.materialRequisition.create({
+          data: {
+            projectId: project.id, reqNumber: reqNum(), totalCost, notes: req.body.notes,
+            issuedById: req.user.id, items: { create: lineRecords },
+          },
+          include: { items: true },
+        });
+
+        // GL: stock issued to a job is a cost — relieve inventory into COGS.
+        if (totalCost > 0) {
+          await accounting.postJournal(tx, {
+            businessId, description: `Materials to project — ${project.name}`.slice(0, 255),
+            sourceType: 'material_requisition', sourceId: requisition.id, createdById: req.user.id,
+            lines: [
+              { code: '5000', debit: totalCost, credit: 0, description: 'Project materials cost' },
+              { code: '1200', debit: 0, credit: totalCost, description: 'Inventory relief' },
+            ],
+          });
+        }
+
+        // Roll into job cost: bump the materials budget line actual (create if absent).
+        let matLine = await tx.projectBudgetLine.findFirst({ where: { projectId: project.id, category: 'materials' } });
+        if (!matLine) matLine = await tx.projectBudgetLine.create({ data: { projectId: project.id, category: 'materials', description: 'Materials (issued from stock)', budgeted: 0 } });
+        await tx.projectBudgetLine.update({ where: { id: matLine.id }, data: { actual: { increment: totalCost } } });
+        await tx.project.update({ where: { id: project.id }, data: { spent: { increment: totalCost } } });
+
+        return requisition;
+      });
+      res.status(201).json(result);
+    } catch (e) {
+      if (e.statusCode === 400) return res.status(400).json({ title: e.message, status: 400 });
+      throw e;
+    }
+  } catch (err) { next(err); }
+});
+
+// List requisitions issued to a project.
+router.get('/:id/requisitions', auth, async (req, res, next) => {
+  try {
+    const project = await ownProject(req, res); if (!project) return;
+    const reqs = await prisma.materialRequisition.findMany({
+      where: { projectId: project.id }, include: { items: true }, orderBy: { createdAt: 'desc' }, take: 100,
+    });
+    res.json({ requisitions: reqs, total_cost: +reqs.reduce((s, r) => s + parseFloat(r.totalCost), 0).toFixed(2) });
+  } catch (err) { next(err); }
+});
+
 module.exports = router;
