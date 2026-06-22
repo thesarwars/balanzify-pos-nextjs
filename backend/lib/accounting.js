@@ -26,6 +26,7 @@ const CHART = [
   { code: '1200', name: 'Inventory',           type: 'asset',     normal: 'debit'  },
   { code: '2000', name: 'Accounts Payable',    type: 'liability', normal: 'credit' },
   { code: '2100', name: 'Tax Payable',         type: 'liability', normal: 'credit' },
+  { code: '2120', name: 'Statutory Payable',   type: 'liability', normal: 'credit' },
   { code: '2200', name: 'Financing Payable',   type: 'liability', normal: 'credit' },
   { code: '2300', name: 'Charity Payable',     type: 'liability', normal: 'credit' },
   { code: '3000', name: "Owner's Equity",      type: 'equity',    normal: 'credit' },
@@ -191,9 +192,10 @@ async function postAdvance(tx, { businessId, amount, method = 'cash', sourceId, 
  * new liability), and only the remainder is a genuine withholding payable.
  *   gross = net + deduction;  deduction = advanceRecovered + withholding.
  */
-async function postPayroll(tx, { businessId, gross, net, deduction, advanceRecovered = 0, sourceId, createdById }) {
+async function postPayroll(tx, { businessId, gross, net, deduction, advanceRecovered = 0, statutory = 0, sourceId, createdById }) {
   const recovered   = round2(advanceRecovered);
   const withholding = round2(round2(deduction) - recovered);
+  const stat        = round2(statutory);
   return postJournal(tx, {
     businessId, description: 'Payroll', sourceType: 'payroll', sourceId, createdById,
     lines: [
@@ -201,6 +203,8 @@ async function postPayroll(tx, { businessId, gross, net, deduction, advanceRecov
       { code: '1000', debit: 0, credit: round2(net), description: 'Net pay' },
       { code: '1110', debit: 0, credit: recovered,   description: 'Advance recovered' },
       { code: '2100', debit: 0, credit: withholding, description: 'Payroll withholding' },
+      // Statutory deductions (PAYE/NSSF/SHIF/Housing) held until filed/remitted.
+      { code: '2120', debit: 0, credit: stat, description: 'Statutory deductions payable' },
     ],
   });
 }
