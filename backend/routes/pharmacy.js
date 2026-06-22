@@ -516,6 +516,54 @@ router.get('/prescriptions/:id', auth, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// Dispensing label — the patient-facing label a pharmacist must affix. Returns a
+// structured payload plus a ready-to-print `label_text` (thermal/sticker).
+router.get('/prescriptions/:id/label', auth, async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const [rx, business] = await Promise.all([
+      prisma.prescription.findFirst({
+        where: { id: req.params.id, businessId },
+        include: { product: { select: { name: true, genericName: true, strength: true, formulation: true, controlledSchedule: true } } },
+      }),
+      prisma.business.findUnique({ where: { id: businessId }, select: { name: true, address: true, phone: true } }),
+    ]);
+    if (!rx) return res.status(404).json({ error: 'Prescription not found.' });
+
+    const warnings = ['Keep out of reach of children.'];
+    if (rx.product.controlledSchedule) warnings.unshift(`CONTROLLED (${rx.product.controlledSchedule}) — dispense per regulation.`);
+    if (rx.product.isPrescriptionDrug !== false) warnings.push('Use only as directed by your prescriber.');
+
+    const dispensedOn = new Date().toISOString().slice(0, 10);
+    const label = {
+      pharmacy: { name: business?.name || 'Pharmacy', address: business?.address || '', phone: business?.phone || '' },
+      rx_number: rx.rxNumber, dispensed_on: dispensedOn,
+      patient: { name: rx.patientName, phone: rx.patientPhone || '' },
+      drug: { name: rx.product.name, generic: rx.product.genericName || '', strength: rx.product.strength || '', form: rx.product.formulation || '' },
+      directions: rx.sig || 'Take as directed.',
+      quantity: rx.quantity,
+      refills_remaining: Math.max(0, 1 + rx.refillsAuthorized - rx.refillsUsed),
+      prescriber: { name: rx.prescriberName, reg: rx.prescriberReg || '' },
+      controlled: rx.product.controlledSchedule || null,
+      warnings,
+    };
+    const W = 40, line = '-'.repeat(W);
+    label.label_text = [
+      (business?.name || 'Pharmacy').toUpperCase(), business?.address || '', business?.phone || '', line,
+      `Rx: ${rx.rxNumber}    ${dispensedOn}`,
+      `Patient: ${rx.patientName}`, line,
+      `${rx.product.name} ${rx.product.strength || ''}`.trim(),
+      rx.product.genericName ? `(${rx.product.genericName})` : '',
+      `Qty: ${rx.quantity}`,
+      `Directions: ${rx.sig || 'Take as directed.'}`, line,
+      `Prescriber: ${rx.prescriberName}`,
+      ...warnings.map(w => `! ${w}`),
+    ].filter(Boolean).join('\n');
+
+    res.json(label);
+  } catch (err) { next(err); }
+});
+
 // Dispense against a prescription: enforces refill limits, requires a second-
 // person verification for controlled substances, and deducts stock.
 router.post('/prescriptions/:id/dispense', auth, requireRole('owner', 'manager'), validate(z.object({
