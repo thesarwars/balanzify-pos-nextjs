@@ -267,6 +267,7 @@ model Business {
   fiscalReceipts     FiscalReceipt[]
   drivers            Driver[]
   deliveries         Delivery[]
+  deliveryZones      DeliveryZone[]
   refreshTokens      RefreshToken[]
   exchangeRates      ExchangeRate[]
   reorderSuggestions ReorderSuggestion[]
@@ -2296,11 +2297,15 @@ model Delivery {
   customerPhone String?   @map("customer_phone") @db.VarChar(50)
   address       String
   channel       String    @default("pos") @db.VarChar(20) // whatsapp | web | pos
+  zoneId        String?   @map("zone_id") @db.Uuid
   itemsSummary  String?   @map("items_summary")
   orderAmount   Decimal   @default(0) @map("order_amount") @db.Decimal(12, 2)
   deliveryFee   Decimal   @default(0) @map("delivery_fee") @db.Decimal(10, 2)
   paymentMode   String    @default("cod") @map("payment_mode") @db.VarChar(20) // cod | prepaid
   status        String    @default("pending") @db.VarChar(20) // pending|assigned|picked_up|delivered|cancelled
+  recipientName String?   @map("recipient_name") @db.VarChar(255) // proof of delivery
+  podNote       String?   @map("pod_note")
+  podPhotoUrl   String?   @map("pod_photo_url")
   assignedAt    DateTime? @map("assigned_at")
   deliveredAt   DateTime? @map("delivered_at")
   createdAt     DateTime  @default(now()) @map("created_at")
@@ -2310,6 +2315,21 @@ model Delivery {
 
   @@index([businessId, status])
   @@map("deliveries")
+}
+
+// Named delivery zones with a flat fee each — the no-GPS way to price delivery.
+model DeliveryZone {
+  id         String   @id @default(uuid()) @db.Uuid
+  businessId String   @map("business_id") @db.Uuid
+  name       String   @db.VarChar(120)
+  fee        Decimal  @default(0) @db.Decimal(10, 2)
+  isActive   Boolean  @default(true) @map("is_active")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
+  @@map("delivery_zones")
 }
 
 // Drug-drug interaction knowledge base. Rows with businessId = NULL are the
