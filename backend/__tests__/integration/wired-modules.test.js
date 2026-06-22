@@ -2198,4 +2198,49 @@ describe('M-Pesa async settlement — GL reconciliation on the STK callback', ()
   });
 });
 
+describe('mobile-money rails — manual-confirm tenders book to Mobile Money (1010)', () => {
+  let token, loc, prod, bizId;
+  const at = (bal, c) => (bal.find(a => a.code === c) || { balance: 0 }).balance;
+
+  beforeAll(async () => {
+    token = await register();
+    loc = await location(token);
+    prod = await stockedProduct(token, loc, 10, 1000); // price 10, cost 5
+    bizId = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString()).businessId;
+  });
+
+  async function ring(method) {
+    const ik = (await request(app).post('/api/v1/sales/initiate').set(auth(token))).body.idempotency_key;
+    return request(app).post('/api/v1/sales').set(auth(token)).send({
+      idempotency_key: ik, items: [{ product_id: prod, quantity: 2, override_price: 10 }],
+      location_id: loc, payment_method: method, payment_reference: `${method}-CONF-1`,
+    });
+  }
+
+  test.each(['edahab', 'evc', 'telebirr', 'cbe_birr', 'mobile_money'])(
+    '%s settles immediately to mobile money (not cash)', async (method) => {
+      const before = at(await accounting.accountBalances(bizId), '1010');
+      const res = await ring(method);
+      expect(res.status).toBe(201);
+      // Manual-confirm = the cashier already confirmed → the sale completes now.
+      expect((await prisma.sale.findUnique({ where: { id: res.body.id } })).status).toBe('completed');
+      const after = at(await accounting.accountBalances(bizId), '1010');
+      expect(after - before).toBeCloseTo(20, 2); // booked to Mobile Money, not cash
+    });
+
+  test('nothing leaked to Cash (1000); books stay balanced', async () => {
+    const bal = await accounting.accountBalances(bizId);
+    expect(at(bal, '1000')).toBeCloseTo(0, 2);   // 5 mobile-money sales, zero cash
+    expect(at(bal, '1010')).toBeCloseTo(100, 2); // 5 × 20
+    const tb = (await request(app).get('/api/v1/accounting/trial-balance').set(auth(token))).body;
+    expect(tb.totals.balanced).toBe(true);
+  });
+
+  test('the catch-all and every rail are advertised by the payments registry', async () => {
+    const methods = (await request(app).get('/api/v1/payments/methods').set(auth(token))).body;
+    const keys = (methods.methods || methods).map(m => m.key);
+    for (const k of ['edahab', 'evc', 'telebirr', 'cbe_birr', 'mobile_money', 'zaad']) expect(keys).toContain(k);
+  });
+});
+
 afterAll(async () => { await prisma.$disconnect(); });
