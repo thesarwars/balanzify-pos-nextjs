@@ -47,6 +47,7 @@ export const NAV = [
     { id: 'interactions', label: 'Drug Interactions', icon: '⚕' },
     { id: 'wholesale', label: 'Wholesale', icon: '⊟' },
     { id: 'construction', label: 'Construction', icon: '◭' },
+    { id: 'delivery', label: 'Delivery', icon: '⊳' },
   ]},
   { sect: 'Finance', items: [
     { id: 'payment-accounts', label: 'Payment Accounts', icon: '▭' },
@@ -82,6 +83,7 @@ export const NAV = [
 const NAV_MODULE: Record<string, string> = {
   hotel: 'hotel', restaurant: 'restaurant',
   pharmacy: 'pharmacy', interactions: 'pharmacy', wholesale: 'wholesale', construction: 'construction',
+  delivery: 'delivery',
   hrm: 'hrm', insights: 'insights', superadmin: 'superadmin',
 };
 
