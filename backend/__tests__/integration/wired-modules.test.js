@@ -1587,6 +1587,49 @@ describe('restaurant checkout (in-process sale service — no HTTP self-call)', 
   });
 });
 
+describe('restaurant: seat-level ordering + split bill by seat', () => {
+  let token, loc, prodA, prodB;
+  beforeAll(async () => {
+    token = await register();
+    await enableModule(token, 'restaurant');
+    loc = await location(token);
+    prodA = await stockedProduct(token, loc, 10, 100); // 10 each
+    prodB = await stockedProduct(token, loc, 6, 100);  // 6 each
+  });
+
+  test('items carry a seat number and the bill splits one per seat', async () => {
+    const order = (await request(app).post('/api/v1/restaurant/orders').set(auth(token)).send({ type: 'dine_in' })).body;
+    // Seat 1 had 2× prodA (20); seat 2 had 1× prodB (6); one shared item prodB (6).
+    expect((await request(app).post(`/api/v1/restaurant/orders/${order.id}/items`).set(auth(token)).send({ productId: prodA, quantity: 2, seat: 1 })).status).toBe(201);
+    const s2 = await request(app).post(`/api/v1/restaurant/orders/${order.id}/items`).set(auth(token)).send({ productId: prodB, quantity: 1, seat: 2 });
+    expect(s2.status).toBe(201);
+    expect(s2.body.seat).toBe(2);
+    await request(app).post(`/api/v1/restaurant/orders/${order.id}/items`).set(auth(token)).send({ productId: prodB, quantity: 1 }); // shared, no seat
+
+    const split = await request(app).post(`/api/v1/restaurant/orders/${order.id}/split-by-seat`).set(auth(token));
+    expect(split.status).toBe(201);
+    expect(split.body.new_orders).toHaveLength(3); // seat 1, seat 2, shared
+    const seat1 = split.body.new_orders.find(o => o.label === 'Seat 1');
+    const seat2 = split.body.new_orders.find(o => o.label === 'Seat 2');
+    const shared = split.body.new_orders.find(o => o.label === 'Shared');
+    expect(Number(seat1.total)).toBeCloseTo(20, 2);
+    expect(Number(seat2.total)).toBeCloseTo(6, 2);
+    expect(Number(shared.total)).toBeCloseTo(6, 2);
+
+    // Original order is voided after the split.
+    const orig = await prisma.restaurantOrder.findUnique({ where: { id: order.id } });
+    expect(orig.status).toBe('void');
+  });
+
+  test('split-by-seat needs at least two buckets', async () => {
+    const order = (await request(app).post('/api/v1/restaurant/orders').set(auth(token)).send({ type: 'dine_in' })).body;
+    await request(app).post(`/api/v1/restaurant/orders/${order.id}/items`).set(auth(token)).send({ productId: prodA, quantity: 1, seat: 1 });
+    const split = await request(app).post(`/api/v1/restaurant/orders/${order.id}/split-by-seat`).set(auth(token));
+    expect(split.status).toBe(400);
+    expect(split.body.code).toBe('NEEDS_SEATS');
+  });
+});
+
 describe('restaurant: waiter / 86 / reservations as proper records', () => {
   let token, loc, prod, tableId, waiterId;
   beforeAll(async () => {
