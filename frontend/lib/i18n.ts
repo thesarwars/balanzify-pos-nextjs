@@ -62,6 +62,24 @@ const MESSAGES = {
   'zakat.subtitle': { en: 'Calculated from your live ledger', so: 'Laga xisaabiyay diiwaankaaga', ar: 'محسوبة من دفترك' },
   'zakat.live_required': { en: 'Connect the live backend to compute Zakat from the ledger.', so: 'Ku xidh server-ka si aad u xisaabiso Sakada.', ar: 'اتصل بالخادم لحساب الزكاة من الدفتر.' },
 
+  // Embedded financing (Sharia-compliant)
+  'lending.title':       { en: 'Financing', so: 'Maalgelin', ar: 'التمويل' },
+  'lending.score':       { en: 'Credit Score', so: 'Buundada deynta', ar: 'درجة الائتمان' },
+  'lending.limit':       { en: 'Recommended Limit', so: 'Xadka la talinayo', ar: 'الحد الموصى به' },
+  'lending.eligible':    { en: 'Pre-qualified', so: 'Waa loo qalmaa', ar: 'مؤهل مسبقًا' },
+  'lending.not_eligible':{ en: 'Not yet eligible', so: 'Weli looma qalmo', ar: 'غير مؤهل بعد' },
+  'lending.subtitle':    { en: 'Underwritten from your sales — fixed fee, no interest', so: 'Laga go\'aamiyay iibkaaga — khidmad go\'an, ribo la\'aan', ar: 'مبني على مبيعاتك — رسوم ثابتة بدون فائدة' },
+  'lending.avg_revenue': { en: 'Avg Monthly Sales', so: 'Celcelis iib bishii', ar: 'متوسط المبيعات الشهرية' },
+  'lending.margin':      { en: 'Net Margin', so: 'Faa\'iido saafi', ar: 'هامش الربح' },
+  'lending.cash':        { en: 'Cash on Hand', so: 'Lacagta gacanta', ar: 'النقد المتوفر' },
+  'lending.advances':    { en: 'Advances', so: 'Sulufyada', ar: 'السلف' },
+  'lending.principal':   { en: 'Principal', so: 'Maalka', ar: 'الأصل' },
+  'lending.fee':         { en: 'Fee', so: 'Khidmada', ar: 'الرسوم' },
+  'lending.repayable':   { en: 'Total Repayable', so: 'Wadarta la celinayo', ar: 'إجمالي السداد' },
+  'lending.outstanding': { en: 'Outstanding', so: 'Hadhay', ar: 'المتبقي' },
+  'lending.no_advances': { en: 'No advances yet.', so: 'Wali suluf ma jiro.', ar: 'لا توجد سلف بعد.' },
+  'lending.live_required':{ en: 'Connect the live backend to view financing.', so: 'Ku xidh server-ka si aad u aragto maalgelinta.', ar: 'اتصل بالخادم لعرض التمويل.' },
+
   // Fiscalization
   'fiscal.receipt': { en: 'Fiscal Receipt', so: 'Rasiidh canshuureed', ar: 'إيصال ضريبي' },
   'fiscal.verify':  { en: 'Verify', so: 'Xaqiiji', ar: 'تحقق' },
@@ -113,6 +131,7 @@ const NAV_LABELS: Record<string, Partial<Record<Locale, string>>> = {
   'construction':    { so: 'Dhismaha', ar: 'الإنشاءات' },
   'expenses':        { so: 'Kharashaadka', ar: 'المصروفات' },
   'zakat':           { so: 'Sakada', ar: 'الزكاة' },
+  'lending':         { so: 'Maalgelin', ar: 'التمويل' },
   'reports':         { so: 'Warbixinno', ar: 'التقارير' },
   'users':           { so: 'Isticmaalayaasha', ar: 'المستخدمون' },
   'settings':        { so: 'Dejinta', ar: 'الإعدادات' },
