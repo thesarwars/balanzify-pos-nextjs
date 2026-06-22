@@ -30,6 +30,8 @@ const MESSAGES = {
   'common.add':     { en: 'Add',     so: 'Ku dar', ar: 'إضافة' },
   'common.total':   { en: 'Total',   so: 'Wadarta', ar: 'المجموع' },
   'common.print':   { en: 'Print',   so: 'Daabac', ar: 'طباعة' },
+  'common.loading': { en: 'Loading…', so: 'Soo dejinaya…', ar: 'جار التحميل…' },
+  'common.refresh': { en: 'Refresh', so: 'Cusboonaysii', ar: 'تحديث' },
 
   // Navigation
   'nav.dashboard':  { en: 'Dashboard', so: 'Shaxda guud', ar: 'لوحة التحكم' },
@@ -51,6 +53,14 @@ const MESSAGES = {
   'zakat.due':      { en: 'Zakat Due', so: 'Sakada la bixinayo', ar: 'الزكاة المستحقة' },
   'zakat.base':     { en: 'Zakatable Wealth', so: 'Hantida la xisaabinayo', ar: 'الثروة الخاضعة للزكاة' },
   'zakat.nisab':    { en: 'Nisab', so: 'Nisaab', ar: 'النصاب' },
+  'zakat.assets':   { en: 'Zakatable Assets', so: 'Hantida la xisaabinayo', ar: 'الأصول الخاضعة للزكاة' },
+  'zakat.liabilities': { en: 'Liabilities', so: 'Deymaha', ar: 'الالتزامات' },
+  'zakat.payable':  { en: 'Zakat Payable (2.5%)', so: 'Sakada (2.5%)', ar: 'الزكاة المستحقة (2.5%)' },
+  'zakat.rate':     { en: 'Rate', so: 'Qiimaha', ar: 'النسبة' },
+  'zakat.due_now':  { en: 'Due now', so: 'Hadda waa la bixinayaa', ar: 'مستحقة الآن' },
+  'zakat.not_due':  { en: 'Below nisab — not due', so: 'Nisaabka ka hooseeya', ar: 'دون النصاب — غير مستحقة' },
+  'zakat.subtitle': { en: 'Calculated from your live ledger', so: 'Laga xisaabiyay diiwaankaaga', ar: 'محسوبة من دفترك' },
+  'zakat.live_required': { en: 'Connect the live backend to compute Zakat from the ledger.', so: 'Ku xidh server-ka si aad u xisaabiso Sakada.', ar: 'اتصل بالخادم لحساب الزكاة من الدفتر.' },
 
   // Fiscalization
   'fiscal.receipt': { en: 'Fiscal Receipt', so: 'Rasiidh canshuureed', ar: 'إيصال ضريبي' },
@@ -102,6 +112,7 @@ const NAV_LABELS: Record<string, Partial<Record<Locale, string>>> = {
   'wholesale':       { so: 'Jumlada', ar: 'الجملة' },
   'construction':    { so: 'Dhismaha', ar: 'الإنشاءات' },
   'expenses':        { so: 'Kharashaadka', ar: 'المصروفات' },
+  'zakat':           { so: 'Sakada', ar: 'الزكاة' },
   'reports':         { so: 'Warbixinno', ar: 'التقارير' },
   'users':           { so: 'Isticmaalayaasha', ar: 'المستخدمون' },
   'settings':        { so: 'Dejinta', ar: 'الإعدادات' },
