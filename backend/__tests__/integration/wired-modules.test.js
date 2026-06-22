@@ -1628,6 +1628,27 @@ describe('restaurant: seat-level ordering + split bill by seat', () => {
     expect(split.status).toBe(400);
     expect(split.body.code).toBe('NEEDS_SEATS');
   });
+
+  test('combo / set menu expands into apportioned component lines summing to the deal price', async () => {
+    // A & B normally 10 + 6 = 16; sell the combo for 12.
+    const combo = await request(app).post('/api/v1/restaurant/combos').set(auth(token)).send({
+      name: 'Lunch Deal', price: 12, items: [{ product_id: prodA, quantity: 1 }, { product_id: prodB, quantity: 1 }],
+    });
+    expect(combo.status).toBe(201);
+
+    const order = (await request(app).post('/api/v1/restaurant/orders').set(auth(token)).send({ type: 'dine_in' })).body;
+    const add = await request(app).post(`/api/v1/restaurant/orders/${order.id}/combo`).set(auth(token)).send({ comboId: combo.body.id, quantity: 1 });
+    expect(add.status).toBe(201);
+    expect(Number(add.body.deal_total)).toBeCloseTo(12, 2);
+    // Two component lines, each fires to the kitchen, summing exactly to 12.
+    expect(add.body.items).toHaveLength(2);
+    const lineSum = add.body.items.reduce((s, i) => s + Number(i.lineTotal), 0);
+    expect(lineSum).toBeCloseTo(12, 2);
+
+    // Order total reflects the deal price, not 16.
+    const ord = await prisma.restaurantOrder.findUnique({ where: { id: order.id } });
+    expect(Number(ord.totalAmount)).toBeCloseTo(12, 2);
+  });
 });
 
 describe('restaurant: waiter / 86 / reservations as proper records', () => {
