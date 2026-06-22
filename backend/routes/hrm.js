@@ -3,8 +3,10 @@
  * Mounted at /api/v1/hrm behind requireModule('hrm').
  */
 const express = require('express');
+const { z } = require('zod');
 const prisma = require('../lib/prisma');
 const accounting = require('../lib/accounting');
+const wa = require('../lib/whatsapp');
 const { auth, requireRole } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { EmployeeSchema, OrgUnitSchema, HrmSettingsSchema, EmployeeShiftSchema, AttendanceClockSchema,
@@ -885,6 +887,23 @@ router.get('/payslip/:id', auth, async (req, res, next) => {
         show_deduction_breakdown: settings.showDeductionBreakdown,
       },
     });
+  } catch (err) { next(err); }
+});
+
+// Distribute a payslip to the employee over WhatsApp (the artifact existed; this
+// closes the "delivery" half of the gap). Phone is provided by the manager.
+router.post('/payslip/:id/send-whatsapp', auth, requireRole('owner', 'manager'), validate(z.object({
+  phone: z.string().trim().min(3).max(50),
+})), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const p = await prisma.payroll.findFirst({ where: { id: req.params.id, businessId }, include: { employee: { select: { name: true } } } });
+    if (!p) return res.status(404).json({ title: 'Payslip not found', status: 404 });
+    const business = await prisma.business.findUnique({ where: { id: businessId }, select: { name: true } });
+    const gross = ['basic', 'allowance', 'overtime', 'bonus', 'incentive'].reduce((s, k) => s + parseFloat(p[k] || 0), 0);
+    const msg = `*Payslip — ${business?.name || 'Payroll'}*\n${p.employee.name} · ${p.month}\n\nGross: $${gross.toFixed(2)}\nDeductions: $${parseFloat(p.deduction).toFixed(2)}\n*Net pay: $${parseFloat(p.net).toFixed(2)}*\n\nThank you.`;
+    const r = await wa.send({ businessId, to: req.body.phone, text: msg, kind: 'payslip', referenceType: 'payroll', referenceId: p.id });
+    res.status(r.ok ? 200 : 502).json(r);
   } catch (err) { next(err); }
 });
 
