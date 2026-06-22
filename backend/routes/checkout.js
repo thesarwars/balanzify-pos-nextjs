@@ -28,6 +28,7 @@ const { auth } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { generatePaymentQR } = require('../lib/qrpayment');
 const { generateEscPos, generateWhatsAppReceipt, generateReceiptToken, receiptUrl } = require('../lib/receipt');
+const wa = require('../lib/whatsapp');
 const { logger } = require('../lib/logger');
 const { escapeHtml } = require('../lib/html');
 const registry = require('../lib/payments');
@@ -412,28 +413,19 @@ router.post('/receipt/:saleId/send-whatsapp', auth, async (req, res, next) => {
 
     const message = generateWhatsAppReceipt({ sale, items, business, receiptUrl: url });
 
-    // Normalize phone number
-    const normalizedPhone = phone.replace(/\D/g, '').replace(/^0/, '');
-
-    // Generate wa.me URL — works universally
-    const waUrl = `https://wa.me/${normalizedPhone}?text=${encodeURIComponent(message)}`;
-
-    // Log the WhatsApp message
-    await prisma.whatsappLog.create({
-      data: {
-        businessId:    req.user.business_id,
-        recipientPhone: normalizedPhone,
-        messageType:   'receipt',
-        content:       message,
-        referenceType: 'sale',
-        referenceId:   sale.id,
-      },
+    // Deliver through the provider registry (real send when configured, wa.me
+    // link otherwise) — tracked in WhatsappLog with provider + delivery status.
+    const r = await wa.send({
+      businessId: req.user.business_id, to: phone, text: message,
+      kind: 'receipt', referenceType: 'sale', referenceId: sale.id,
     });
 
     res.json({
-      message:   'Receipt prepared.',
-      wa_url:    waUrl,    // Cashier taps this to open WhatsApp with message pre-filled
-      wa_number: normalizedPhone,
+      message:     r.status === 'link' ? 'Receipt prepared.' : 'Receipt sent.',
+      provider:    r.provider,
+      status:      r.status,
+      wa_url:      r.wa_url,    // present for the link provider — cashier taps to send
+      wa_number:   r.phone,
       receipt_url: url,
     });
   } catch (err) { next(err); }
