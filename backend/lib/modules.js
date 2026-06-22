@@ -69,8 +69,8 @@ const MODULES = {
   restaurant: {
     key: 'restaurant',
     default: false,
-    name: 'Balanzify Restaurant',
-    description: 'Restaurant & café: tables, orders, kitchen display with station routing, modifiers, split bills, table reservations.',
+    name: 'Balanzify Restaurant & Café',
+    description: 'Restaurant & café: tables, orders, kitchen/bar display with station routing, modifiers, combos, split bills (incl. by seat), reservations. One-tap coffee-shop quick start.',
     standalone: true,
     requires: ['core', 'pos'],
     routes: ['/api/v1/restaurant'],
