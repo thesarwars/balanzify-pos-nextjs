@@ -60,6 +60,31 @@ check('sync.devices → devices[]', r.status === 200 && Array.isArray(r.json.dev
 r = await call('GET', '/fiscal/verify/NONEXISTENTCODE', { auth: false, raw: true });
 check('fiscal.verify (public) responds', r.status === 404 && r.json.valid === false);
 
+// ── The merchant daily loop: shift → sale → history → reports → core CRUD ──
+r = await call('POST', '/sales/shifts/open', { body: { location_id: locId, opening_float: 100 } });
+check('shifts.open', r.status === 201 && r.json.id, 'status ' + r.status);
+const ik = (await call('POST', '/sales/initiate', { body: {} })).json.idempotency_key;
+r = await call('POST', '/sales', { body: { idempotency_key: ik, items: [{ product_id: prodId, quantity: 3, override_price: 25 }], location_id: locId, payment_method: 'cash', cash_tendered: 75 } });
+check('sales.create (online till path)', r.status === 201 && r.json.id, 'status ' + r.status);
+r = await call('GET', '/sales');
+check('sales.list (history)', r.status === 200 && Array.isArray(r.json.sales || r.json.data || r.json));
+r = await call('GET', '/sales/summary/today');
+check('sales.summary/today', r.status === 200);
+r = await call('GET', '/reports/dashboard');
+check('reports.dashboard', r.status === 200);
+r = await call('POST', '/categories', { body: { name: 'Drinks' } });
+check('categories.create', r.status === 201 || r.status === 200, 'status ' + r.status);
+r = await call('POST', '/customers', { body: { name: 'Walk-in Cust', phone: '061222333' } });
+check('customers.create', r.status === 201 && r.json.id, 'status ' + r.status);
+r = await call('POST', '/suppliers', { body: { name: 'Supplier Co' } });
+check('suppliers.create', r.status === 201 || r.status === 200, 'status ' + r.status);
+r = await call('POST', '/expenses', { body: { amount: 20, category: 'Misc', note: 'fuel', location_id: locId } });
+check('expenses.create', r.status === 201 || r.status === 200, 'status ' + r.status);
+r = await call('GET', '/accounting/income-statement');
+check('accounting.income-statement', r.status === 200);
+r = await call('GET', '/accounting/balance-sheet');
+check('accounting.balance-sheet', r.status === 200);
+
 const passed = results.filter(Boolean).length;
 console.log(`\n=== ${passed}/${results.length} contract checks passed ===`);
 process.exit(passed === results.length ? 0 : 1);
