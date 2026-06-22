@@ -64,9 +64,9 @@ export function InteractionsScreen({ T }: { T: any }) {
   }, []);
 
   return (
-    <div>
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: T.paperAlt }}>
       <Topbar T={T} title={t('rx.title')} subtitle={t('rx.subtitle')} />
-      <div style={{ padding: 24, maxWidth: 960, display: 'grid', gap: 16 }}>
+      <div style={{ flex: 1, overflowY: 'auto', minHeight: 0, padding: 24, maxWidth: 960, display: 'grid', gap: 16 }}>
         <Panel T={T} title={t('rx.title')}>
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
             <div style={{ flex: 1 }}>

@@ -52,14 +52,14 @@ export function ZakatScreen({ T }: { T: any }) {
     : null;
 
   return (
-    <div>
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: T.paperAlt }}>
       <Topbar
         T={T}
         title={t('zakat.title')}
         subtitle={hijri ? `${t('hijri.today')}: ${hijri}` : t('zakat.subtitle')}
         right={<Btn T={T} kind="ghost" onClick={load} disabled={loading}>{t('common.refresh')}</Btn>}
       />
-      <div style={{ padding: 24, maxWidth: 960 }}>
+      <div style={{ flex: 1, overflowY: 'auto', minHeight: 0, padding: 24, maxWidth: 960 }}>
         {err && !data && (
           <Panel T={T}><div style={{ color: T.inkSub, fontSize: 13 }}>{err}</div></Panel>
         )}
