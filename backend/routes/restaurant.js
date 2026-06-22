@@ -331,6 +331,107 @@ router.get('/orders/:id', auth, async (req, res, next) => {
 });
 
 // Add item to order
+// ── COFFEE-SHOP QUICK START ───────────────────────────────────────
+// A café runs on this restaurant engine; this one call scaffolds the tedious
+// part — the milk/size/temperature/extras modifier groups, a starter drink +
+// pastry menu (drinks routed to the bar station), the modifiers wired onto every
+// drink, and a coffee-and-pastry combo. Idempotent: anything already present by
+// name is reused, so it's safe to re-run.
+const COFFEE_PRESET = {
+  groups: [
+    { name: 'Size', isRequired: true, minSelect: 1, maxSelect: 1, options: [
+      { name: 'Small', priceAdjustment: 0, isDefault: false, sortOrder: 0 },
+      { name: 'Medium', priceAdjustment: 0.50, isDefault: true, sortOrder: 1 },
+      { name: 'Large', priceAdjustment: 1.00, isDefault: false, sortOrder: 2 },
+    ] },
+    { name: 'Milk', isRequired: true, minSelect: 1, maxSelect: 1, options: [
+      { name: 'Whole Milk', priceAdjustment: 0, isDefault: true, sortOrder: 0 },
+      { name: 'Skim Milk', priceAdjustment: 0, isDefault: false, sortOrder: 1 },
+      { name: 'Oat Milk', priceAdjustment: 0.50, isDefault: false, sortOrder: 2 },
+      { name: 'Almond Milk', priceAdjustment: 0.50, isDefault: false, sortOrder: 3 },
+    ] },
+    { name: 'Temperature', isRequired: true, minSelect: 1, maxSelect: 1, options: [
+      { name: 'Hot', priceAdjustment: 0, isDefault: true, sortOrder: 0 },
+      { name: 'Iced', priceAdjustment: 0, isDefault: false, sortOrder: 1 },
+      { name: 'Extra Hot', priceAdjustment: 0, isDefault: false, sortOrder: 2 },
+    ] },
+    { name: 'Extras', isRequired: false, minSelect: 0, maxSelect: 5, options: [
+      { name: 'Extra Shot', priceAdjustment: 0.75, isDefault: false, sortOrder: 0 },
+      { name: 'Vanilla Syrup', priceAdjustment: 0.50, isDefault: false, sortOrder: 1 },
+      { name: 'Caramel Syrup', priceAdjustment: 0.50, isDefault: false, sortOrder: 2 },
+      { name: 'Whipped Cream', priceAdjustment: 0.50, isDefault: false, sortOrder: 3 },
+      { name: 'Decaf', priceAdjustment: 0, isDefault: false, sortOrder: 4 },
+    ] },
+  ],
+  drinks: [
+    { name: 'Espresso', price: 2.00 }, { name: 'Americano', price: 2.50 },
+    { name: 'Latte', price: 3.00 }, { name: 'Cappuccino', price: 3.00 },
+    { name: 'Flat White', price: 3.20 }, { name: 'Mocha', price: 3.50 },
+    { name: 'Tea', price: 2.00 }, { name: 'Hot Chocolate', price: 3.00 },
+  ],
+  food: [ { name: 'Croissant', price: 2.00 }, { name: 'Blueberry Muffin', price: 2.50 } ],
+  combo: { name: 'Coffee & Croissant', price: 4.50, items: ['Latte', 'Croissant'] },
+};
+
+router.post('/presets/coffeeshop', auth, requireRole('owner', 'manager'), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const summary = { groups_created: 0, products_created: 0, modifiers_attached: 0, combo_created: false, reused: true };
+
+    const result = await prisma.$transaction(async (tx) => {
+      // Modifier groups (reuse by name).
+      const groupIds = {};
+      for (const g of COFFEE_PRESET.groups) {
+        let group = await tx.modifierGroup.findFirst({ where: { businessId, name: g.name } });
+        if (!group) {
+          group = await tx.modifierGroup.create({
+            data: { businessId, name: g.name, isRequired: g.isRequired, minSelect: g.minSelect, maxSelect: g.maxSelect,
+                    options: { create: g.options } },
+          });
+          summary.groups_created += 1;
+        }
+        groupIds[g.name] = group.id;
+      }
+
+      // Starter products (reuse by name); drinks fire to the bar, food to the kitchen.
+      const productId = {};
+      const mkProduct = async (name, price, station) => {
+        let p = await tx.product.findFirst({ where: { businessId, name } });
+        if (!p) {
+          p = await tx.product.create({ data: { businessId, name, sellingPrice: price, kitchenStation: station, isActive: true } });
+          summary.products_created += 1;
+        }
+        productId[name] = p.id;
+      };
+      for (const d of COFFEE_PRESET.drinks) await mkProduct(d.name, d.price, 'bar');
+      for (const f of COFFEE_PRESET.food)   await mkProduct(f.name, f.price, 'kitchen');
+
+      // Wire all four modifier groups onto every drink (skip if already linked).
+      const links = [];
+      for (const d of COFFEE_PRESET.drinks) {
+        let sort = 0;
+        for (const gName of ['Size', 'Milk', 'Temperature', 'Extras']) links.push({ productId: productId[d.name], groupId: groupIds[gName], sortOrder: sort++ });
+      }
+      const attached = await tx.productModifierGroup.createMany({ data: links, skipDuplicates: true });
+      summary.modifiers_attached = attached.count;
+
+      // Coffee + pastry combo (reuse by name).
+      const existingCombo = await tx.combo.findFirst({ where: { businessId, name: COFFEE_PRESET.combo.name } });
+      if (!existingCombo) {
+        await tx.combo.create({
+          data: { businessId, name: COFFEE_PRESET.combo.name, price: COFFEE_PRESET.combo.price,
+                  items: { create: COFFEE_PRESET.combo.items.map(n => ({ productId: productId[n], quantity: 1 })) } },
+        });
+        summary.combo_created = true;
+      }
+      return summary;
+    });
+
+    result.reused = result.groups_created === 0 && result.products_created === 0;
+    res.status(201).json({ message: 'Coffee-shop menu scaffolded.', ...result });
+  } catch (err) { next(err); }
+});
+
 // ── COMBOS / SET MENUS ────────────────────────────────────────────
 router.get('/combos', auth, async (req, res, next) => {
   try {
