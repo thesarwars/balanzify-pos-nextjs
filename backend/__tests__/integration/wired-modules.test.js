@@ -1223,4 +1223,53 @@ describe('offline-first sync (push outbox + delta pull)', () => {
   });
 });
 
+describe('WhatsApp-native delivery (provider registry + journeys)', () => {
+  let token;
+  beforeAll(async () => { token = await register(); });
+
+  test('send routes through the provider registry and is tracked in the log', async () => {
+    const res = await request(app).post('/api/v1/whatsapp/send').set(auth(token))
+      .send({ to: '063 4567890', message: 'Hello from the shop' });
+    expect(res.status).toBe(200);
+    expect(res.body.provider).toBe('link');          // zero-config fallback
+    expect(res.body.status).toBe('link');
+    expect(res.body.wa_url).toContain('wa.me/252634567890'); // 0 → +252 normalization
+    expect(res.body.wa_url).toContain(encodeURIComponent('Hello from the shop'));
+
+    const log = await request(app).get('/api/v1/whatsapp/log').set(auth(token));
+    expect(log.body.messages[0].phone).toBe('252634567890');
+    expect(log.body.messages[0].status).toBe('link');
+    expect(log.body.messages[0].provider).toBe('link');
+  });
+
+  test('credit reminder journey nudges every customer carrying a balance', async () => {
+    // one customer owes money, one is settled
+    const owing = await request(app).post('/api/v1/customers').set(auth(token))
+      .send({ name: 'Faadumo', phone: '0612223344' });
+    const settled = await request(app).post('/api/v1/customers').set(auth(token))
+      .send({ name: 'Cali', phone: '0615556677' });
+    await prisma.customer.update({ where: { id: owing.body.id }, data: { outstandingBalance: 125.5 } });
+
+    const res = await request(app).post('/api/v1/whatsapp/reminders/credit').set(auth(token)).send({});
+    expect(res.status).toBe(200);
+    expect(res.body.reminded).toBe(1);                 // only the one with a balance
+    expect(res.body.sent).toBe(1);
+    expect(res.body.results[0].name).toBe('Faadumo');
+    expect(res.body.results[0].wa_url).toContain(encodeURIComponent('125.50'));
+
+    // the settled customer was never messaged
+    const log = await request(app).get('/api/v1/whatsapp/log').set(auth(token)).query({ kind: 'credit_reminder' });
+    expect(log.body.messages.every(m => m.phone !== '252615556677')).toBe(true);
+    expect(settled.status).toBe(201);
+  });
+
+  test('a customer opted out of WhatsApp is skipped', async () => {
+    const optOut = await request(app).post('/api/v1/customers').set(auth(token))
+      .send({ name: 'Xasan', phone: '0619998877' });
+    await prisma.customer.update({ where: { id: optOut.body.id }, data: { outstandingBalance: 50, whatsappOptedIn: false } });
+    const res = await request(app).post('/api/v1/whatsapp/reminders/credit').set(auth(token)).send({ customer_id: optOut.body.id });
+    expect(res.body.reminded).toBe(0);
+  });
+});
+
 afterAll(async () => { await prisma.$disconnect(); });
