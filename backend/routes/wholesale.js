@@ -210,6 +210,81 @@ router.post('/orders/:id/payment', auth, validate(z.object({
   } catch (err) { next(err); }
 });
 
+// Credit note / return against a delivered order. A clean financial reversal:
+// it reverses revenue and reduces the customer's receivable. (The wholesale flow
+// is inventory-agnostic — it never relieves stock — so the note deliberately does
+// not touch inventory; the physical return is handled by a stock adjustment.)
+// Caps each line at fulfilled minus already-credited, so you can't over-credit.
+router.post('/orders/:id/credit-note', auth, requireRole('owner', 'manager'), validate(z.object({
+  reason: z.string().max(300).optional(),
+  items: z.array(z.object({ item_id: uuid, qty: z.coerce.number().int().positive() })).min(1),
+})), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const order = await prisma.wholesaleOrder.findFirst({
+      where: { id: req.params.id, businessId, status: 'delivered' },
+      include: { items: true, creditNotes: { include: { items: true } } },
+    });
+    if (!order) return res.status(400).json({ title: 'Credit notes apply only to delivered orders', status: 400 });
+
+    const byItem = Object.fromEntries(order.items.map(i => [i.id, i]));
+    // How much of each line has already been credited.
+    const creditedQty = {};
+    for (const cn of order.creditNotes) for (const ci of cn.items) creditedQty[ci.orderItemId] = (creditedQty[ci.orderItemId] || 0) + ci.quantity;
+
+    const lines = [];
+    for (const r of req.body.items) {
+      const it = byItem[r.item_id];
+      if (!it) return res.status(400).json({ title: `Line ${r.item_id} not on this order`, status: 400 });
+      const creditable = it.fulfilledQty - (creditedQty[it.id] || 0);
+      if (r.qty > creditable) return res.status(400).json({ title: `Cannot credit ${r.qty} of a line with only ${creditable} returnable`, status: 400 });
+      const unitPrice = parseFloat(it.unitPrice);
+      lines.push({ orderItemId: it.id, productId: it.productId, quantity: r.qty, unitPrice, lineCredit: +(unitPrice * r.qty).toFixed(2) });
+    }
+    const totalCredit = +lines.reduce((s, l) => s + l.lineCredit, 0).toFixed(2);
+
+    const note = await prisma.$transaction(async (tx) => {
+      const created = await tx.wholesaleCreditNote.create({
+        data: {
+          businessId, orderId: order.id, noteNumber: `CN-${Date.now().toString(36).toUpperCase()}${Math.floor(Math.random()*99)}`,
+          reason: req.body.reason, totalCredit, restocked: false, createdById: req.user.id,
+          items: { create: lines },
+        },
+        include: { items: true },
+      });
+
+      // GL: reverse revenue and the receivable.
+      await accounting.postJournal(tx, {
+        businessId, description: `Wholesale credit note — ${order.orderNumber || ''}`.trim(),
+        sourceType: 'wholesale_credit_note', sourceId: created.id, createdById: req.user.id,
+        lines: [
+          { code: '4000', debit: totalCredit, credit: 0, description: 'Wholesale sales return' },
+          { code: '1100', debit: 0, credit: totalCredit, description: 'Wholesale receivable reduced' },
+        ],
+      });
+
+      // Re-state the order: the return reduces what's billed/owed.
+      const newTotal = +(parseFloat(order.total) - totalCredit).toFixed(2);
+      const paid = parseFloat(order.amountPaid);
+      const paymentStatus = paid >= newTotal - 0.001 ? 'paid' : paid > 0 ? 'partial' : 'unpaid';
+      await tx.wholesaleOrder.update({ where: { id: order.id }, data: { total: newTotal < 0 ? 0 : newTotal, paymentStatus } });
+
+      return created;
+    });
+    res.status(201).json({ ...note, message: `Credit note for ${totalCredit.toFixed(2)} raised.` });
+  } catch (err) { next(err); }
+});
+
+// Credit notes raised against an order.
+router.get('/orders/:id/credit-notes', auth, async (req, res, next) => {
+  try {
+    const order = await prisma.wholesaleOrder.findFirst({ where: { id: req.params.id, businessId: req.user.business_id }, select: { id: true } });
+    if (!order) return res.status(404).json({ title: 'Order not found', status: 404 });
+    const notes = await prisma.wholesaleCreditNote.findMany({ where: { orderId: order.id }, include: { items: true }, orderBy: { createdAt: 'desc' } });
+    res.json({ credit_notes: notes, total_credited: +notes.reduce((s, n) => s + parseFloat(n.totalCredit), 0).toFixed(2) });
+  } catch (err) { next(err); }
+});
+
 // Outstanding balances per shop customer
 router.get('/outstanding', auth, async (req, res, next) => {
   try {
