@@ -177,6 +177,7 @@ router.get('/drugs', auth, async (req, res, next) => {
         formulation: true, manufacturer: true, isPrescriptionDrug: true,
         sellingPrice: true, packSize: true, sellByUnit: true,
         unitName: true, unitPrice: true, barcode: true,
+        controlledSchedule: true, reorderPoint: true,
         stockLevels: { select: { quantity: true } },
       },
       orderBy: { name: 'asc' },
@@ -200,7 +201,10 @@ router.put('/drugs/:id', auth, requireRole('owner', 'manager'), validate(z.objec
   strength:           z.string().max(50).optional().nullable(),
   formulation:        z.enum(['tablet', 'capsule', 'syrup', 'suspension', 'injection', 'cream', 'ointment', 'drops', 'inhaler', 'suppository', 'other']).optional().nullable(),
   manufacturer:       z.string().max(255).optional().nullable(),
+  barcode:            z.string().max(100).optional().nullable(),
   isPrescriptionDrug: z.boolean().optional(),
+  controlledSchedule: z.string().max(10).optional().nullable(),
+  reorderPoint:       z.coerce.number().int().nonnegative().max(1000000).optional(),
   packSize:           z.coerce.number().int().positive().max(10000).optional().nullable(),
   sellByUnit:         z.boolean().optional(),
   unitName:           z.string().max(30).optional().nullable(),
@@ -231,6 +235,82 @@ router.put('/drugs/:id', auth, requireRole('owner', 'manager'), validate(z.objec
     });
     if (!updated.count) return res.status(404).json({ title: 'Not found', status: 404 });
     res.json(await prisma.product.findUnique({ where: { id: req.params.id } }));
+  } catch (err) { next(err); }
+});
+
+// ── CREATE DRUG ───────────────────────────────────────────────────
+// Add a new drug (a Product with pharmacy fields) straight from Pharmacy,
+// without leaving for the general Products screen.
+router.post('/drugs', auth, requireRole('owner', 'manager'), validate(z.object({
+  name:               z.string().trim().min(1).max(255),
+  genericName:        z.string().max(255).optional().nullable(),
+  strength:           z.string().max(50).optional().nullable(),
+  formulation:        z.enum(['tablet', 'capsule', 'syrup', 'suspension', 'injection', 'cream', 'ointment', 'drops', 'inhaler', 'suppository', 'other']).optional().nullable(),
+  manufacturer:       z.string().max(255).optional().nullable(),
+  barcode:            z.string().max(100).optional().nullable(),
+  sellingPrice:       z.coerce.number().nonnegative().default(0),
+  costPrice:          z.coerce.number().nonnegative().default(0),
+  isPrescriptionDrug: z.boolean().default(false),
+  controlledSchedule: z.string().max(10).optional().nullable(),
+  reorderPoint:       z.coerce.number().int().nonnegative().max(1000000).default(0),
+  trackExpiry:        z.boolean().default(true),
+})), async (req, res, next) => {
+  try {
+    const b = req.body;
+    const drug = await prisma.product.create({
+      data: {
+        businessId: req.user.business_id, name: b.name,
+        genericName: b.genericName || null, strength: b.strength || null,
+        formulation: b.formulation || null, manufacturer: b.manufacturer || null,
+        barcode: b.barcode || null, sellingPrice: b.sellingPrice, costPrice: b.costPrice,
+        isPrescriptionDrug: b.isPrescriptionDrug, controlledSchedule: b.controlledSchedule || null,
+        reorderPoint: b.reorderPoint, trackExpiry: b.trackExpiry,
+      },
+      select: { id: true, name: true, genericName: true, strength: true, formulation: true, isPrescriptionDrug: true, sellingPrice: true, barcode: true },
+    });
+    res.status(201).json(drug);
+  } catch (err) { next(err); }
+});
+
+// ── RECEIVE BATCH ─────────────────────────────────────────────────
+// Take a batch into stock with its expiry date — the input that feeds the
+// expiry report and on-hand. Creates the batch, bumps the location's stock
+// level, and records the inbound movement.
+router.post('/batches', auth, requireRole('owner', 'manager'), validate(z.object({
+  product_id:   uuid,
+  location_id:  uuid,
+  batch_number: z.string().max(100).optional().nullable(),
+  quantity:     z.coerce.number().int().positive(),
+  cost_price:   z.coerce.number().nonnegative().default(0),
+  expiry_date:  z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable(),
+})), async (req, res, next) => {
+  try {
+    const b = req.body;
+    const drug = await prisma.product.findFirst({ where: { id: b.product_id, businessId: req.user.business_id }, select: { id: true, name: true } });
+    if (!drug) return res.status(404).json({ error: 'Drug not found.' });
+    const loc = await prisma.location.findFirst({ where: { id: b.location_id, businessId: req.user.business_id }, select: { id: true } });
+    if (!loc) return res.status(404).json({ error: 'Location not found.' });
+
+    const out = await prisma.$transaction(async (tx) => {
+      const batch = await tx.stockBatch.create({
+        data: {
+          productId: b.product_id, locationId: b.location_id, batchNumber: b.batch_number || null,
+          quantity: b.quantity, costPrice: b.cost_price, expiryDate: b.expiry_date ? new Date(b.expiry_date) : null,
+        },
+      });
+      const level = await tx.stockLevel.upsert({
+        where: { productId_locationId: { productId: b.product_id, locationId: b.location_id } },
+        create: { productId: b.product_id, locationId: b.location_id, quantity: b.quantity },
+        update: { quantity: { increment: b.quantity } },
+      });
+      await tx.stockMovement.create({
+        data: { businessId: req.user.business_id, productId: b.product_id, locationId: b.location_id, type: 'in', quantity: b.quantity, balanceAfter: level.quantity, referenceType: 'batch_receipt', referenceId: batch.id, createdById: req.user.id },
+      });
+      // An expiry-dated receipt implies the product should appear in the expiry report.
+      if (b.expiry_date) await tx.product.update({ where: { id: b.product_id }, data: { trackExpiry: true } });
+      return { batch, onHand: level.quantity };
+    });
+    res.status(201).json({ message: `Received ${b.quantity} of ${drug.name}.`, batch_id: out.batch.id, on_hand: out.onHand });
   } catch (err) { next(err); }
 });
 
