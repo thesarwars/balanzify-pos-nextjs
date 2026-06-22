@@ -1385,6 +1385,50 @@ describe('lending — underwriting from the ledger', () => {
   });
 });
 
+describe('hotel — best available rate (seasonal + long-stay)', () => {
+  let token, rtId, roomId;
+  beforeAll(async () => {
+    token = await register();
+    await enableModule(token, 'hotel');
+    const rt = await request(app).post('/api/v1/hotel/room-types').set(auth(token)).send({ name: 'Deluxe', baseRate: 100, maxOccupancy: 2 });
+    rtId = rt.body.id;
+    const room = await request(app).post('/api/v1/hotel/rooms').set(auth(token)).send({ roomTypeId: rtId, number: '101' });
+    roomId = room.body.id;
+    // Seasonal plan (December): 80/night. Long-stay plan: 60/night, 7+ nights.
+    await request(app).post('/api/v1/hotel/rate-plans').set(auth(token)).send({ roomTypeId: rtId, name: 'December Special', ratePerNight: 80, validFrom: '2026-12-01', validUntil: '2026-12-31' });
+    await request(app).post('/api/v1/hotel/rate-plans').set(auth(token)).send({ roomTypeId: rtId, name: 'Long Stay 7+', ratePerNight: 60, minNights: 7 });
+  });
+
+  test('quote picks the cheapest qualifying plan; falls back to base rate', async () => {
+    // 2 nights in December → seasonal 80 wins (long-stay needs 7 nights)
+    const q1 = (await request(app).get('/api/v1/hotel/quote').set(auth(token)).query({ room_type_id: rtId, check_in: '2026-12-10', check_out: '2026-12-12' })).body;
+    expect(q1.rate).toBeCloseTo(80, 2);
+    expect(q1.nights).toBe(2);
+    expect(q1.total).toBeCloseTo(160, 2);
+    expect(q1.plan.name).toBe('December Special');
+
+    // 7 nights in December → long-stay 60 is cheaper and now qualifies
+    const q2 = (await request(app).get('/api/v1/hotel/quote').set(auth(token)).query({ room_type_id: rtId, check_in: '2026-12-10', check_out: '2026-12-17' })).body;
+    expect(q2.rate).toBeCloseTo(60, 2);
+    expect(q2.total).toBeCloseTo(420, 2);
+
+    // 2 nights in November → no plan qualifies → room-type base rate 100
+    const q3 = (await request(app).get('/api/v1/hotel/quote').set(auth(token)).query({ room_type_id: rtId, check_in: '2026-11-10', check_out: '2026-11-12' })).body;
+    expect(q3.rate).toBeCloseTo(100, 2);
+    expect(q3.source).toBe('base_rate');
+  });
+
+  test('reservation with no rate specified auto-applies the best seasonal rate', async () => {
+    const r = await request(app).post('/api/v1/hotel/reservations').set(auth(token)).send({
+      roomId, guestName: 'Mr Yusuf', checkInDate: '2026-12-10', checkOutDate: '2026-12-12',
+    });
+    expect(r.status).toBe(201);
+    expect(Number(r.body.ratePerNight)).toBeCloseTo(80, 2);  // seasonal rate applied
+    expect(Number(r.body.totalRoomCharge)).toBeCloseTo(160, 2);
+    expect(r.body.ratePlanId).toBeTruthy();                  // the plan that was applied
+  });
+});
+
 describe('pharmacy prescriptions & controlled substances', () => {
   let token, loc, drug, verifierId;
   beforeAll(async () => {

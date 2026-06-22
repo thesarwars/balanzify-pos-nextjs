@@ -140,6 +140,39 @@ function nightsBetween(checkIn, checkOut) {
 function reservationNumber() { return `RES-${Date.now().toString().slice(-8)}`; }
 function folioNumber()       { return `FOL-${Date.now().toString().slice(-8)}`; }
 
+// Best Available Rate: pick the lowest active rate plan that applies to this room
+// type, is valid across the stay dates, and whose length-of-stay window fits the
+// nights — i.e. seasonal & long-stay pricing. Falls back to the room-type base
+// rate when no plan qualifies. This is the dynamic-pricing the model supports but
+// nothing previously resolved automatically.
+async function resolveBestRate(businessId, roomTypeId, checkIn, checkOut) {
+  const nights = nightsBetween(checkIn, checkOut);
+  const ci = new Date(checkIn);
+  const plans = await prisma.ratePlan.findMany({
+    where: {
+      businessId, isActive: true,
+      OR: [{ roomTypeId }, { roomTypeId: null }],
+      minNights: { lte: nights },
+      AND: [
+        { OR: [{ maxNights: null }, { maxNights: { gte: nights } }] },
+        { OR: [{ validFrom: null }, { validFrom: { lte: ci } }] },
+        { OR: [{ validUntil: null }, { validUntil: { gte: ci } }] },
+      ],
+    },
+    orderBy: { ratePerNight: 'asc' },
+  });
+  // Prefer a plan scoped to this room type over an all-types plan at the same price.
+  plans.sort((a, b) => parseFloat(a.ratePerNight) - parseFloat(b.ratePerNight) || (a.roomTypeId === roomTypeId ? -1 : 1));
+  const best = plans[0];
+  if (best) {
+    const rate = parseFloat(best.ratePerNight);
+    return { rate, nights, total: +(rate * nights).toFixed(2), currency: best.currency, source: 'rate_plan', plan: { id: best.id, name: best.name, includes_breakfast: best.includesBreakfast } };
+  }
+  const rt = roomTypeId ? await prisma.roomType.findFirst({ where: { id: roomTypeId, businessId }, select: { baseRate: true, currency: true } }) : null;
+  const rate = rt ? parseFloat(rt.baseRate) : 0;
+  return { rate, nights, total: +(rate * nights).toFixed(2), currency: rt?.currency || 'USD', source: 'base_rate', plan: null };
+}
+
 // ── ROOM TYPES ────────────────────────────────────────────────────
 
 router.get('/room-types', auth, async (req, res, next) => {
@@ -369,15 +402,18 @@ router.post('/reservations', auth, validate(ReservationSchema), async (req, res,
       return res.status(400).json({ error: 'Provide either guestId or guestName.' });
     }
 
-    // Resolve rate
-    let resolvedRate = ratePerNight;
+    // Resolve rate: explicit rate wins, then a named plan, then the Best Available
+    // Rate across the stay (seasonal/long-stay), then the room-type base rate.
+    let resolvedRate = ratePerNight, appliedPlanId = ratePlanId || null;
     if (!resolvedRate && ratePlanId) {
       const plan = await prisma.ratePlan.findUnique({ where: { id: ratePlanId } });
       resolvedRate = plan ? parseFloat(plan.ratePerNight) : 0;
     }
     if (!resolvedRate) {
-      const room = await prisma.room.findUnique({ where: { id: roomId }, include: { roomType: { select: { baseRate: true } } } });
-      resolvedRate = room ? parseFloat(room.roomType.baseRate) : 0;
+      const room = await prisma.room.findUnique({ where: { id: roomId }, include: { roomType: { select: { id: true, baseRate: true } } } });
+      const best = room ? await resolveBestRate(req.user.business_id, room.roomType.id, checkInDate, checkOutDate) : null;
+      if (best && best.rate > 0) { resolvedRate = best.rate; if (best.plan) appliedPlanId = best.plan.id; }
+      else resolvedRate = room ? parseFloat(room.roomType.baseRate) : 0;
     }
 
     const totalRoomCharge = resolvedRate * nights;
@@ -414,7 +450,7 @@ router.post('/reservations', auth, validate(ReservationSchema), async (req, res,
           nights,
           adults:            adults || 1,
           children:          children || 0,
-          ratePlanId:        ratePlanId || null,
+          ratePlanId:        appliedPlanId,
           ratePerNight:      resolvedRate,
           currency:          currency || 'USD',
           totalRoomCharge,
@@ -997,6 +1033,18 @@ router.get('/dashboard', auth, async (req, res, next) => {
 });
 
 // ── AVAILABILITY CALENDAR ─────────────────────────────────────────
+
+// Quote the best available rate for a room type over a stay (seasonal/long-stay
+// pricing) — for the booking screen, before a room is even picked.
+router.get('/quote', auth, async (req, res, next) => {
+  try {
+    const { room_type_id, check_in, check_out } = req.query;
+    if (!room_type_id || !check_in || !check_out) return res.status(400).json({ error: 'room_type_id, check_in and check_out required.' });
+    if (nightsBetween(check_in, check_out) < 1) return res.status(400).json({ error: 'check_out must be after check_in.' });
+    const quote = await resolveBestRate(req.user.business_id, room_type_id, check_in, check_out);
+    res.json({ room_type_id, check_in, check_out, ...quote });
+  } catch (err) { next(err); }
+});
 
 router.get('/availability', auth, async (req, res, next) => {
   try {
