@@ -275,6 +275,36 @@ router.post('/plans', auth, requireRole('owner', 'manager'), validate(z.object({
   } catch (err) { next(err); }
 });
 
+// GET /api/v1/credit/plans/overdue — installments past due date
+// NOTE: must be declared before '/plans/:id' so 'overdue' isn't matched as an id.
+router.get('/plans/overdue', auth, async (req, res, next) => {
+  try {
+    const overdue = await prisma.paymentPlanItem.findMany({
+      where: {
+        businessId: req.user.business_id,
+        status:     { in: ['pending', 'partial', 'overdue'] },
+        dueDate:    { lt: new Date() },
+      },
+      include: {
+        // customer lives on the plan, not the item — pull it through the relation
+        plan: { select: { planNumber: true, description: true, customer: { select: { name: true, phone: true, whatsapp: true } } } },
+      },
+      orderBy: { dueDate: 'asc' },
+    });
+
+    res.json({
+      overdue: overdue.map(({ plan, ...i }) => ({
+        ...i,
+        plan:     { planNumber: plan.planNumber, description: plan.description },
+        customer: plan.customer,
+        days_overdue: Math.floor((new Date() - new Date(i.dueDate)) / 86400000),
+        amount_remaining: parseFloat(i.amount) - parseFloat(i.amountPaid),
+      })),
+      total_overdue_amount: overdue.reduce((s, i) => s + parseFloat(i.amount) - parseFloat(i.amountPaid), 0),
+    });
+  } catch (err) { next(err); }
+});
+
 // GET /api/v1/credit/plans/:id
 router.get('/plans/:id', auth, async (req, res, next) => {
   try {
@@ -368,33 +398,6 @@ router.post('/plans/:id/installments/:iid/pay', auth, validate(z.object({
   }
 });
 
-// GET /api/v1/credit/plans/overdue — installments past due date
-router.get('/plans/overdue', auth, async (req, res, next) => {
-  try {
-    const overdue = await prisma.paymentPlanItem.findMany({
-      where: {
-        businessId: req.user.business_id,
-        status:     { in: ['pending', 'partial'] },
-        dueDate:    { lt: new Date() },
-      },
-      include: {
-        plan:     { select: { planNumber: true, description: true } },
-        customer: { select: { name: true, phone: true, whatsapp: true } },
-      },
-      orderBy: { dueDate: 'asc' },
-    });
-
-    res.json({
-      overdue: overdue.map(i => ({
-        ...i,
-        days_overdue: Math.floor((new Date() - new Date(i.dueDate)) / 86400000),
-        amount_remaining: parseFloat(i.amount) - parseFloat(i.amountPaid),
-      })),
-      total_overdue_amount: overdue.reduce((s, i) => s + parseFloat(i.amount) - parseFloat(i.amountPaid), 0),
-    });
-  } catch (err) { next(err); }
-});
-
 // POST /api/v1/credit/plans/reminders — send WhatsApp reminders
 router.post('/plans/reminders', auth, requireRole('owner', 'manager'), async (req, res, next) => {
   try {
@@ -409,8 +412,8 @@ router.post('/plans/reminders', auth, requireRole('owner', 'manager'), async (re
         dueDate:    { lte: in3Days },
       },
       include: {
-        plan:     { select: { planNumber: true, description: true } },
-        customer: { select: { name: true, phone: true, whatsapp: true } },
+        // customer lives on the plan, not the item — pull it through the relation
+        plan: { select: { planNumber: true, description: true, customer: { select: { name: true, phone: true, whatsapp: true } } } },
       },
     });
 
@@ -418,7 +421,7 @@ router.post('/plans/reminders', auth, requireRole('owner', 'manager'), async (re
     const business = await prisma.business.findUnique({ where: { id: req.user.business_id }, select: { name: true, currency: true } });
 
     for (const item of due) {
-      const phone = item.customer.whatsapp || item.customer.phone;
+      const phone = item.plan.customer.whatsapp || item.plan.customer.phone;
       if (!phone) continue;
 
       const isOverdue = new Date(item.dueDate) < today;
@@ -427,8 +430,8 @@ router.post('/plans/reminders', auth, requireRole('owner', 'manager'), async (re
       const currency  = business?.currency || 'USD';
 
       let msg = isOverdue
-        ? `⚠️ *Payment Overdue*\n\nDear ${item.customer.name},\n\nYour installment of ${currency} ${remaining.toFixed(2)} for ${item.plan.description} was due on ${new Date(item.dueDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}.\n\nPlease contact ${business?.name} to arrange payment.\n\n📋 Plan: ${item.plan.planNumber} | Installment #${item.installmentNo}`
-        : `📅 *Payment Reminder*\n\nDear ${item.customer.name},\n\nYour installment of ${currency} ${remaining.toFixed(2)} for ${item.plan.description} is due in ${daysUntil} day${daysUntil !== 1 ? 's' : ''}.\n\n📋 Plan: ${item.plan.planNumber} | Installment #${item.installmentNo}\n📆 Due: ${new Date(item.dueDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}`;
+        ? `⚠️ *Payment Overdue*\n\nDear ${item.plan.customer.name},\n\nYour installment of ${currency} ${remaining.toFixed(2)} for ${item.plan.description} was due on ${new Date(item.dueDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}.\n\nPlease contact ${business?.name} to arrange payment.\n\n📋 Plan: ${item.plan.planNumber} | Installment #${item.installmentNo}`
+        : `📅 *Payment Reminder*\n\nDear ${item.plan.customer.name},\n\nYour installment of ${currency} ${remaining.toFixed(2)} for ${item.plan.description} is due in ${daysUntil} day${daysUntil !== 1 ? 's' : ''}.\n\n📋 Plan: ${item.plan.planNumber} | Installment #${item.installmentNo}\n📆 Due: ${new Date(item.dueDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}`;
 
       // Add diaspora payment link if enabled
       if (item.paymentToken) {
@@ -449,7 +452,7 @@ router.post('/plans/reminders', auth, requireRole('owner', 'manager'), async (re
       });
 
       sent.push({
-        customer:      item.customer.name,
+        customer:      item.plan.customer.name,
         phone:         normalizedPhone,
         wa_url:        `https://wa.me/${normalizedPhone}?text=${encodeURIComponent(msg)}`,
         amount:        remaining,
@@ -477,8 +480,7 @@ router.post('/plans/:id/installments/:iid/diaspora-link', auth, async (req, res,
     const item = await prisma.paymentPlanItem.findFirst({
       where: { id: req.params.iid, planId: req.params.id, businessId: req.user.business_id },
       include: {
-        plan:     { select: { description: true, planNumber: true } },
-        customer: { select: { name: true } },
+        plan: { select: { description: true, planNumber: true, customer: { select: { name: true } } } },
       },
     });
     if (!item) return res.status(404).json({ error: 'Installment not found.' });
@@ -497,7 +499,7 @@ router.post('/plans/:id/installments/:iid/diaspora-link', auth, async (req, res,
     // WhatsApp shareable message for the customer to forward to family abroad
     const business = await prisma.business.findUnique({ where: { id: req.user.business_id }, select: { name: true, currency: true } });
     const currency  = item.currency || business?.currency || 'USD';
-    const waMsg = `💳 *Pay installment for ${item.customer.name}*\n\n${item.plan.description}\nInstallment #${item.installmentNo}\nAmount: ${currency} ${amount.toFixed(2)}\nDue: ${new Date(item.dueDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}\n\nPay securely online:\n${paymentUrl}\n\nPowered by Balanzify`;
+    const waMsg = `💳 *Pay installment for ${item.plan.customer.name}*\n\n${item.plan.description}\nInstallment #${item.installmentNo}\nAmount: ${currency} ${amount.toFixed(2)}\nDue: ${new Date(item.dueDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}\n\nPay securely online:\n${paymentUrl}\n\nPowered by Balanzify`;
 
     res.json({
       payment_url:  paymentUrl,
