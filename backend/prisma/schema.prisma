@@ -3258,6 +3258,7 @@ model OrderItem {
   lineTotal     Decimal  @map("line_total") @db.Decimal(12, 2)
   notes         String?  @db.VarChar(500) // "No garlic", "Well done"
   course        Int      @default(1) // 1=starter, 2=main, 3=dessert
+  seat          Int?     // seat/cover number, for per-seat ordering & split-by-seat
   status        String   @default("pending") @db.VarChar(20)
   createdAt     DateTime @default(now()) @map("created_at")
 
