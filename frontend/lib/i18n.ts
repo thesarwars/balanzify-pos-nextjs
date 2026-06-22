@@ -129,6 +129,22 @@ const MESSAGES = {
   'sync.no_devices':{ en: 'No devices have synced yet.', so: 'Wali aalad lama xidhin.', ar: 'لم تتزامن أي أجهزة بعد.' },
   'sync.live_required': { en: 'Connect the live backend to view sync status.', so: 'Ku xidh server-ka.', ar: 'اتصل بالخادم.' },
 
+  // Delivery / dispatch
+  'delivery.title':    { en: 'Delivery', so: 'Gaarsiinta', ar: 'التوصيل' },
+  'delivery.subtitle': { en: 'Consumer orders + driver dispatch', so: 'Dalabaadka + dirista darawalada', ar: 'طلبات العملاء وإرسال السائقين' },
+  'delivery.drivers':  { en: 'Drivers', so: 'Darawalada', ar: 'السائقون' },
+  'delivery.orders':   { en: 'Orders', so: 'Dalabaadka', ar: 'الطلبات' },
+  'delivery.available': { en: 'Available', so: 'Diyaar', ar: 'متاح' },
+  'delivery.busy':     { en: 'On a run', so: 'Shaqo ku jira', ar: 'في مهمة' },
+  'delivery.offline':  { en: 'Off', so: 'Bakhtiyaaray', ar: 'غير متصل' },
+  'delivery.assign':   { en: 'Assign', so: 'U qoondee', ar: 'تعيين' },
+  'delivery.picked_up':{ en: 'Picked up', so: 'La qaaday', ar: 'تم الاستلام' },
+  'delivery.deliver':  { en: 'Mark delivered', so: 'Calaamadee la gaarsiiyay', ar: 'تم التوصيل' },
+  'delivery.fee':      { en: 'Fee', so: 'Khidmada', ar: 'الرسوم' },
+  'delivery.no_orders':{ en: 'No delivery orders yet.', so: 'Wali dalab gaarsiin ah ma jiro.', ar: 'لا توجد طلبات بعد.' },
+  'delivery.add_driver':{ en: 'Add driver', so: 'Ku dar darawal', ar: 'أضف سائقًا' },
+  'delivery.live_required': { en: 'Connect the live backend for delivery.', so: 'Ku xidh server-ka.', ar: 'اتصل بالخادم.' },
+
   // Offline / connectivity
   'offline.offline':  { en: 'Offline', so: 'Offline', ar: 'دون اتصال' },
   'offline.syncing':  { en: 'Syncing…', so: 'Isku xidhaya…', ar: 'جارٍ المزامنة…' },
@@ -179,6 +195,7 @@ const NAV_LABELS: Record<string, Partial<Record<Locale, string>>> = {
   'fiscal':          { so: 'Canshuuraynta', ar: 'الفوترة الضريبية' },
   'reports':         { so: 'Warbixinno', ar: 'التقارير' },
   'sync':            { so: 'Isku-xidhka offline', ar: 'المزامنة دون اتصال' },
+  'delivery':        { so: 'Gaarsiinta', ar: 'التوصيل' },
   'users':           { so: 'Isticmaalayaasha', ar: 'المستخدمون' },
   'settings':        { so: 'Dejinta', ar: 'الإعدادات' },
 };
