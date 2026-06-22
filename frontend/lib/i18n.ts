@@ -118,6 +118,17 @@ const MESSAGES = {
   'rx.sev.contraindicated': { en: 'Contraindicated', so: 'Mamnuuc', ar: 'مضاد استطباب' },
   'rx.contraindicated':     { en: 'Contraindicated', so: 'Mamnuuc', ar: 'مضاد استطباب' },
 
+  // Offline sync
+  'sync.title':     { en: 'Offline Sync', so: 'Isku-xidhka offline', ar: 'المزامنة دون اتصال' },
+  'sync.subtitle':  { en: 'Tills that sell offline and reconcile when back online', so: 'Tijaabooyinka iibiya offline-ka oo dib u heshiiya', ar: 'نقاط البيع التي تعمل دون اتصال وتتزامن لاحقًا' },
+  'sync.devices':   { en: 'Devices', so: 'Aaladaha', ar: 'الأجهزة' },
+  'sync.total_synced': { en: 'Operations Synced', so: 'Hawlaha la xidhay', ar: 'العمليات المتزامنة' },
+  'sync.last_push': { en: 'Last push', so: 'Dirista ugu dambeysay', ar: 'آخر إرسال' },
+  'sync.last_pull': { en: 'Last pull', so: 'Soo-dejinta ugu dambeysay', ar: 'آخر سحب' },
+  'sync.pushed_ops':{ en: 'pushed', so: 'la diray', ar: 'تم الإرسال' },
+  'sync.no_devices':{ en: 'No devices have synced yet.', so: 'Wali aalad lama xidhin.', ar: 'لم تتزامن أي أجهزة بعد.' },
+  'sync.live_required': { en: 'Connect the live backend to view sync status.', so: 'Ku xidh server-ka.', ar: 'اتصل بالخادم.' },
+
   // Language picker
   'language.label': { en: 'Language', so: 'Luqadda', ar: 'اللغة' },
 } satisfies Record<string, Record<Locale, string>>;
@@ -161,6 +172,7 @@ const NAV_LABELS: Record<string, Partial<Record<Locale, string>>> = {
   'lending':         { so: 'Maalgelin', ar: 'التمويل' },
   'fiscal':          { so: 'Canshuuraynta', ar: 'الفوترة الضريبية' },
   'reports':         { so: 'Warbixinno', ar: 'التقارير' },
+  'sync':            { so: 'Isku-xidhka offline', ar: 'المزامنة دون اتصال' },
   'users':           { so: 'Isticmaalayaasha', ar: 'المستخدمون' },
   'settings':        { so: 'Dejinta', ar: 'الإعدادات' },
 };
