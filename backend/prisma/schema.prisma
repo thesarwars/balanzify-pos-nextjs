@@ -2387,10 +2387,15 @@ model WhatsappLog {
   content        String?
   referenceType  String?  @map("reference_type") @db.VarChar(50)
   referenceId    String?  @map("reference_id") @db.Uuid
+  provider       String   @default("link") @db.VarChar(20)
+  status         String   @default("pending") @db.VarChar(20) // pending|sent|delivered|read|failed|link
+  providerMessageId String? @map("provider_message_id") @db.VarChar(128)
+  errorDetail    String?  @map("error_detail")
   sentAt         DateTime @default(now()) @map("sent_at")
 
   business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
 
+  @@index([businessId, sentAt])
   @@map("whatsapp_log")
 }
 

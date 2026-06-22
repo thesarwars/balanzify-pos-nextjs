@@ -1,5 +1,7 @@
 const express = require('express');
+const { z } = require('zod');
 const prisma = require('../lib/prisma');
+const wa = require('../lib/whatsapp');
 const { auth, requireRole } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const {
@@ -547,6 +549,73 @@ whatsappRouter.post('/broadcast', auth, requireRole('owner', 'manager'), async (
     }
 
     res.json({ links, total: links.length });
+  } catch (err) { next(err); }
+});
+
+// ── Real delivery (provider registry) — not just a wa.me link ──────────────────
+
+// Send an arbitrary message to a phone or a linked customer.
+whatsappRouter.post('/send', auth, requireRole('owner', 'manager'), validate(z.object({
+  to: z.string().max(40).optional(),
+  customer_id: z.string().uuid().optional(),
+  message: z.string().min(1).max(4096),
+  kind: z.string().max(50).optional(),
+}).refine(b => b.to || b.customer_id, { message: 'to or customer_id required' })), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    let to = req.body.to;
+    if (!to && req.body.customer_id) {
+      const c = await prisma.customer.findFirst({ where: { id: req.body.customer_id, businessId } });
+      if (!c) return res.status(404).json({ title: 'Customer not found', status: 404 });
+      to = c.whatsapp || c.phone;
+    }
+    const r = await wa.send({ businessId, to, text: req.body.message, kind: req.body.kind || 'message', referenceType: req.body.customer_id ? 'customer' : null, referenceId: req.body.customer_id || null });
+    res.status(r.ok ? 200 : 502).json(r);
+  } catch (err) { next(err); }
+});
+
+// Payment-reminder journey — ties WhatsApp to the credit/financing loop. Nudges
+// every customer carrying an outstanding balance (or one named customer).
+whatsappRouter.post('/reminders/credit', auth, requireRole('owner', 'manager'), validate(z.object({
+  customer_id: z.string().uuid().optional(),
+  min_balance: z.coerce.number().nonnegative().default(0.01),
+})), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const business = await prisma.business.findUnique({ where: { id: businessId }, select: { name: true } });
+    const customers = await prisma.customer.findMany({
+      where: {
+        businessId, isActive: true, whatsappOptedIn: true,
+        outstandingBalance: { gte: req.body.min_balance },
+        ...(req.body.customer_id && { id: req.body.customer_id }),
+      },
+      select: { id: true, name: true, phone: true, whatsapp: true, outstandingBalance: true, diasporaCurrency: true },
+    });
+
+    const results = [];
+    let sent = 0;
+    for (const c of customers) {
+      const bal = parseFloat(c.outstandingBalance).toFixed(2);
+      const msg = `*Payment reminder* — ${business.name}\n\nDear ${c.name}, our records show an outstanding balance of *$${bal}*. Kindly arrange payment at your earliest convenience. Reply here if you have any questions.\n\nThank you.`;
+      const r = await wa.send({ businessId, to: c.whatsapp || c.phone, text: msg, kind: 'credit_reminder', referenceType: 'customer', referenceId: c.id });
+      if (r.ok) sent += 1;
+      results.push({ customer_id: c.id, name: c.name, status: r.status, wa_url: r.wa_url, error: r.error });
+    }
+    res.json({ provider: wa.resolveProviderName(), reminded: customers.length, sent, results });
+  } catch (err) { next(err); }
+});
+
+// Delivery history with provider + status — the comms audit trail.
+whatsappRouter.get('/log', auth, async (req, res, next) => {
+  try {
+    const rows = await prisma.whatsappLog.findMany({
+      where: { businessId: req.user.business_id, ...(req.query.kind && { messageType: String(req.query.kind) }) },
+      orderBy: { sentAt: 'desc' }, take: 200,
+    });
+    res.json({ messages: rows.map(r => ({
+      id: r.id, phone: r.recipientPhone, kind: r.messageType, status: r.status, provider: r.provider,
+      reference_type: r.referenceType, reference_id: r.referenceId, error: r.errorDetail, sent_at: r.sentAt,
+    })) });
   } catch (err) { next(err); }
 });
 
