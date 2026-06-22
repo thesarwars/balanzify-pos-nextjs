@@ -150,12 +150,21 @@ loyaltyRouter.get('/rules', auth, async (req, res, next) => {
 loyaltyRouter.put('/rules', auth, requireRole('owner'), validate(RewardSettingsSchema), async (req, res, next) => {
   try {
     const s = { ...REWARD_DEFAULTS, ...req.body };
-    const typed = {
-      isActive: s.enabled !== false,
-      pointsPerDollar: s.amount_per_unit_point > 0 ? +(1 / s.amount_per_unit_point).toFixed(4) : 1,
-      dollarPerPoint: s.redeem_amount_per_point || 0.01,
-      minRedeemPoints: s.min_redeem_point || 0,
-    };
+    const b = req.body;
+    // Accept both the rich reward-settings vocabulary (amount_per_unit_point,
+    // redeem_amount_per_point, min_redeem_point, enabled) AND the simpler
+    // points_per_dollar / dollar_per_point / min_redeem_points / is_active one.
+    const pointsPerDollar = b.points_per_dollar != null ? +b.points_per_dollar
+      : (s.amount_per_unit_point > 0 ? +(1 / s.amount_per_unit_point).toFixed(4) : 1);
+    const dollarPerPoint  = b.dollar_per_point  != null ? +b.dollar_per_point  : (s.redeem_amount_per_point || 0.01);
+    const minRedeemPoints = b.min_redeem_points != null ? Math.trunc(+b.min_redeem_points) : (s.min_redeem_point || 0);
+    const isActive        = b.is_active != null ? !!b.is_active : (s.enabled !== false);
+    // Keep the persisted JSON settings coherent with whichever vocabulary was used.
+    if (b.points_per_dollar != null && pointsPerDollar > 0) s.amount_per_unit_point = +(1 / pointsPerDollar).toFixed(4);
+    if (b.dollar_per_point  != null) s.redeem_amount_per_point = dollarPerPoint;
+    if (b.min_redeem_points != null) s.min_redeem_point = minRedeemPoints;
+    s.enabled = isActive;
+    const typed = { isActive, pointsPerDollar, dollarPerPoint, minRedeemPoints };
     const rule = await prisma.loyaltyRule.upsert({
       where: { businessId: req.user.business_id },
       create: { businessId: req.user.business_id, settings: s, ...typed },

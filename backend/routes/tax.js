@@ -18,13 +18,25 @@ const { auth, requireRole } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const router = express.Router();
 
+// The rest of the API takes snake_case request bodies; accept that (and tolerate
+// camelCase) so `is_default`/`is_inclusive` actually register — previously they
+// were silently dropped, so no default rate was ever set and tax came out 0.
 const TaxRateSchema = z.object({
   name:         z.string().trim().min(1).max(100),
   rate:         z.coerce.number().min(0).max(1),       // 0.16 = 16%, not 16
   region:       z.string().trim().max(100).optional().nullable(),
-  isDefault:    z.boolean().default(false),
-  isInclusive:  z.boolean().default(false),
-  isActive:     z.boolean().default(true),
+  is_default:   z.boolean().optional(),
+  is_inclusive: z.boolean().optional(),
+  is_active:    z.boolean().optional(),
+  isDefault:    z.boolean().optional(),
+  isInclusive:  z.boolean().optional(),
+  isActive:     z.boolean().optional(),
+});
+// Coalesce either naming style into the canonical flags.
+const taxFlags = (b) => ({
+  isDefault:   b.is_default   ?? b.isDefault,
+  isInclusive: b.is_inclusive ?? b.isInclusive,
+  isActive:    b.is_active    ?? b.isActive,
 });
 
 // GET /api/v1/tax/rates
@@ -54,7 +66,9 @@ router.get('/rates/:id', auth, async (req, res, next) => {
 // POST /api/v1/tax/rates
 router.post('/rates', auth, requireRole('owner', 'manager'), validate(TaxRateSchema), async (req, res, next) => {
   try {
-    const { name, rate, region, isDefault, isInclusive, isActive } = req.body;
+    const { name, rate, region } = req.body;
+    const f = taxFlags(req.body);
+    const isDefault = f.isDefault ?? false, isInclusive = f.isInclusive ?? false, isActive = f.isActive ?? true;
 
     // If setting this as default, unset current default first
     if (isDefault) {
@@ -74,7 +88,8 @@ router.post('/rates', auth, requireRole('owner', 'manager'), validate(TaxRateSch
 // PUT /api/v1/tax/rates/:id
 router.put('/rates/:id', auth, requireRole('owner', 'manager'), validate(TaxRateSchema.partial()), async (req, res, next) => {
   try {
-    const { name, rate, region, isDefault, isInclusive, isActive } = req.body;
+    const { name, rate, region } = req.body;
+    const { isDefault, isInclusive, isActive } = taxFlags(req.body);
 
     if (isDefault) {
       await prisma.taxRate.updateMany({
