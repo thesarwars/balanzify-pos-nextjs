@@ -1272,4 +1272,75 @@ describe('WhatsApp-native delivery (provider registry + journeys)', () => {
   });
 });
 
+describe('fiscalization (tax-authority compliance: eTIMS / VFD / EBM)', () => {
+  let token, loc, prod;
+  beforeAll(async () => {
+    token = await register();
+    loc = await location(token);
+    prod = await stockedProduct(token, loc, 10, 100);
+  });
+
+  test('disabled by default: fiscalize is rejected and sales are unsigned', async () => {
+    const sale = await makeSale(token, loc, prod, { qty: 1, price: 10 });
+    expect(sale.status).toBe(201);
+    expect(sale.body._fiscal).toBeUndefined();
+    const r = await request(app).post(`/api/v1/fiscal/sales/${sale.body.id}/fiscalize`).set(auth(token));
+    expect(r.status).toBe(409);
+  });
+
+  test('configured device auto-signs each sale into a chained, verifiable receipt', async () => {
+    const cfg = await request(app).post('/api/v1/fiscal/config').set(auth(token))
+      .send({ jurisdiction: 'etims', device_serial: 'CU-0001' });
+    expect(cfg.status).toBe(201);
+    expect(cfg.body.enabled).toBe(true);
+
+    const s1 = await makeSale(token, loc, prod, { qty: 2, price: 10 });
+    const s2 = await makeSale(token, loc, prod, { qty: 1, price: 10 });
+    // auto-fiscalized inline at checkout
+    expect(s1.body._fiscal.invoice_label).toMatch(/^KRA-CU-0001-\d{7}$/);
+    expect(s1.body._fiscal.qr_data).toContain('itax.kra.go.ke');
+
+    const r1 = (await request(app).get(`/api/v1/fiscal/receipt/${s1.body.id}`).set(auth(token))).body;
+    const r2 = (await request(app).get(`/api/v1/fiscal/receipt/${s2.body.id}`).set(auth(token))).body;
+    // sequential numbers, and the chain links s2.prev → s1.signature
+    expect(r2.fiscal_number).toBe(r1.fiscal_number + 1);
+
+    // public QR verification recomputes the signature → authentic
+    const v = await request(app).get(`/fiscal/verify/${r1.verification_code}`);
+    expect(v.status).toBe(200);
+    expect(v.body.valid).toBe(true);
+    expect(v.body.total).toBeCloseTo(20, 2);
+    expect(v.body.invoice_label).toBe(r1.invoice_label);
+  });
+
+  test('idempotent: re-fiscalizing a sale returns the same receipt', async () => {
+    const s = await makeSale(token, loc, prod, { qty: 1, price: 10 });
+    const first = (await request(app).get(`/api/v1/fiscal/receipt/${s.body.id}`).set(auth(token))).body;
+    const again = await request(app).post(`/api/v1/fiscal/sales/${s.body.id}/fiscalize`).set(auth(token));
+    expect(again.status).toBe(201);
+    expect(again.body.fiscal_number).toBe(first.fiscal_number);
+    expect(again.body.verification_code).toBe(first.verification_code);
+  });
+
+  test('tamper-evident: altering the sale total breaks verification', async () => {
+    const s = await makeSale(token, loc, prod, { qty: 1, price: 10 });
+    const r = (await request(app).get(`/api/v1/fiscal/receipt/${s.body.id}`).set(auth(token))).body;
+    expect((await request(app).get(`/fiscal/verify/${r.verification_code}`)).body.valid).toBe(true);
+    // someone edits the books after the fact
+    await prisma.sale.update({ where: { id: s.body.id }, data: { totalAmount: 999.99 } });
+    const v = await request(app).get(`/fiscal/verify/${r.verification_code}`);
+    expect(v.body.valid).toBe(false);
+  });
+
+  test('transmit moves a signed receipt out of the pending queue', async () => {
+    const s = await makeSale(token, loc, prod, { qty: 1, price: 10 });
+    const before = (await request(app).get('/api/v1/fiscal/pending').set(auth(token))).body;
+    expect(before.receipts.find(x => x.sale_id === s.body.id)).toBeTruthy();
+    const t = await request(app).post(`/api/v1/fiscal/sales/${s.body.id}/transmit`).set(auth(token));
+    expect(t.body.status).toBe('transmitted');
+    const after = (await request(app).get('/api/v1/fiscal/pending').set(auth(token))).body;
+    expect(after.receipts.find(x => x.sale_id === s.body.id)).toBeFalsy();
+  });
+});
+
 afterAll(async () => { await prisma.$disconnect(); });
