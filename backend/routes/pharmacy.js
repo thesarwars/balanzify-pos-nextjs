@@ -372,6 +372,18 @@ router.post('/interactions', auth, requireRole('owner', 'manager'), validate(z.o
   } catch (err) { next(err); }
 });
 
+// DELETE /api/v1/pharmacy/interactions/:id — remove one of this business's own
+// custom entries. Shipped clinical KB rows have business_id NULL and are scoped
+// out of the delete, so they can never be removed here.
+router.delete('/interactions/:id', auth, requireRole('owner', 'manager'), async (req, res, next) => {
+  try {
+    if (!/^[0-9a-fA-F-]{36}$/.test(req.params.id)) return res.status(404).json({ error: 'Custom interaction not found.' });
+    const r = await prisma.drugInteraction.deleteMany({ where: { id: req.params.id, businessId: req.user.business_id } });
+    if (r.count === 0) return res.status(404).json({ error: 'Custom interaction not found.' });
+    res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
 // ── FAST MOVERS / REORDER URGENCY ────────────────────────────────
 
 router.get('/fast-movers', auth, async (req, res, next) => {

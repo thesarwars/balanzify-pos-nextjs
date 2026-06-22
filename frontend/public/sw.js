@@ -2,7 +2,7 @@
 // connections (the norm in target markets). The app shell is cached so the UI
 // loads offline; API calls are NEVER cached (the app's own /sync handles offline
 // data), so business data is always fresh or explicitly queued by the app.
-const CACHE = 'balanzify-shell-v1';
+const CACHE = 'balanzify-shell-v2';
 const SHELL = ['/'];
 
 self.addEventListener('install', (event) => {
