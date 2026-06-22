@@ -205,6 +205,7 @@ try {
   const fiscalRoutes = require('./routes/fiscal');
   app.use('/api/v1/fiscal', apiLimiter, fiscalRoutes);
   app.use('/fiscal', fiscalRoutes.publicRouter); // public QR verification
+  app.use('/api/v1/shop', apiLimiter, require('./routes/shop')); // public consumer ordering (no auth)
   app.use('/api/v1/islamic', apiLimiter, require('./routes/islamic'));
   app.use('/api/v1/export', apiLimiter, exportRoutes);
   app.use('/api/v1/accounting', apiLimiter, accountingRoutes);
