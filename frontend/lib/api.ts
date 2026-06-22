@@ -241,6 +241,18 @@ export interface SyncPushResult {
   server_time: string; applied: number; total: number;
   results: { op_id: string; status: 'applied' | 'duplicate' | 'conflict' | 'error'; sale_id?: string; sale_number?: string | null; error?: string; code?: string }[];
 }
+export interface LendingAssessment {
+  eligible: boolean; score: number; recommended_limit: number; currency: string;
+  signals: {
+    avg_monthly_revenue: number; net_margin: number; cash_on_hand: number;
+    payables: number; months_active: number; period_revenue: number; period_net_profit: number;
+  };
+}
+export interface FinancingAdvanceRow {
+  id: string; principal: string | number; feeAmount: string | number;
+  totalRepayable: string | number; amountRepaid: string | number; outstanding: number;
+  status: string; collectionRate?: string | number; createdAt: string;
+}
 
 // ═══════════════════════════════════════════════════════════════════
 //  MOCK BACKEND
@@ -3761,9 +3773,9 @@ const API: any = {
 
   // Embedded Sharia-compliant lending + the financial statements it underwrites from.
   lending: {
-    assessment(): Promise<any> { return realReq('GET', '/lending/assessment'); },
+    assessment(): Promise<LendingAssessment> { return realReq('GET', '/lending/assessment'); },
     offer(body: { principal: number; collection_rate?: number }): Promise<any> { return realReq('POST', '/lending/offer', { body }); },
-    advances(): Promise<{ advances: any[] }> { return realReq('GET', '/lending/advances'); },
+    advances(): Promise<{ advances: FinancingAdvanceRow[] }> { return realReq('GET', '/lending/advances'); },
   },
   ledger: {
     trialBalance(): Promise<any> { return realReq('GET', '/accounting/trial-balance'); },
