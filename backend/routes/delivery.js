@@ -12,10 +12,21 @@ const express = require('express');
 const { z } = require('zod');
 const prisma = require('../lib/prisma');
 const accounting = require('../lib/accounting');
+const wa = require('../lib/whatsapp');
 const { auth, requireRole } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 
 const router = express.Router();
+
+// Notify the customer of a status change over WhatsApp — best-effort, never blocks.
+function notifyCustomer(businessId, delivery, status) {
+  if (!delivery.customerPhone) return;
+  const msg = status === 'assigned' ? `Your order is on its way — a driver has been assigned. 🛵`
+    : status === 'picked_up' ? `Your order has been picked up and is en route. 🚚`
+    : status === 'delivered' ? `Your order has been delivered. Thank you! ✅`
+    : `Your order status: ${status}.`;
+  wa.send({ businessId, to: delivery.customerPhone, text: msg, kind: 'delivery_status', referenceType: 'delivery', referenceId: delivery.id }).catch(() => {});
+}
 
 const serializeDriver = (d) => ({
   id: d.id, name: d.name, phone: d.phone, vehicle_type: d.vehicleType,
@@ -27,8 +38,26 @@ const serializeDelivery = (d) => ({
   customer_name: d.customerName, customer_phone: d.customerPhone, address: d.address,
   channel: d.channel, items_summary: d.itemsSummary,
   order_amount: parseFloat(d.orderAmount), delivery_fee: parseFloat(d.deliveryFee),
-  payment_mode: d.paymentMode, status: d.status,
+  payment_mode: d.paymentMode, status: d.status, zone_id: d.zoneId,
+  recipient_name: d.recipientName, pod_note: d.podNote, pod_photo_url: d.podPhotoUrl,
   assigned_at: d.assignedAt, delivered_at: d.deliveredAt, created_at: d.createdAt,
+});
+
+// ── Delivery zones (flat fee per named area — pricing without GPS) ──
+router.get('/zones', auth, async (req, res, next) => {
+  try {
+    const zones = await prisma.deliveryZone.findMany({ where: { businessId: req.user.business_id, isActive: true }, orderBy: { name: 'asc' } });
+    res.json({ zones: zones.map(z => ({ id: z.id, name: z.name, fee: parseFloat(z.fee) })) });
+  } catch (err) { next(err); }
+});
+router.post('/zones', auth, requireRole('owner', 'manager'), validate(z.object({
+  name: z.string().trim().min(1).max(120),
+  fee: z.coerce.number().nonnegative().default(0),
+})), async (req, res, next) => {
+  try {
+    const zone = await prisma.deliveryZone.create({ data: { businessId: req.user.business_id, name: req.body.name, fee: req.body.fee } });
+    res.status(201).json({ id: zone.id, name: zone.name, fee: parseFloat(zone.fee) });
+  } catch (err) { next(err); }
 });
 
 // ── Drivers ─────────────────────────────────────────────────────────
@@ -75,19 +104,27 @@ router.post('/', auth, validate(z.object({
   items_summary: z.string().max(2000).optional().nullable(),
   order_amount: z.coerce.number().nonnegative().default(0),
   delivery_fee: z.coerce.number().nonnegative().default(0),
+  zone_id: z.string().uuid().optional().nullable(),
   payment_mode: z.enum(['cod', 'prepaid']).default('cod'),
   sale_id: z.string().uuid().optional().nullable(),
   auto_assign: z.boolean().default(true),
 })), async (req, res, next) => {
   try {
     const b = req.body;
+    // A zone sets the fee (the no-GPS pricing model); else use the given flat fee.
+    let fee = b.delivery_fee, zoneId = null;
+    if (b.zone_id) {
+      const zone = await prisma.deliveryZone.findFirst({ where: { id: b.zone_id, businessId: req.user.business_id, isActive: true } });
+      if (!zone) return res.status(404).json({ title: 'Delivery zone not found', status: 404 });
+      fee = parseFloat(zone.fee); zoneId = zone.id;
+    }
     const result = await prisma.$transaction(async (tx) => {
       const delivery = await tx.delivery.create({
         data: {
-          businessId: req.user.business_id, saleId: b.sale_id || null,
+          businessId: req.user.business_id, saleId: b.sale_id || null, zoneId,
           customerName: b.customer_name, customerPhone: b.customer_phone || null, address: b.address,
           channel: b.channel, itemsSummary: b.items_summary || null,
-          orderAmount: b.order_amount, deliveryFee: b.delivery_fee, paymentMode: b.payment_mode,
+          orderAmount: b.order_amount, deliveryFee: fee, paymentMode: b.payment_mode,
         },
       });
       // Auto-match: assign the longest-idle available driver (round-robin-ish).
@@ -103,6 +140,7 @@ router.post('/', auth, validate(z.object({
       }
       return tx.delivery.findUnique({ where: { id: delivery.id }, include: { driver: true } });
     });
+    if (result.status === 'assigned') notifyCustomer(req.user.business_id, result, 'assigned');
     res.status(201).json(serializeDelivery(result));
   } catch (err) { next(err); }
 });
@@ -141,14 +179,19 @@ router.post('/:id/assign', auth, requireRole('owner', 'manager'), validate(z.obj
       return { delivery: updated };
     });
     if (out.error) return res.status(out.code).json({ title: out.error, status: out.code });
+    notifyCustomer(businessId, out.delivery, 'assigned');
     res.json(serializeDelivery(out.delivery));
   } catch (err) { next(err); }
 });
 
 // Advance status: assigned → picked_up → delivered (or cancelled). Completing a
-// delivery posts the fee to the ledger and frees the driver.
+// delivery posts the fee to the ledger, captures proof of delivery, frees the
+// driver, and notifies the customer.
 router.put('/:id/status', auth, validate(z.object({
   status: z.enum(['picked_up', 'delivered', 'cancelled']),
+  recipient_name: z.string().max(255).optional().nullable(),
+  pod_note: z.string().max(500).optional().nullable(),
+  pod_photo_url: z.string().url().optional().nullable(),
 })), async (req, res, next) => {
   try {
     const businessId = req.user.business_id;
@@ -160,6 +203,10 @@ router.put('/:id/status', auth, validate(z.object({
       const stamps = {};
       if (req.body.status === 'delivered') {
         stamps.deliveredAt = new Date();
+        // Proof of delivery — who received it / note / photo.
+        if (req.body.recipient_name !== undefined) stamps.recipientName = req.body.recipient_name;
+        if (req.body.pod_note !== undefined) stamps.podNote = req.body.pod_note;
+        if (req.body.pod_photo_url !== undefined) stamps.podPhotoUrl = req.body.pod_photo_url;
         const fee = parseFloat(delivery.deliveryFee);
         if (fee > 0) {
           await accounting.postDeliveryRevenue(tx, {
@@ -176,6 +223,7 @@ router.put('/:id/status', auth, validate(z.object({
       return { delivery: updated };
     });
     if (out.error) return res.status(out.code).json({ title: out.error, status: out.code });
+    notifyCustomer(businessId, out.delivery, req.body.status);
     res.json(serializeDelivery(out.delivery));
   } catch (err) { next(err); }
 });
