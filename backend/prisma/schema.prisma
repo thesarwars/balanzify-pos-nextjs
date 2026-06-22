@@ -2365,12 +2365,16 @@ model FinancingAdvance {
   feeAmount      Decimal   @map("fee_amount") @db.Decimal(14, 2)
   totalRepayable Decimal   @map("total_repayable") @db.Decimal(14, 2)
   amountRepaid   Decimal   @default(0) @map("amount_repaid") @db.Decimal(14, 2)
-  status         String    @default("offered") @db.VarChar(20) // offered | active | settled | cancelled
+  status         String    @default("offered") @db.VarChar(20) // offered | active | settled | cancelled | overdue | defaulted
   termDays       Int       @map("term_days")
   collectionRate Decimal   @default(0) @map("collection_rate") @db.Decimal(5, 4) // share of daily sales auto-collected
   score          Int?
   disbursedAt    DateTime? @map("disbursed_at")
   settledAt      DateTime? @map("settled_at")
+  restructureCount Int     @default(0) @map("restructure_count") // Sharia-compliant reschedules (debt never grows)
+  charityCommitted Decimal @default(0) @map("charity_committed") @db.Decimal(14, 2) // late charges, all to charity — not lender income
+  overdueAt      DateTime? @map("overdue_at")
+  defaultedAt    DateTime? @map("defaulted_at")
   createdAt      DateTime  @default(now()) @map("created_at")
   createdById    String?   @map("created_by") @db.Uuid
 
@@ -2393,6 +2397,43 @@ model FinancingRepayment {
 
   @@index([advanceId])
   @@map("financing_repayments")
+}
+
+// KYC / identity capture for the financing applicant — captured before any
+// disbursement. Verification stands in for the lending partner's compliance
+// step. One record per business.
+model FinancingKyc {
+  id              String    @id @default(uuid()) @db.Uuid
+  businessId      String    @unique @map("business_id") @db.Uuid
+  legalName       String    @map("legal_name") @db.VarChar(200)
+  idType          String    @map("id_type") @db.VarChar(30) // national_id | passport | driver_license
+  idNumber        String    @map("id_number") @db.VarChar(60)
+  dateOfBirth     DateTime? @map("date_of_birth") @db.Date
+  phone           String?   @db.VarChar(40)
+  address         String?   @db.VarChar(300)
+  businessRegNo   String?   @map("business_reg_no") @db.VarChar(80)
+  documentUrls    String[]  @default([]) @map("document_urls")
+  status          String    @default("pending") @db.VarChar(20) // pending | verified | rejected
+  rejectionReason String?   @map("rejection_reason") @db.VarChar(300)
+  verifiedAt      DateTime? @map("verified_at")
+  verifiedById    String?   @map("verified_by") @db.Uuid
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  @@map("financing_kyc")
+}
+
+// Denylist of identities the platform won't finance. Checked at disbursement
+// against the applicant's KYC id number. Global (no business scope).
+model FinancingBlacklist {
+  id          String   @id @default(uuid()) @db.Uuid
+  idNumber    String   @map("id_number") @db.VarChar(60)
+  reason      String   @db.VarChar(300)
+  createdById String?  @map("created_by") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([idNumber])
+  @@map("financing_blacklist")
 }
 
 // ── Restaurant: proper records (replacing string-hacks on table.name) ───────
