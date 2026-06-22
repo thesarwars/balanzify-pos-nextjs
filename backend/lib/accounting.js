@@ -29,6 +29,7 @@ const CHART = [
   { code: '2200', name: 'Financing Payable',   type: 'liability', normal: 'credit' },
   { code: '3000', name: "Owner's Equity",      type: 'equity',    normal: 'credit' },
   { code: '4000', name: 'Sales Revenue',       type: 'revenue',   normal: 'credit' },
+  { code: '4100', name: 'Delivery Revenue',    type: 'revenue',   normal: 'credit' },
   { code: '5000', name: 'Cost of Goods Sold',  type: 'expense',   normal: 'debit'  },
   { code: '5100', name: 'Salaries & Wages',     type: 'expense',   normal: 'debit'  },
   { code: '5200', name: 'Operating Expenses',   type: 'expense',   normal: 'debit'  },
@@ -234,6 +235,26 @@ async function postMilestonePayment(tx, { businessId, method = 'cash', amount, s
 }
 
 /**
+ * A completed delivery earns the delivery fee. Prepaid is collected to the tender
+ * account; cash-on-delivery lands with the driver, who then owes the business —
+ * booked as a receivable (a natural hook for driver float/advances later).
+ *   Dr cash/AR (prepaid) or AR (COD)   = fee
+ *   Cr Delivery Revenue                = fee
+ */
+async function postDeliveryRevenue(tx, { businessId, fee, method = 'cash', cod = false, sourceId, createdById }) {
+  const amt = round2(fee);
+  if (amt <= 0) return null;
+  const debitCode = cod ? '1100' : tenderAccountCode(method);
+  return postJournal(tx, {
+    businessId, description: 'Delivery fee', sourceType: 'delivery', sourceId, createdById,
+    lines: [
+      { code: debitCode, debit: amt, credit: 0, description: cod ? 'Driver owes (COD)' : 'Delivery fee received' },
+      { code: '4100', debit: 0, credit: amt, description: 'Delivery revenue' },
+    ],
+  });
+}
+
+/**
  * An operating expense debits the expense and credits cash (paid) or payables
  * (unpaid). A refund reverses it (money comes back in).
  */
@@ -272,4 +293,4 @@ async function accountBalances(businessId, { from, to } = {}) {
   });
 }
 
-module.exports = { CHART, ensureChart, postJournal, postSale, postFolioCharge, postFolioPayment, postAdvance, postPayroll, postMilestoneBill, postMilestonePayment, postExpense, accountBalances, tenderAccountCode, round2 };
+module.exports = { CHART, ensureChart, postJournal, postSale, postFolioCharge, postFolioPayment, postAdvance, postPayroll, postMilestoneBill, postMilestonePayment, postDeliveryRevenue, postExpense, accountBalances, tenderAccountCode, round2 };
