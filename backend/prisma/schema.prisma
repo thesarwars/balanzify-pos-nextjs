@@ -265,6 +265,8 @@ model Business {
   syncDevices        SyncDevice[]
   fiscalConfig       FiscalConfig?
   fiscalReceipts     FiscalReceipt[]
+  drivers            Driver[]
+  deliveries         Delivery[]
   refreshTokens      RefreshToken[]
   exchangeRates      ExchangeRate[]
   reorderSuggestions ReorderSuggestion[]
@@ -2262,6 +2264,52 @@ model DispenseRecord {
   @@index([businessId])
   @@index([prescriptionId])
   @@map("dispense_records")
+}
+
+// ── Delivery / driver dispatch (opt-in marketplace layer) ───────────────────────
+// A driver registered to a business's delivery pool. Status drives auto-matching.
+model Driver {
+  id          String   @id @default(uuid()) @db.Uuid
+  businessId  String   @map("business_id") @db.Uuid
+  name        String   @db.VarChar(255)
+  phone       String?  @db.VarChar(50)
+  vehicleType String?  @map("vehicle_type") @db.VarChar(40) // motorbike | car | bicycle | foot
+  status      String   @default("offline") @db.VarChar(20)  // available | busy | offline
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  business   Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  deliveries Delivery[]
+
+  @@index([businessId, status])
+  @@map("drivers")
+}
+
+// A consumer delivery order. Intake channel records where it came from (a
+// WhatsApp message, the web, or rung up at the POS). Optionally links to a Sale.
+model Delivery {
+  id            String    @id @default(uuid()) @db.Uuid
+  businessId    String    @map("business_id") @db.Uuid
+  saleId        String?   @map("sale_id") @db.Uuid
+  driverId      String?   @map("driver_id") @db.Uuid
+  customerName  String    @map("customer_name") @db.VarChar(255)
+  customerPhone String?   @map("customer_phone") @db.VarChar(50)
+  address       String
+  channel       String    @default("pos") @db.VarChar(20) // whatsapp | web | pos
+  itemsSummary  String?   @map("items_summary")
+  orderAmount   Decimal   @default(0) @map("order_amount") @db.Decimal(12, 2)
+  deliveryFee   Decimal   @default(0) @map("delivery_fee") @db.Decimal(10, 2)
+  paymentMode   String    @default("cod") @map("payment_mode") @db.VarChar(20) // cod | prepaid
+  status        String    @default("pending") @db.VarChar(20) // pending|assigned|picked_up|delivered|cancelled
+  assignedAt    DateTime? @map("assigned_at")
+  deliveredAt   DateTime? @map("delivered_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  driver   Driver?  @relation(fields: [driverId], references: [id], onDelete: SetNull)
+
+  @@index([businessId, status])
+  @@map("deliveries")
 }
 
 // Drug-drug interaction knowledge base. Rows with businessId = NULL are the
