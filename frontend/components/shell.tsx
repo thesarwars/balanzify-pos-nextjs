@@ -60,6 +60,7 @@ export const NAV = [
     { id: 'hrm', label: 'HRM / Staff', icon: '⚇' },
     { id: 'projects', label: 'Projects', icon: '◳' },
     { id: 'tasks', label: 'Tasks', icon: '◻' },
+    { id: 'sync', label: 'Offline Sync', icon: '⇅' },
   ]},
   { sect: 'Analytics', items: [
     { id: 'reports', label: 'Reports', icon: '◳' },
