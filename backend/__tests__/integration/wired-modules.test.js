@@ -273,6 +273,14 @@ describe('HRM', () => {
     expect(sick.entitled).toBe(12);
     expect((await request(app).post('/api/v1/hrm/leave').set(auth(token)).send({ employee_id: e.id, type: 'Sick', from: '2026-07-01', to: '2026-07-30', days: 20 })).status).toBe(422);
   });
+  test('payslip is distributable over WhatsApp', async () => {
+    const e = (await request(app).post('/api/v1/hrm/employee').set(auth(token)).send({ name: 'Farah', salary: 600 })).body;
+    const pay = (await request(app).post('/api/v1/hrm/payroll').set(auth(token)).send({ employee_id: e.id, month: '2026-06', basic: 600, deduction: 0 })).body;
+    const sent = await request(app).post(`/api/v1/hrm/payslip/${pay.id}/send-whatsapp`).set(auth(token)).send({ phone: '0614445' });
+    expect(sent.status).toBe(200);
+    expect(sent.body.status).toBe('link');               // zero-config provider fallback
+    expect(sent.body.wa_url).toContain(encodeURIComponent('Net pay'));
+  });
 });
 
 describe('superadmin (opt-in, cross-tenant)', () => {
@@ -1182,6 +1190,21 @@ describe('pharmacy drug-interaction checking (clinical safety)', () => {
     const r = await request(app).post('/api/v1/pharmacy/interactions/check').set(auth(token))
       .send({ drugs: ['LocalDrugX', 'localdrugy 50mg'] });
     expect(r.body.interactions.find(i => i.severity === 'major')).toBeTruthy();
+  });
+
+  test('dispensing label: structured payload + printable text with warnings', async () => {
+    const d = await drug('amoxicillin');
+    const rx = (await request(app).post('/api/v1/pharmacy/prescriptions').set(auth(token)).send({
+      product_id: d, patient_name: 'Liban', prescriber_name: 'Dr Aw', quantity: 21, sig: '1 capsule three times daily',
+    })).body;
+    const label = await request(app).get(`/api/v1/pharmacy/prescriptions/${rx.id}/label`).set(auth(token));
+    expect(label.status).toBe(200);
+    expect(label.body.patient.name).toBe('Liban');
+    expect(label.body.directions).toBe('1 capsule three times daily');
+    expect(label.body.quantity).toBe(21);
+    expect(label.body.warnings.length).toBeGreaterThan(0);
+    expect(label.body.label_text).toContain('Rx:');
+    expect(label.body.label_text).toContain('Liban');
   });
 });
 
