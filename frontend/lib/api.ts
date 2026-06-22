@@ -3762,6 +3762,12 @@ const API: any = {
     receipt(saleId: string): Promise<FiscalReceipt> { return realReq('GET', `/fiscal/receipt/${saleId}`); },
     transmit(saleId: string): Promise<FiscalReceipt> { return realReq('POST', `/fiscal/sales/${saleId}/transmit`, {}); },
     pending(): Promise<{ pending: number; receipts: FiscalReceipt[] }> { return realReq('GET', '/fiscal/pending'); },
+    // Public authenticity check — mounted at /fiscal/verify (no /api/v1, no auth).
+    verify(code: string): Promise<any> {
+      return fetch(BACKEND_BASE + '/fiscal/verify/' + encodeURIComponent(code))
+        .then((r) => r.json().catch(() => ({ valid: false, reason: 'bad response' })))
+        .catch(() => ({ valid: false, reason: 'network error' }));
+    },
   },
 
   // Offline-first outbox replay + delta pull.

@@ -66,6 +66,7 @@ export const NAV = [
   ]},
   { sect: 'Admin', items: [
     { id: 'users', label: 'Users', icon: '◉' },
+    { id: 'fiscal', label: 'Fiscalization', icon: '▤' },
     { id: 'invoice-layouts', label: 'Invoice Layouts', icon: '▤' },
     { id: 'settings', label: 'Settings', icon: '⚙' },
     { id: 'modules', label: 'Plan & Modules', icon: '▣' },
