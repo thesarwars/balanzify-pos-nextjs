@@ -61,6 +61,14 @@ async function makeSale(token, locationId, productId, { qty = 2, price = 10, dis
     location_id: locationId, payment_method: 'cash', discount_type: 'flat', discount_value: discount, cash_tendered: qty * price,
   });
 }
+// Capture + verify financing KYC so disbursement's compliance gate passes.
+// Returns the id number used (handy for blacklist tests).
+async function passKyc(token, idNumber) {
+  const idNo = idNumber || `ID${Date.now()}_${SEQ++}`;
+  await request(app).put('/api/v1/lending/kyc').set(auth(token)).send({ legal_name: 'Test Owner', id_type: 'national_id', id_number: idNo });
+  await request(app).post('/api/v1/lending/kyc/decision').set(auth(token)).send({ decision: 'verified' });
+  return idNo;
+}
 
 describe('module gating & plan defaults', () => {
   let token;
@@ -1165,7 +1173,8 @@ describe('lending — underwriting from the ledger', () => {
     // Over-limit offers are refused by underwriting
     expect((await request(app).post('/api/v1/lending/offer').set(auth(token)).send({ principal: 999999 })).status).toBe(400);
 
-    // Disburse → financing payable appears on the books
+    // Disburse → financing payable appears on the books (KYC must clear first)
+    await passKyc(token);
     expect((await request(app).post(`/api/v1/lending/advances/${offer.body.id}/disburse`).set(auth(token))).status).toBe(200);
     let tb = (await request(app).get('/api/v1/accounting/trial-balance').set(auth(token))).body;
     expect(tb.totals.balanced).toBe(true);
@@ -1197,6 +1206,7 @@ describe('lending — underwriting from the ledger', () => {
     expect((await makeSale(token, loc, prod, { qty: 300, price: 20 })).status).toBe(201); // qualify
 
     const offer = (await request(app).post('/api/v1/lending/offer').set(auth(token)).send({ principal: 1000, collection_rate: 0.5 })).body;
+    await passKyc(token);
     expect((await request(app).post(`/api/v1/lending/advances/${offer.id}/disburse`).set(auth(token))).status).toBe(200);
 
     // A mobile-money (Zaad) sale of 400 → auto-collect 200, credited to Mobile Money (1010), not Cash
@@ -1219,8 +1229,82 @@ describe('lending — underwriting from the ledger', () => {
     // Health endpoint reports repayment progress + a current re-score
     const h = (await request(app).get(`/api/v1/lending/advances/${offer.id}/health`).set(auth(token))).body;
     expect(h.outstanding).toBeCloseTo(860, 2);
-    expect(['on_track', 'behind', 'at_risk', 'settled']).toContain(h.repayment_status);
+    expect(['on_track', 'behind', 'at_risk', 'overdue', 'settled']).toContain(h.repayment_status);
     expect(typeof h.current_score).toBe('number');
+  });
+
+  test('KYC gate: no disbursement without verified, non-blacklisted identity', async () => {
+    const token = await register();
+    const loc = await location(token);
+    const prod = await stockedProduct(token, loc, 20, 1000);
+    await makeSale(token, loc, prod, { qty: 300, price: 20 }); // qualify
+    const offer = (await request(app).post('/api/v1/lending/offer').set(auth(token)).send({ principal: 1000 })).body;
+
+    // No KYC on file → blocked (422 KYC_REQUIRED)
+    let r = await request(app).post(`/api/v1/lending/advances/${offer.id}/disburse`).set(auth(token));
+    expect(r.status).toBe(422);
+
+    // Captured but not yet verified → still blocked
+    const idNo = `ID-GATE-${Date.now()}`;
+    await request(app).put('/api/v1/lending/kyc').set(auth(token)).send({ legal_name: 'Aisha', id_type: 'national_id', id_number: idNo });
+    r = await request(app).post(`/api/v1/lending/advances/${offer.id}/disburse`).set(auth(token));
+    expect(r.status).toBe(422);
+
+    // Blacklist this identity, then verify → disbursement refused (403 BLACKLISTED)
+    expect((await request(app).post('/api/v1/lending/blacklist').set(auth(token)).send({ id_number: idNo, reason: 'Known fraud' })).status).toBe(201);
+    await request(app).post('/api/v1/lending/kyc/decision').set(auth(token)).send({ decision: 'verified' });
+    r = await request(app).post(`/api/v1/lending/advances/${offer.id}/disburse`).set(auth(token));
+    expect(r.status).toBe(403);
+  });
+
+  test('Sharia late handling: restructure never grows debt; charity fee books to charity, not income', async () => {
+    const token = await register();
+    const loc = await location(token);
+    const prod = await stockedProduct(token, loc, 20, 1000);
+    await makeSale(token, loc, prod, { qty: 300, price: 20 }); // qualify
+    await passKyc(token);
+    const offer = (await request(app).post('/api/v1/lending/offer').set(auth(token)).send({ principal: 1000, term_days: 30 })).body;
+    expect((await request(app).post(`/api/v1/lending/advances/${offer.id}/disburse`).set(auth(token))).status).toBe(200);
+
+    // Restructure: extend the term, change the collection share — debt unchanged.
+    const before = (await request(app).get('/api/v1/lending/advances').set(auth(token))).body.advances[0];
+    const rs = await request(app).post(`/api/v1/lending/advances/${offer.id}/restructure`).set(auth(token)).send({ term_days: 60, collection_rate: 0.2 });
+    expect(rs.status).toBe(200);
+    expect(rs.body.restructureCount).toBe(1);
+    expect(rs.body.termDays).toBe(60);
+    expect(Number(rs.body.totalRepayable)).toBeCloseTo(Number(before.totalRepayable), 2); // riba-free: debt never grew
+
+    // Charity late charge: Dr Charity/Late-Fee (5400) / Cr Charity Payable (2300).
+    const cf = await request(app).post(`/api/v1/lending/advances/${offer.id}/charity-fee`).set(auth(token)).send({ amount: 25 });
+    expect(cf.status).toBe(200);
+    expect(Number(cf.body.charityCommitted)).toBeCloseTo(25, 2);
+
+    const tb = (await request(app).get('/api/v1/accounting/trial-balance').set(auth(token))).body;
+    expect(tb.totals.balanced).toBe(true);
+    expect(tb.accounts.find(a => a.code === '2300').balance).toBeCloseTo(25, 2); // charity payable
+    expect(tb.accounts.find(a => a.code === '5400').balance).toBeCloseTo(25, 2); // charity expense
+    // The loan balance (2200) is unchanged by the charity charge — not income, not interest.
+    expect(tb.accounts.find(a => a.code === '2200').balance).toBeCloseTo(Number(before.totalRepayable), 2);
+  });
+
+  test('default flags the advance and blocks future financing (credit history)', async () => {
+    const token = await register();
+    const loc = await location(token);
+    const prod = await stockedProduct(token, loc, 20, 1000);
+    await makeSale(token, loc, prod, { qty: 300, price: 20 });
+    await passKyc(token);
+    const offer = (await request(app).post('/api/v1/lending/offer').set(auth(token)).send({ principal: 1000 })).body;
+    expect((await request(app).post(`/api/v1/lending/advances/${offer.id}/disburse`).set(auth(token))).status).toBe(200);
+
+    // Mark it defaulted — the payable stays on the books (debt isn't forgiven).
+    const d = await request(app).post(`/api/v1/lending/advances/${offer.id}/default`).set(auth(token));
+    expect(d.status).toBe(200);
+    expect(d.body.status).toBe('defaulted');
+
+    // A new offer can be made, but disbursement is blocked by the prior default.
+    const offer2 = (await request(app).post('/api/v1/lending/offer').set(auth(token)).send({ principal: 500 })).body;
+    const r = await request(app).post(`/api/v1/lending/advances/${offer2.id}/disburse`).set(auth(token));
+    expect(r.status).toBe(403);
   });
 });
 
