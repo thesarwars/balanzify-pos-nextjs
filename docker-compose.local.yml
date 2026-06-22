@@ -1,7 +1,17 @@
-# Local stack — NO nginx, NO certbot, NO SSL.
-# Frontend published on :3500, API on :5000 (frontend calls it directly via CORS).
-# Prisma owns the schema (migrate deploy on api boot) — no schema.sql initdb mount.
-#   docker compose -f docker-compose.local.yml up -d --build
+# Single-server stack — Postgres + Redis + API + static frontend. NO nginx/TLS
+# (put this behind a reverse proxy / load balancer for HTTPS, or use the full
+# docker-compose.yml for the bundled nginx + certbot setup).
+#
+#   Local test:   docker compose -f docker-compose.local.yml up -d --build
+#   Real server:  set the env vars below first, then the same command:
+#
+#     export PUBLIC_API_URL=http://YOUR_SERVER_IP:5050     # where browsers reach the API
+#     export PUBLIC_WEB_URL=http://YOUR_SERVER_IP:3500     # where the frontend is served
+#     export JWT_SECRET=$(openssl rand -hex 64)
+#     export DB_PASSWORD=$(openssl rand -hex 24)
+#     docker compose -f docker-compose.local.yml up -d --build
+#
+#   Verify:  BACKEND_URL=$PUBLIC_API_URL node scripts/contract-smoke.mjs   # → 24/24
 name: balanzify-local
 
 networks:
@@ -19,7 +29,7 @@ services:
     environment:
       POSTGRES_DB: balanzify
       POSTGRES_USER: balanzify
-      POSTGRES_PASSWORD: balanzify
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-balanzify}
     volumes:
       - pg_local:/var/lib/postgresql/data
     networks: [bz_net]
@@ -49,14 +59,14 @@ services:
     environment:
       NODE_ENV: production
       PORT: 5000
-      DATABASE_URL: postgresql://balanzify:balanzify@postgres:5432/balanzify?schema=public
-      JWT_SECRET: local-dev-jwt-secret-change-me-0123456789abcdef
+      DATABASE_URL: postgresql://balanzify:${DB_PASSWORD:-balanzify}@postgres:5432/balanzify?schema=public
+      JWT_SECRET: ${JWT_SECRET:-local-dev-jwt-secret-change-me-0123456789abcdef0123456789abcdef}
       REDIS_URL: redis://redis:6379
-      FRONTEND_URL: http://localhost:3500
-      ALLOWED_ORIGINS: http://localhost:3500
+      # Production CORS guard: the API refuses to boot in production without these.
+      FRONTEND_URL: ${PUBLIC_WEB_URL:-http://localhost:3500}
+      ALLOWED_ORIGINS: ${PUBLIC_WEB_URL:-http://localhost:3500}
       LOG_LEVEL: info
-    # Host port is 5050 (not 5000) — macOS AirPlay Receiver squats on :5000 and
-    # returns 403, which makes the browser see the API as unreachable.
+    # Host port 5050 (macOS AirPlay squats on :5000). Must match PUBLIC_API_URL's port.
     ports:
       - "5050:5000"
     networks: [bz_net]
@@ -73,7 +83,8 @@ services:
       target: production
       args:
         NEXT_PUBLIC_API_MODE: real
-        NEXT_PUBLIC_BACKEND_URL: http://localhost:5050
+        # Baked into the static bundle at build time — where the BROWSER reaches the API.
+        NEXT_PUBLIC_BACKEND_URL: ${PUBLIC_API_URL:-http://localhost:5050}
     restart: unless-stopped
     ports:
       - "3500:80"
