@@ -16,6 +16,10 @@ const prisma  = require('../../lib/prisma');
 
 const auth = (token) => ({ Authorization: `Bearer ${token}` });
 
+// A per-run salt so the few fixed-suffix registrations don't collide if a prior
+// run's best-effort cleanup couldn't fully unwind the RESTRICT history FKs.
+const RUN = `${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+
 async function registerBusiness(arg = Date.now()) {
   // Accept either a full email (when a test needs a specific address) or a
   // suffix used to build one. Previously the email arg was silently treated as
@@ -85,7 +89,7 @@ async function checkout(token, payload) {
 let ownerToken, businessId, locationId;
 
 beforeAll(async () => {
-  const reg = await registerBusiness('shared');
+  const reg = await registerBusiness(`shared_${RUN}`);
   expect(reg.access_token).toBeTruthy();
   ownerToken = reg.access_token;
   businessId = reg.business.id;
@@ -102,6 +106,14 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (businessId) {
+    // Several FKs are RESTRICT so financial history outlives the things it
+    // references (refund → sale, sale_item → product). A straight business delete
+    // is blocked by that chain, so unwind it in dependency order: refunds, then
+    // sales (cascades sale_items), then the business cascades cleanly. Without
+    // this the DB is left polluted and the NEXT run fails spuriously.
+    await prisma.refund.deleteMany({ where: { sale: { businessId } } }).catch(() => {});
+    await prisma.sale.deleteMany({ where: { businessId } }).catch(() => {});
+    await prisma.purchaseOrder.deleteMany({ where: { businessId } }).catch(() => {});
     await prisma.business.deleteMany({ where: { id: businessId } }).catch(() => {});
   }
   await prisma.$disconnect();
@@ -113,7 +125,7 @@ afterAll(async () => {
 
 describe('Auth — register', () => {
   test('returns 201 with tokens, user, and business', async () => {
-    const res = await registerBusiness('reg_test');
+    const res = await registerBusiness(`reg_test_${RUN}`);
     expect(res.access_token).toBeTruthy();
     expect(res.refresh_token).toBeTruthy();
     expect(res.token_type).toBe('Bearer');
@@ -160,7 +172,7 @@ describe('Auth — login', () => {
 
 describe('Auth — refresh token rotation', () => {
   test('issues new tokens and invalidates old refresh token', async () => {
-    const reg = await registerBusiness('refresh_test');
+    const reg = await registerBusiness(`refresh_test_${RUN}`);
     const r1 = await request(app).post('/api/v1/auth/refresh').send({ refresh_token: reg.refresh_token });
     expect(r1.status).toBe(200);
     expect(r1.body.access_token).toBeTruthy();
