@@ -389,6 +389,8 @@ const PayrollSchema = z.object({
   bonus:       money.default(0),
   incentive:   money.default(0),
   deduction:   money.default(0),
+  // Optional: auto-compute statutory deductions for this country (e.g. 'KE').
+  statutory_country: z.enum(['KE', 'SO', 'none']).optional(),
 });
 const PackageSchema = z.object({
   name:      shortStr(100),
