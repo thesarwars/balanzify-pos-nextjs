@@ -18,6 +18,7 @@ const createRateLimiter = ({
   prefix = 'rl',
   message = 'Too many requests',
   skipSuccessfulRequests = false,
+  skip,
 }) => {
   const baseOptions = {
     windowMs,
@@ -25,6 +26,7 @@ const createRateLimiter = ({
     standardHeaders: true,
     legacyHeaders: false,
     skipSuccessfulRequests,
+    ...(skip && { skip }),
     keyGenerator: (req) => {
       // Authenticated: key by user ID (per-tenant isolation)
       // Unauthenticated: key by IP
@@ -91,6 +93,10 @@ const apiLimiter = createRateLimiter({
   max: 300,
   prefix: 'rl:api',
   message: 'API rate limit exceeded.',
+  // The integration suite runs in-process from a single IP (req.user isn't set
+  // until after this middleware), so all tests share one budget. Don't let the
+  // general API limiter throttle the suite; auth/brute-force limits stay active.
+  skip: () => process.env.NODE_ENV === 'test',
 });
 
 const strictLimiter = createRateLimiter({
