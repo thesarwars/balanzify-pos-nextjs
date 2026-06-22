@@ -1516,6 +1516,44 @@ describe('delivery — consumer ordering + driver dispatch (opt-in marketplace)'
     expect(del.body.status).toBe('pending');
     expect(del.body.driver_id).toBeNull();
   });
+
+  test('public consumer ordering: catalog → place order → it lands as a pending delivery', async () => {
+    const loc2 = await location(token);
+    const prod = await stockedProduct(token, loc2, 8, 50); // price 8
+
+    // public catalog (no auth) lists the shop's products
+    const cat = await request(app).get(`/api/v1/shop/${bizId}/catalog`);
+    expect(cat.status).toBe(200);
+    expect(cat.body.shop.id).toBe(bizId);
+    const item = cat.body.products.find(p => p.id === prod);
+    expect(item && item.price).toBe(8);
+
+    // a consumer places an order (no account) — total computed server-side (3×8=24)
+    const order = await request(app).post(`/api/v1/shop/${bizId}/order`).send({
+      customer_name: 'Layla', phone: '0613334', address: 'Jigjiga Yar, Hargeisa',
+      items: [{ product_id: prod, quantity: 3 }],
+    });
+    expect(order.status).toBe(201);
+    expect(order.body.order_amount).toBe(24);
+    expect(order.body.status).toBe('pending');
+
+    // it shows up in the merchant's dispatch board as a web-channel pending order
+    const board = await request(app).get('/api/v1/delivery').set(auth(token)).query({ status: 'pending' });
+    const mine = board.body.deliveries.find(d => d.id === order.body.order_id);
+    expect(mine).toBeTruthy();
+    expect(mine.channel).toBe('web');
+
+    // public order tracking by id
+    const track = await request(app).get(`/api/v1/shop/order/${order.body.order_id}/status`);
+    expect(track.status).toBe(200);
+    expect(track.body.status).toBe('pending');
+  });
+
+  test('a shop without delivery enabled is not open for orders', async () => {
+    const t3 = await register();
+    const bid = JSON.parse(Buffer.from(t3.split('.')[1], 'base64').toString()).businessId;
+    expect((await request(app).get(`/api/v1/shop/${bid}/catalog`)).status).toBe(404);
+  });
 });
 
 afterAll(async () => { await prisma.$disconnect(); });
