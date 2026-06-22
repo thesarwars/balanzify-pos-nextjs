@@ -331,6 +331,93 @@ router.get('/orders/:id', auth, async (req, res, next) => {
 });
 
 // Add item to order
+// ── COMBOS / SET MENUS ────────────────────────────────────────────
+router.get('/combos', auth, async (req, res, next) => {
+  try {
+    const combos = await prisma.combo.findMany({
+      where: { businessId: req.user.business_id, isActive: true },
+      include: { items: true }, orderBy: { name: 'asc' },
+    });
+    // Attach product names for display.
+    const pids = [...new Set(combos.flatMap(c => c.items.map(i => i.productId)))];
+    const prods = pids.length ? await prisma.product.findMany({ where: { id: { in: pids } }, select: { id: true, name: true } }) : [];
+    const name = Object.fromEntries(prods.map(p => [p.id, p.name]));
+    res.json({ combos: combos.map(c => ({ ...c, items: c.items.map(i => ({ ...i, product_name: name[i.productId] || '' })) })) });
+  } catch (err) { next(err); }
+});
+
+router.post('/combos', auth, requireRole('owner', 'manager'), validate(z.object({
+  name:  z.string().trim().min(1).max(150),
+  price: z.coerce.number().positive(),
+  items: z.array(z.object({ product_id: uuid, quantity: z.coerce.number().int().positive().default(1) })).min(1),
+})), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const prods = await prisma.product.findMany({ where: { id: { in: req.body.items.map(i => i.product_id) }, businessId }, select: { id: true } });
+    if (prods.length !== new Set(req.body.items.map(i => i.product_id)).size) return res.status(400).json({ error: 'Unknown product in combo.' });
+    const combo = await prisma.combo.create({
+      data: { businessId, name: req.body.name, price: req.body.price, items: { create: req.body.items.map(i => ({ productId: i.product_id, quantity: i.quantity })) } },
+      include: { items: true },
+    });
+    res.status(201).json(combo);
+  } catch (err) { next(err); }
+});
+
+// Add a combo to an order: expands into component lines (each fires to the
+// kitchen) with the deal price apportioned by each item's normal price, so the
+// line totals sum exactly to price × quantity.
+router.post('/orders/:id/combo', auth, validate(z.object({
+  comboId:  uuid,
+  quantity: z.coerce.number().int().positive().default(1),
+  seat:     z.coerce.number().int().positive().max(50).optional().nullable(),
+})), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const order = await prisma.restaurantOrder.findFirst({ where: { id: req.params.id, businessId, status: { in: ['pending','sent','preparing','ready','served'] } } });
+    if (!order) return res.status(404).json({ error: 'Active order not found.' });
+    const combo = await prisma.combo.findFirst({ where: { id: req.body.comboId, businessId, isActive: true }, include: { items: true } });
+    if (!combo) return res.status(404).json({ error: 'Combo not found.' });
+
+    const prods = await prisma.product.findMany({ where: { id: { in: combo.items.map(i => i.productId) }, businessId }, select: { id: true, name: true, sellingPrice: true } });
+    const byId = Object.fromEntries(prods.map(p => [p.id, p]));
+    const qty = req.body.quantity;
+    const dealTotal = +(parseFloat(combo.price) * qty).toFixed(2);
+
+    // Apportion the deal total across components by their normal menu value.
+    const comps = combo.items.map(ci => {
+      const p = byId[ci.productId];
+      const lineQty = ci.quantity * qty;
+      return { productId: ci.productId, name: p?.name || '', lineQty, weight: parseFloat(p?.sellingPrice || 0) * lineQty };
+    });
+    const weightSum = comps.reduce((s, c) => s + c.weight, 0) || comps.length;
+    let allocated = 0;
+    comps.forEach((c, idx) => {
+      // Last line absorbs the rounding remainder so the sum is exact.
+      c.lineTotal = idx === comps.length - 1 ? +(dealTotal - allocated).toFixed(2)
+        : +(dealTotal * (weightSum ? c.weight / weightSum : 1 / comps.length)).toFixed(2);
+      allocated = +(allocated + c.lineTotal).toFixed(2);
+      c.unitPrice = c.lineQty > 0 ? +(c.lineTotal / c.lineQty).toFixed(2) : 0;
+    });
+
+    const created = await prisma.$transaction(async (tx) => {
+      const items = [];
+      for (const c of comps) {
+        const i = await tx.orderItem.create({
+          data: {
+            orderId: order.id, productId: c.productId, quantity: c.lineQty,
+            unitPrice: c.unitPrice, modifierTotal: 0, lineTotal: c.lineTotal,
+            notes: `Combo: ${combo.name}`, course: 1, seat: req.body.seat || null,
+          },
+        });
+        items.push(i);
+      }
+      await tx.restaurantOrder.update({ where: { id: order.id }, data: { subtotal: { increment: dealTotal }, totalAmount: { increment: dealTotal } } });
+      return items;
+    });
+    res.status(201).json({ message: `Added combo ${combo.name}.`, combo: combo.name, deal_total: dealTotal, items: created });
+  } catch (err) { next(err); }
+});
+
 router.post('/orders/:id/items', auth, validate(z.object({
   productId:  uuid,
   variantId:  uuid.optional().nullable(),
