@@ -54,14 +54,14 @@ export function LendingScreen({ T }: { T: any }) {
   useEffect(() => { load(); }, [load]);
 
   return (
-    <div>
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: T.paperAlt }}>
       <Topbar
         T={T}
         title={t('lending.title')}
         subtitle={t('lending.subtitle')}
         right={<Btn T={T} kind="ghost" onClick={load} disabled={loading}>{t('common.refresh')}</Btn>}
       />
-      <div style={{ padding: 24, maxWidth: 960 }}>
+      <div style={{ flex: 1, overflowY: 'auto', minHeight: 0, padding: 24, maxWidth: 960 }}>
         {err && !assessment && (
           <Panel T={T}><div style={{ color: T.inkSub, fontSize: 13 }}>{err}</div></Panel>
         )}

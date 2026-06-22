@@ -40,14 +40,14 @@ export function SyncScreen({ T }: { T: any }) {
   const totalOps = devices.reduce((s, d) => s + (d.pushed_ops || 0), 0);
 
   return (
-    <div>
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: T.paperAlt }}>
       <Topbar
         T={T}
         title={t('sync.title')}
         subtitle={t('sync.subtitle')}
         right={<Btn T={T} kind="ghost" onClick={load} disabled={loading}>{t('common.refresh')}</Btn>}
       />
-      <div style={{ padding: 24, maxWidth: 960, display: 'grid', gap: 16 }}>
+      <div style={{ flex: 1, overflowY: 'auto', minHeight: 0, padding: 24, maxWidth: 960, display: 'grid', gap: 16 }}>
         {err && devices.length === 0 && <Panel T={T}><div style={{ color: T.inkSub, fontSize: 13 }}>{err}</div></Panel>}
         {loading && devices.length === 0 && !err && <Panel T={T}><div style={{ color: T.inkSub, fontSize: 13 }}>{t('common.loading')}</div></Panel>}
 

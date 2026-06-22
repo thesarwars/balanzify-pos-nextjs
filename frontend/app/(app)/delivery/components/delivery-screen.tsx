@@ -41,14 +41,14 @@ export function DeliveryScreen({ T }: { T: any }) {
   const act = async (fn: () => Promise<any>) => { try { await fn(); await load(); } catch { /* surfaced on reload */ } };
 
   return (
-    <div>
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: T.paperAlt }}>
       <Topbar
         T={T}
         title={t('delivery.title')}
         subtitle={t('delivery.subtitle')}
         right={<Btn T={T} kind="ghost" onClick={load} disabled={loading}>{t('common.refresh')}</Btn>}
       />
-      <div style={{ padding: 24, maxWidth: 1100 }}>
+      <div style={{ flex: 1, overflowY: 'auto', minHeight: 0, padding: 24, maxWidth: 1100 }}>
         {err && !drivers.length && !orders.length && <Panel T={T}><div style={{ color: T.inkSub, fontSize: 13 }}>{err}</div></Panel>}
 
         <div style={{ display: 'grid', gridTemplateColumns: '300px 1fr', gap: 16 }}>
