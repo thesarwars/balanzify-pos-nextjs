@@ -1629,6 +1629,44 @@ describe('restaurant: seat-level ordering + split bill by seat', () => {
     expect(split.body.code).toBe('NEEDS_SEATS');
   });
 
+  test('coffee-shop quick start scaffolds modifiers + menu + combo, and prices a custom drink', async () => {
+    const t = await register();
+    await enableModule(t, 'restaurant');
+
+    const preset = await request(app).post('/api/v1/restaurant/presets/coffeeshop').set(auth(t));
+    expect(preset.status).toBe(201);
+    expect(preset.body.groups_created).toBe(4);          // Size, Milk, Temperature, Extras
+    expect(preset.body.products_created).toBe(10);       // 8 drinks + 2 pastries
+    expect(preset.body.modifiers_attached).toBe(32);     // 8 drinks × 4 groups
+    expect(preset.body.combo_created).toBe(true);
+
+    // Re-running is idempotent — nothing duplicated.
+    const again = await request(app).post('/api/v1/restaurant/presets/coffeeshop').set(auth(t));
+    expect(again.body.groups_created).toBe(0);
+    expect(again.body.products_created).toBe(0);
+    expect(again.body.reused).toBe(true);
+
+    // The Milk group carries Oat Milk (+0.50); the Size group carries Large (+1.00).
+    const groups = (await request(app).get('/api/v1/restaurant/modifiers').set(auth(t))).body.modifier_groups;
+    const milkGroup = groups.find(g => g.name === 'Milk');
+    expect(milkGroup).toBeTruthy();
+    const oat = milkGroup.options.find(o => o.name === 'Oat Milk');
+    expect(Number(oat.priceAdjustment)).toBeCloseTo(0.50, 2);
+    const large = groups.find(g => g.name === 'Size').options.find(o => o.name === 'Large');
+
+    // Find the Latte and confirm its four modifier groups are wired on.
+    const latte = (await request(app).get('/api/v1/products').set(auth(t))).body.products.find(p => p.name === 'Latte');
+    const attached = (await request(app).get(`/api/v1/restaurant/products/${latte.id}/modifiers`).set(auth(t))).body.modifier_groups;
+    expect(attached).toHaveLength(4);
+
+    // Ring a Large Oat-milk Latte: 3.00 base + 1.00 (large) + 0.50 (oat) = 4.50.
+    const order = (await request(app).post('/api/v1/restaurant/orders').set(auth(t)).send({ type: 'takeaway' })).body;
+    const add = await request(app).post(`/api/v1/restaurant/orders/${order.id}/items`).set(auth(t))
+      .send({ productId: latte.id, quantity: 1, modifiers: [{ optionId: large.id }, { optionId: oat.id }] });
+    expect(add.status).toBe(201);
+    expect(Number(add.body.lineTotal)).toBeCloseTo(4.50, 2);
+  });
+
   test('combo / set menu expands into apportioned component lines summing to the deal price', async () => {
     // A & B normally 10 + 6 = 16; sell the combo for 12.
     const combo = await request(app).post('/api/v1/restaurant/combos').set(auth(token)).send({
