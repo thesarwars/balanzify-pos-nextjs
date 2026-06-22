@@ -1024,6 +1024,51 @@ describe('wholesale', () => {
     expect(tb2.accounts.find(a2 => a2.code === '1100').balance).toBeCloseTo(0, 2);  // settled
     expect(tb2.accounts.find(a2 => a2.code === '1000').balance).toBeCloseTo(70, 2); // collected only 70
   });
+
+  test('credit note / return: reverses revenue + receivable, caps at returnable', async () => {
+    const t = await register();
+    await enableModule(t, 'wholesale');
+    const l = await location(t);
+    const prod = await stockedProduct(t, l, 10, 100); // price 10
+    const c = await request(app).post('/api/v1/customers').set(auth(t)).send({ name: 'Returns Shop', phone: '0700555666' });
+
+    // Deliver a 5-unit order (bills 50), then collect nothing yet.
+    const created = await request(app).post('/api/v1/wholesale/orders').set(auth(t))
+      .send({ customer_id: c.body.id, items: [{ product_id: prod, quantity: 5 }] });
+    const id = created.body.id;
+    const itemId = created.body.items[0].id;
+    await request(app).post(`/api/v1/wholesale/orders/${id}/pick`).set(auth(t)).send({ item_ids: [itemId] });
+    await request(app).post(`/api/v1/wholesale/orders/${id}/dispatch`).set(auth(t)).send({ driver_name: 'Van' });
+    await request(app).post(`/api/v1/wholesale/orders/${id}/deliver`).set(auth(t));
+
+    let tb = (await request(app).get('/api/v1/accounting/trial-balance').set(auth(t))).body;
+    expect(tb.accounts.find(a => a.code === '1100').balance).toBeCloseTo(50, 2); // owes 50
+
+    // Customer returns 2 units → credit note for 20.
+    const cn = await request(app).post(`/api/v1/wholesale/orders/${id}/credit-note`).set(auth(t))
+      .send({ reason: 'Damaged in transit', items: [{ item_id: itemId, qty: 2 }] });
+    expect(cn.status).toBe(201);
+    expect(Number(cn.body.totalCredit)).toBe(20);
+
+    // GL: revenue reversed by 20, receivable down to 30, books balanced.
+    tb = (await request(app).get('/api/v1/accounting/trial-balance').set(auth(t))).body;
+    expect(tb.totals.balanced).toBe(true);
+    expect(tb.accounts.find(a => a.code === '1100').balance).toBeCloseTo(30, 2);
+    expect(tb.accounts.find(a => a.code === '4000').balance).toBeCloseTo(30, 2);
+
+    // Outstanding reflects the re-stated 30.
+    const out = (await request(app).get('/api/v1/wholesale/outstanding').set(auth(t))).body;
+    expect(out.outstanding.find(o => o.customer === 'Returns Shop').outstanding).toBeCloseTo(30, 2);
+
+    // Can't credit more than what's left returnable (5 fulfilled − 2 credited = 3).
+    const over = await request(app).post(`/api/v1/wholesale/orders/${id}/credit-note`).set(auth(t))
+      .send({ items: [{ item_id: itemId, qty: 4 }] });
+    expect(over.status).toBe(400);
+
+    // The list shows the one note and its total.
+    const notes = (await request(app).get(`/api/v1/wholesale/orders/${id}/credit-notes`).set(auth(t))).body;
+    expect(notes.total_credited).toBeCloseTo(20, 2);
+  });
 });
 
 describe('restaurant recipes (BOM ingredient depletion)', () => {
