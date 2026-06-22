@@ -190,6 +190,7 @@ try {
   app.use('/api/v1/billing',    apiLimiter, billingRoutes);
   app.use('/api/v1/wholesale',  apiLimiter, gateAuth, requireModule('wholesale'), wholesaleRoutes);
   app.use('/api/v1/construction', apiLimiter, gateAuth, requireModule('construction'), constructionRoutes);
+  app.use('/api/v1/delivery', apiLimiter, gateAuth, requireModule('delivery'), require('./routes/delivery'));
   app.use('/api/v1/checkout',   apiLimiter, checkoutRoutes);
   app.use('/api/v1/insights',   apiLimiter, gateAuth, requireModule('insights'), insightsRoutes);
   app.use('/api/v1/credit',     apiLimiter, gateAuth, requireModule('credit'), creditRoutes);
