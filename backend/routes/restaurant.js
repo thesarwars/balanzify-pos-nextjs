@@ -337,12 +337,13 @@ router.post('/orders/:id/items', auth, validate(z.object({
   quantity:   z.coerce.number().int().positive().default(1),
   notes:      z.string().max(500).optional().nullable(),
   course:     z.coerce.number().int().min(1).max(5).default(1),
+  seat:       z.coerce.number().int().positive().max(50).optional().nullable(),
   modifiers:  z.array(z.object({
     optionId: uuid,
   })).default([]),
 })), async (req, res, next) => {
   try {
-    const { productId, variantId, quantity, notes, course, modifiers } = req.body;
+    const { productId, variantId, quantity, notes, course, seat, modifiers } = req.body;
 
     // Check order is still open
     const order = await prisma.restaurantOrder.findFirst({
@@ -391,6 +392,7 @@ router.post('/orders/:id/items', auth, validate(z.object({
           lineTotal,
           notes:         notes || null,
           course,
+          seat:          seat || null,
           modifiers:     { create: modifierData },
         },
         include: {
@@ -906,6 +908,69 @@ router.post('/orders/:id/split', auth, validate(z.object({
       message:    `Order split into ${newOrders.length} bills.`,
       new_orders: newOrders.map(o => ({ id: o.id, order_number: o.orderNumber, total: o.totalAmount })),
     });
+  } catch (err) { next(err); }
+});
+
+// ── SPLIT BILL BY SEAT ────────────────────────────────────────────
+// Groups the order's items by their seat number and produces one bill per seat —
+// the common "everyone pays for what they had" request. Items with no seat are
+// kept together on a shared bill. Needs at least two distinct buckets to split.
+router.post('/orders/:id/split-by-seat', auth, async (req, res, next) => {
+  try {
+    const order = await prisma.restaurantOrder.findFirst({
+      where: { id: req.params.id, businessId: req.user.business_id,
+               status: { in: ['pending','sent','preparing','ready','served'] } },
+      include: { items: { include: { modifiers: true } } },
+    });
+    if (!order) return res.status(404).json({ error: 'Active order not found.' });
+    if (!order.items.length) return res.status(400).json({ error: 'Order has no items to split.' });
+
+    // Bucket items by seat (null → 'shared').
+    const buckets = new Map();
+    for (const it of order.items) {
+      const key = it.seat == null ? 'shared' : `seat-${it.seat}`;
+      if (!buckets.has(key)) buckets.set(key, []);
+      buckets.get(key).push(it);
+    }
+    if (buckets.size < 2) return res.status(400).json({ error: 'Assign items to at least two seats before splitting by seat.', code: 'NEEDS_SEATS' });
+
+    const newOrders = await prisma.$transaction(async (tx) => {
+      const created = [];
+      let i = 0;
+      for (const [key, items] of buckets) {
+        i += 1;
+        const subtotal = items.reduce((s, item) => s + parseFloat(item.lineTotal), 0);
+        const label = key === 'shared' ? 'Shared' : `Seat ${key.split('-')[1]}`;
+        const o = await tx.restaurantOrder.create({
+          data: {
+            businessId:  req.user.business_id,
+            orderNumber: `${order.orderNumber}-${key === 'shared' ? 'SH' : 'S' + key.split('-')[1]}`,
+            tableId:     order.tableId,
+            staffId:     req.user.id,
+            status:      order.status,
+            type:        order.type,
+            covers:      1,
+            notes:       `${label} — split from ${order.orderNumber}`,
+            subtotal,
+            totalAmount: subtotal,
+            items: {
+              create: items.map(item => ({
+                productId: item.productId, variantId: item.variantId, quantity: item.quantity,
+                unitPrice: item.unitPrice, modifierTotal: item.modifierTotal, lineTotal: item.lineTotal,
+                notes: item.notes, course: item.course, seat: item.seat, status: item.status,
+                modifiers: { create: item.modifiers.map(m => ({ optionId: m.optionId, name: m.name, priceAdjustment: m.priceAdjustment })) },
+              })),
+            },
+          },
+          include: { items: true },
+        });
+        created.push({ id: o.id, order_number: o.orderNumber, label, total: o.totalAmount });
+      }
+      await tx.restaurantOrder.update({ where: { id: order.id }, data: { status: 'void', notes: `Split by seat into ${buckets.size} bills` } });
+      return created;
+    });
+
+    res.status(201).json({ message: `Split into ${newOrders.length} seat bills.`, new_orders: newOrders });
   } catch (err) { next(err); }
 });
 
