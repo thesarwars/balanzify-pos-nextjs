@@ -13,6 +13,7 @@ const crypto  = require('crypto');
 const { z }   = require('zod'); // 🌟 Make sure to npm install zod if you haven't
 const prisma  = require('../lib/prisma');
 const registry = require('../lib/payments');
+const accounting = require('../lib/accounting');
 const { auth, requireRole } = require('../middleware/auth');
 const { logger } = require('../lib/logger');
 const router = express.Router();
@@ -99,34 +100,58 @@ router.post('/webhook/mpesa', express.raw({ type: 'application/json' }), async (
 
     logger.info('mpesa_webhook_received', { reference, success, mpesaRef, paidAmount });
 
-    // Resolve the exact pending M-Pesa payment this callback refers to, then
-    // update it by id — never a blind updateMany on a client-supplied reference
-    // (which could touch another tenant's row or re-complete a settled sale).
-    const payment = await prisma.salePayment.findFirst({
-      where: { providerReference: reference, provider: 'mpesa', status: 'pending' },
-      select: { id: true, saleId: true, amount: true },
-    });
-    if (!payment) {
-      // Unknown / already-processed reference — accept idempotently, change nothing.
-      return res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
-    }
+    // Resolve the exact pending M-Pesa payment this callback refers to, update it,
+    // and reconcile the ledger — all in one transaction so the SalePayment, the
+    // sale, and the GL move together (and idempotently: the `status: pending`
+    // filter means a re-delivered callback finds nothing and changes nothing).
+    await prisma.$transaction(async (tx) => {
+      const payment = await tx.salePayment.findFirst({
+        where: { providerReference: reference, provider: 'mpesa', status: 'pending' },
+        select: { id: true, saleId: true, amount: true, businessId: true },
+      });
+      if (!payment) return; // unknown / already-processed — accept, change nothing.
 
-    await prisma.salePayment.update({
-      where: { id: payment.id },
-      data: {
-        status:            success ? 'completed' : 'failed',
-        providerReference: mpesaRef || reference,
-        completedAt:       success ? new Date() : null,
-        rawResponse:       body,
-      },
-    });
+      await tx.salePayment.update({
+        where: { id: payment.id },
+        data: {
+          status:            success ? 'completed' : 'failed',
+          providerReference: mpesaRef || reference,
+          completedAt:       success ? new Date() : null,
+          rawResponse:       body,
+        },
+      });
 
-    if (success && payment.saleId) {
-      const sale = await prisma.sale.findUnique({ where: { id: payment.saleId }, select: { status: true } });
-      if (sale?.status === 'pending') {
-        await prisma.sale.update({ where: { id: payment.saleId }, data: { status: 'completed' } });
+      const amt = parseFloat(payment.amount);
+      if (success) {
+        // Money arrived: move it from in-transit clearing to real mobile money, and
+        // finalise the sale.
+        if (payment.saleId) {
+          const sale = await tx.sale.findUnique({ where: { id: payment.saleId }, select: { status: true } });
+          if (sale?.status === 'pending') await tx.sale.update({ where: { id: payment.saleId }, data: { status: 'completed' } });
+        }
+        if (amt > 0) {
+          await accounting.postJournal(tx, {
+            businessId: payment.businessId, description: `M-Pesa settled — ${mpesaRef || reference}`,
+            sourceType: 'mpesa_settlement', sourceId: payment.id,
+            lines: [
+              { code: '1010', debit: amt, credit: 0, description: 'Mobile money received' },
+              { code: '1015', debit: 0, credit: amt, description: 'In-transit cleared' },
+            ],
+          });
+        }
+      } else if (amt > 0) {
+        // Payment failed: the money never arrived, so the in-transit amount becomes a
+        // receivable — the customer still owes it. The sale stays pending (unpaid).
+        await accounting.postJournal(tx, {
+          businessId: payment.businessId, description: `M-Pesa failed — ${reference}`,
+          sourceType: 'mpesa_failed', sourceId: payment.id,
+          lines: [
+            { code: '1100', debit: amt, credit: 0, description: 'Receivable (failed M-Pesa)' },
+            { code: '1015', debit: 0, credit: amt, description: 'In-transit cleared' },
+          ],
+        });
       }
-    }
+    });
 
     res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
   } catch (err) {

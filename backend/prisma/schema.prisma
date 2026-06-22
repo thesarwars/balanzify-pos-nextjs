@@ -121,6 +121,9 @@ enum SaleStatus {
 enum PaymentMethod {
   cash
   zaad
+  evc
+  mpesa
+  telebirr
   visa
   mastercard
   split
