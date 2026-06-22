@@ -289,6 +289,38 @@ describe('HRM', () => {
     expect(sent.body.status).toBe('link');               // zero-config provider fallback
     expect(sent.body.wa_url).toContain(encodeURIComponent('Net pay'));
   });
+
+  test('Kenya statutory deductions: PAYE/NSSF/SHIF/Housing computed, posted, and filable', async () => {
+    // Preview (no persistence) — the payroll screen shows this before running.
+    const prev = (await request(app).post('/api/v1/hrm/payroll/compute').set(auth(token)).send({ gross: 50000, country: 'KE' })).body;
+    expect(prev.nssf).toBeCloseTo(2160, 2);
+    expect(prev.shif).toBeCloseTo(1375, 2);
+    expect(prev.housing_levy).toBeCloseTo(750, 2);
+    expect(prev.paye).toBeCloseTo(6416.60, 2);
+    expect(prev.total_statutory).toBeCloseTo(10701.60, 2);
+    expect(prev.net).toBeCloseTo(39298.40, 2);
+
+    // Run payroll with statutory on → breakdown persisted, net is gross − statutory.
+    const e = (await request(app).post('/api/v1/hrm/employee').set(auth(token)).send({ name: 'Wanjiru', salary: 50000 })).body;
+    const pay = (await request(app).post('/api/v1/hrm/payroll').set(auth(token)).send({ employee_id: e.id, month: '2026-09', basic: 50000, deduction: 0, statutory_country: 'KE' })).body;
+    expect(parseFloat(pay.statutory_total)).toBeCloseTo(10701.60, 2);
+    expect(parseFloat(pay.paye)).toBeCloseTo(6416.60, 2);
+    expect(parseFloat(pay.net)).toBeCloseTo(39298.40, 2);
+
+    // GL: gross to wages (5100), statutory withheld to Statutory Payable (2120), net in cash.
+    const entry = await prisma.journalEntry.findFirst({ where: { sourceType: 'payroll', sourceId: pay.id }, include: { lines: { include: { account: true } } } });
+    const by = {}; for (const l of entry.lines) by[l.account.code] = l;
+    expect(parseFloat(by['5100'].debit)).toBeCloseTo(50000, 2);
+    expect(parseFloat(by['2120'].credit)).toBeCloseTo(10701.60, 2);
+    expect(parseFloat(by['1000'].credit)).toBeCloseTo(39298.40, 2);
+
+    // Filing report aggregates the month — the figures filed with KRA/NSSF/SHA.
+    const rep = (await request(app).get('/api/v1/hrm/payroll/statutory-report?month=2026-09').set(auth(token))).body;
+    expect(rep.employees).toBe(1);
+    expect(rep.totals.paye).toBeCloseTo(6416.60, 2);
+    expect(rep.totals.total).toBeCloseTo(10701.60, 2);
+    expect(rep.lines[0].employee).toBe('Wanjiru');
+  });
 });
 
 describe('superadmin (opt-in, cross-tenant)', () => {
