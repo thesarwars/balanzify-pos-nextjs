@@ -52,6 +52,7 @@ export const NAV = [
     { id: 'petty-cash', label: 'Petty Cash', icon: '◐' },
     { id: 'adjustments', label: 'Adjustments', icon: '◑' },
     { id: 'transfers', label: 'Transfers', icon: '⇄' },
+    { id: 'zakat', label: 'Zakat', icon: '☪' },
   ]},
   { sect: 'Operations', items: [
     { id: 'hrm', label: 'HRM / Staff', icon: '⚇' },
