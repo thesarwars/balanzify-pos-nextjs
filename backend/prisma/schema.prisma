@@ -3722,9 +3722,44 @@ model WholesaleOrder {
   business Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
   customer Customer  @relation("wholesale_customer", fields: [customerId], references: [id])
   items    WholesaleOrderItem[]
+  creditNotes WholesaleCreditNote[]
 
   @@index([businessId, status])
   @@map("wholesale_orders")
+}
+
+// Credit note / return against a delivered wholesale order. Reduces the
+// customer's receivable (and reverses revenue); optionally restocks the goods.
+// Distribution runs on returns, so this is a day-one need.
+model WholesaleCreditNote {
+  id          String   @id @default(uuid()) @db.Uuid
+  businessId  String   @map("business_id") @db.Uuid
+  orderId     String   @map("order_id") @db.Uuid
+  noteNumber  String   @map("note_number") @db.VarChar(40)
+  reason      String?  @db.VarChar(300)
+  totalCredit Decimal  @default(0) @map("total_credit") @db.Decimal(12, 2)
+  restocked   Boolean  @default(false)
+  createdById String?  @map("created_by") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  order WholesaleOrder            @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  items WholesaleCreditNoteItem[]
+  @@index([orderId])
+  @@map("wholesale_credit_notes")
+}
+
+model WholesaleCreditNoteItem {
+  id           String  @id @default(uuid()) @db.Uuid
+  creditNoteId String  @map("credit_note_id") @db.Uuid
+  orderItemId  String  @map("order_item_id") @db.Uuid
+  productId    String  @map("product_id") @db.Uuid
+  quantity     Int
+  unitPrice    Decimal @map("unit_price") @db.Decimal(12, 2)
+  lineCredit   Decimal @map("line_credit") @db.Decimal(12, 2)
+
+  creditNote WholesaleCreditNote @relation(fields: [creditNoteId], references: [id], onDelete: Cascade)
+  @@index([creditNoteId])
+  @@map("wholesale_credit_note_items")
 }
 
 model WholesaleOrderItem {
