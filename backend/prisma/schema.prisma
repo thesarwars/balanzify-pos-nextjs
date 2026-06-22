@@ -2264,6 +2264,24 @@ model DispenseRecord {
   @@map("dispense_records")
 }
 
+// Drug-drug interaction knowledge base. Rows with businessId = NULL are the
+// shipped clinical KB (shared across all tenants); a business may add its own.
+// drugA/drugB are normalized lowercase generic names, stored alphabetically so a
+// lookup is order-independent.
+model DrugInteraction {
+  id          String   @id @default(uuid()) @db.Uuid
+  businessId  String?  @map("business_id") @db.Uuid
+  drugA       String   @map("drug_a") @db.VarChar(120)
+  drugB       String   @map("drug_b") @db.VarChar(120)
+  severity    String   @db.VarChar(20) // minor | moderate | major | contraindicated
+  description String
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([drugA])
+  @@index([drugB])
+  @@map("drug_interactions")
+}
+
 // ── Embedded financing (Sharia-compliant: fixed Murabaha-style fee, NOT interest) ─
 // A working-capital advance: the merchant receives `principal` and owes a fixed,
 // disclosed `totalRepayable` = principal + feeAmount. The fee is flat — no time
