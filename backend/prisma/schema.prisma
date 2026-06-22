@@ -605,6 +605,13 @@ model Payroll {
   incentive        Decimal  @default(0) @db.Decimal(12, 2)
   deduction        Decimal  @default(0) @db.Decimal(12, 2)
   advanceRecovered Decimal  @default(0) @map("advance_recovered") @db.Decimal(12, 2)
+  // Statutory deductions breakdown (for filing); 0 when no statutory regime applies.
+  statutoryCountry String?  @map("statutory_country") @db.VarChar(8)
+  paye             Decimal  @default(0) @db.Decimal(12, 2)
+  nssf             Decimal  @default(0) @db.Decimal(12, 2)
+  shif             Decimal  @default(0) @db.Decimal(12, 2)
+  housingLevy      Decimal  @default(0) @map("housing_levy") @db.Decimal(12, 2)
+  statutoryTotal   Decimal  @default(0) @map("statutory_total") @db.Decimal(12, 2)
   net              Decimal  @default(0) @db.Decimal(12, 2)
   status           String   @default("paid") @db.VarChar(20)
   createdAt        DateTime @default(now()) @map("created_at")

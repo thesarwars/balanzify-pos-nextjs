@@ -6,6 +6,7 @@ const express = require('express');
 const { z } = require('zod');
 const prisma = require('../lib/prisma');
 const accounting = require('../lib/accounting');
+const statutory = require('../lib/statutory');
 const wa = require('../lib/whatsapp');
 const { auth, requireRole } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
@@ -810,7 +811,11 @@ function serializePayroll(p) {
     id: p.id, employee_id: p.employeeId, employee_name: p.employee?.name || '—', month: p.month,
     basic: parseFloat(p.basic || 0), allowance: parseFloat(p.allowance || 0), overtime: parseFloat(p.overtime || 0),
     bonus: parseFloat(p.bonus || 0), incentive: parseFloat(p.incentive || 0), deduction: parseFloat(p.deduction || 0),
-    advance_recovered: parseFloat(p.advanceRecovered || 0), net: parseFloat(p.net || 0), status: p.status,
+    advance_recovered: parseFloat(p.advanceRecovered || 0),
+    statutory_country: p.statutoryCountry || null,
+    paye: parseFloat(p.paye || 0), nssf: parseFloat(p.nssf || 0), shif: parseFloat(p.shif || 0),
+    housing_levy: parseFloat(p.housingLevy || 0), statutory_total: parseFloat(p.statutoryTotal || 0),
+    net: parseFloat(p.net || 0), status: p.status,
   };
 }
 
@@ -826,7 +831,14 @@ router.post('/payroll', auth, requireRole('owner', 'manager'), validate(PayrollS
     const businessId = req.user.business_id, b = req.body;
     const emp = await prisma.employee.findFirst({ where: { id: b.employee_id, businessId }, select: { id: true, name: true } });
     if (!emp) return res.status(404).json({ title: 'Employee not found', status: 404 });
-    const net = b.basic + b.allowance + b.overtime + b.bonus + b.incentive - b.deduction;
+    const gross = b.basic + b.allowance + b.overtime + b.bonus + b.incentive;
+    // Statutory deductions (PAYE/NSSF/SHIF/Housing) computed from gross, on top of
+    // the freeform deduction (advances etc.). No country → no statutory (launch markets).
+    const stat = b.statutory_country && b.statutory_country !== 'none'
+      ? statutory.compute(b.statutory_country, gross)
+      : null;
+    const statutoryTotal = stat ? stat.total_statutory : 0;
+    const net = +(gross - b.deduction - statutoryTotal).toFixed(2);
 
     const payroll = await prisma.$transaction(async (tx) => {
       // Recover outstanding advances from the deduction (oldest first).
@@ -844,15 +856,60 @@ router.post('/payroll', auth, requireRole('owner', 'manager'), validate(PayrollS
         }
       }
       const created = await tx.payroll.create({
-        data: { businessId, employeeId: emp.id, month: b.month, basic: b.basic, allowance: b.allowance, overtime: b.overtime, bonus: b.bonus, incentive: b.incentive, deduction: b.deduction, advanceRecovered: +recovered.toFixed(2), net, status: 'paid' },
+        data: {
+          businessId, employeeId: emp.id, month: b.month, basic: b.basic, allowance: b.allowance,
+          overtime: b.overtime, bonus: b.bonus, incentive: b.incentive, deduction: b.deduction,
+          advanceRecovered: +recovered.toFixed(2),
+          statutoryCountry: stat ? stat.country : null,
+          paye: stat ? stat.paye : 0, nssf: stat ? stat.nssf : 0, shif: stat ? stat.shif : 0,
+          housingLevy: stat ? stat.housing_levy : 0, statutoryTotal,
+          net, status: 'paid',
+        },
         include: { employee: { select: { name: true } } },
       });
-      // GL: gross wages expensed, net paid in cash, deductions withheld as payable.
-      const gross = b.basic + b.allowance + b.overtime + b.bonus + b.incentive;
-      await accounting.postPayroll(tx, { businessId, gross, net, deduction: b.deduction, advanceRecovered: +recovered.toFixed(2), sourceId: created.id, createdById: req.user.id });
+      // GL: gross wages expensed, net paid in cash, freeform + statutory withheld as payables.
+      await accounting.postPayroll(tx, { businessId, gross, net, deduction: b.deduction, advanceRecovered: +recovered.toFixed(2), statutory: statutoryTotal, sourceId: created.id, createdById: req.user.id });
       return created;
     });
     res.status(201).json(serializePayroll(payroll));
+  } catch (err) { next(err); }
+});
+
+// Preview statutory deductions for a gross + country (no persistence) — for the
+// payroll screen to show PAYE/NSSF/SHIF/Housing and net before running payroll.
+router.post('/payroll/compute', auth, requireRole('owner', 'manager'), validate(z.object({
+  gross: z.coerce.number().nonnegative(),
+  country: z.enum(statutory.COUNTRIES).default('none'),
+})), async (req, res, next) => {
+  try {
+    res.json(statutory.compute(req.body.country, req.body.gross));
+  } catch (err) { next(err); }
+});
+
+// Statutory filing report for a month: per-employee PAYE/NSSF/SHIF/Housing plus
+// totals — the numbers an operator files with KRA / NSSF / SHA.
+router.get('/payroll/statutory-report', auth, async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const month = req.query.month;
+    if (!month || !/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ title: 'Provide month=YYYY-MM', status: 400 });
+    const rows = await prisma.payroll.findMany({
+      where: { businessId, month, statutoryTotal: { gt: 0 } },
+      include: { employee: { select: { name: true } } },
+      orderBy: { createdAt: 'asc' },
+    });
+    const lines = rows.map(p => ({
+      employee: p.employee?.name || '', country: p.statutoryCountry,
+      gross: +(parseFloat(p.basic) + parseFloat(p.allowance) + parseFloat(p.overtime) + parseFloat(p.bonus) + parseFloat(p.incentive)).toFixed(2),
+      paye: parseFloat(p.paye), nssf: parseFloat(p.nssf), shif: parseFloat(p.shif),
+      housing_levy: parseFloat(p.housingLevy), total: parseFloat(p.statutoryTotal),
+    }));
+    const sum = (k) => +lines.reduce((s, l) => s + l[k], 0).toFixed(2);
+    res.json({
+      month, employees: lines.length,
+      totals: { paye: sum('paye'), nssf: sum('nssf'), shif: sum('shif'), housing_levy: sum('housing_levy'), total: sum('total') },
+      lines,
+    });
   } catch (err) { next(err); }
 });
 
