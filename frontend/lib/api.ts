@@ -286,6 +286,16 @@ export interface FinancingAdvanceRow {
   totalRepayable: string | number; amountRepaid: string | number; outstanding: number;
   status: string; collectionRate?: string | number; createdAt: string;
 }
+export interface DeliveryDriver {
+  id: string; name: string; phone?: string | null; vehicle_type?: string | null;
+  status: 'available' | 'busy' | 'offline'; is_active: boolean;
+}
+export interface DeliveryOrder {
+  id: string; sale_id?: string | null; driver_id?: string | null; driver_name?: string | null;
+  customer_name: string; customer_phone?: string | null; address: string; channel: string;
+  items_summary?: string | null; order_amount: number; delivery_fee: number; payment_mode: string;
+  status: string; assigned_at?: string | null; delivered_at?: string | null; created_at: string;
+}
 
 // ═══════════════════════════════════════════════════════════════════
 //  MOCK BACKEND
@@ -3804,6 +3814,17 @@ const API: any = {
   rx: {
     checkInteractions(body: { drugs?: string[]; product_ids?: string[]; patient_id?: string; patient_name?: string }): Promise<{ checked: string[]; interactions: DrugInteractionResult[]; has_contraindication: boolean }> { return realReq('POST', '/pharmacy/interactions/check', { body }); },
     interactions(): Promise<{ interactions: (DrugInteractionResult & { id: string; custom: boolean })[] }> { return realReq('GET', '/pharmacy/interactions'); },
+  },
+
+  // Consumer ordering + driver dispatch (opt-in marketplace).
+  delivery: {
+    drivers(status?: string): Promise<{ drivers: DeliveryDriver[] }> { return realReq('GET', '/delivery/drivers', { query: { status } }); },
+    addDriver(body: { name: string; phone?: string; vehicle_type?: string }): Promise<DeliveryDriver> { return realReq('POST', '/delivery/drivers', { body }); },
+    setDriverStatus(id: string, status: string): Promise<DeliveryDriver> { return realReq('PUT', `/delivery/drivers/${id}/status`, { body: { status } }); },
+    orders(status?: string): Promise<{ deliveries: DeliveryOrder[] }> { return realReq('GET', '/delivery', { query: { status } }); },
+    createOrder(body: Record<string, any>): Promise<DeliveryOrder> { return realReq('POST', '/delivery', { body }); },
+    assign(id: string, driverId?: string): Promise<DeliveryOrder> { return realReq('POST', `/delivery/${id}/assign`, { body: driverId ? { driver_id: driverId } : {} }); },
+    setStatus(id: string, status: string): Promise<DeliveryOrder> { return realReq('PUT', `/delivery/${id}/status`, { body: { status } }); },
   },
 
   // WhatsApp-native customer comms.
