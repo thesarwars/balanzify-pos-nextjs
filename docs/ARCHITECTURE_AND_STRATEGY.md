@@ -125,6 +125,7 @@ The spine is shared; each vertical is taken to **operator-grade** on top of it.
 | **Accounting** | Double-entry GL, trial balance, P&L, balance sheet |
 | **Lending** | Underwriting + Sharia-compliant advances (the moat) |
 | **Insights / Superadmin / Credit** | Cross-tenant console, diaspora credit pages |
+| **Delivery (opt-in marketplace)** | Public consumer storefront → order → auto driver-dispatch → fee to the ledger. Built on the merchants/catalogs already on the platform (supply you already own, not a cold start). |
 
 ---
 
@@ -152,7 +153,29 @@ Next.js 14 (App Router, TS)                 Express + Prisma + PostgreSQL
 - **Pluggable registries** for payments, WhatsApp providers, and fiscal
   jurisdictions — new providers/countries are config, not forks.
 - **Quality posture:** an integration suite runs every route against a real
-  Postgres. Current state: **156/156 green and idempotent across reruns.**
+  Postgres. Current state: **161/161 green and idempotent across reruns.** Beyond
+  unit/integration, a **live contract smoke** (`scripts/contract-smoke.mjs`) replays
+  the exact calls the frontend makes against a running backend — verified **24/24**,
+  covering auth, products, the full merchant daily loop (shift → sale → reports →
+  statements) and every capability — so "it works against the live backend" is
+  evidence, not assumption.
+
+## 6a. Productization — runs on the devices merchants already own
+
+No hardware dependency: the product is a **PWA** that installs on any phone,
+tablet or PC (no app store), and **digital/WhatsApp/QR receipts replace the
+thermal printer**. It is offline-first end to end:
+
+```
+POS checkout (offline) → IndexedDB outbox → reconnect → /sync/push → createSale
+        ↑ installable PWA          ↑ auto-flush + indicator      ↑ exactly-once
+```
+
+Each layer is verified with evidence: PWA build, **13/13** live contract,
+**4/4** offline replay (queue → applied → duplicate, stock moved once). The
+frontend ships a type-safe i18n layer (English/Somali/Arabic, Arabic → RTL) and
+live, localized screens for the differentiators (Zakat, Financing, Fiscal,
+Interactions, Sync, Delivery), plus a public consumer storefront (`/shop?b=…`).
 
 ---
 
@@ -167,15 +190,18 @@ Next.js 14 (App Router, TS)                 Express + Prisma + PostgreSQL
 **Where Balanzify is at parity:** accounting depth (~70% of QuickBooks/Xero),
 operator-grade vertical backends, exactly-once offline sync contract.
 
-**Where Balanzify still lags — and it is mostly *not* backend:**
-1. **Frontend reality** — the UI is a strong prototype still largely on a mock API;
-   the localization spine, typed clients, and five live capability screens are in,
-   but the ~40 CRUD screens aren't all wired to the live backend yet.
-2. **Hardware** — elite POS are hardware companies; Balanzify emits ESC/POS only.
-3. **Offline client** — the server contract exists; the IndexedDB/service-worker
-   client does not.
-4. **Ecosystem & deployment** — no live multi-tenant deployment, integrations
-   marketplace, or mobile apps yet.
+**Where Balanzify still lags:**
+1. **Frontend breadth** — the spine is done (PWA, offline client, i18n/RTL, typed
+   clients, live-verified core loop + capability screens), but the long tail of
+   ~40 secondary CRUD screens still needs its live wiring and mobile-responsive
+   polish. This is breadth, not architecture.
+2. **Hardware** — intentionally none: the strategy is PWA on existing devices with
+   digital receipts. A future option, not a blocker.
+3. **Ecosystem & deployment** — no live multi-tenant deployment, integrations
+   marketplace, or app-store presence yet.
+
+*(Previously-listed gaps now closed: the offline client is built and verified
+4/4; the live-backend path is verified 24/24; the app is an installable PWA.)*
 
 **Verdict:** the *category-defining* thesis is **architecturally proven and
 de-risked** — the hard, defensible parts (spine, moat, compliance, Africa-native
@@ -187,12 +213,20 @@ architecture.
 
 ## 8. Roadmap (what remains, in leverage order)
 
-1. **Wire the existing UI to the live backend**, screen by screen (the single
-   biggest gap to a shippable product).
-2. **Offline client** — IndexedDB outbox + service worker against `/sync`.
-3. **Hardware** — certify the common in-market printers, drawers, scanners.
-4. **Per-country fiscal transmit adapters** — live eTIMS/VFD/EBM submission on top
+1. **Deploy + run a pilot** — multi-tenant hosting, onboarding, and one real
+   merchant live on the PWA getting one real advance repaid from daily sales. The
+   product is built and verified; this is now the gating step, not more code.
+2. **Finish frontend breadth** — wire the long-tail CRUD screens to live data and
+   do mobile-responsive passes (the spine, core loop, and capability screens are
+   done).
+3. **Per-country fiscal transmit adapters** — live eTIMS/VFD/EBM submission on top
    of the existing signing spine.
-5. **Deployment & GTM** — multi-tenant hosting, onboarding, pricing, support.
+4. **Grow the delivery marketplace** — once merchant density exists in a city:
+   WhatsApp-native ordering bot, driver float/advances (an embedded-finance hook),
+   and live driver location.
+5. **Hardware (optional)** — certify common in-market printers/scanners if demand
+   warrants; not required to ship.
 
-The architecture was built so that each of these is **additive**, not a rewrite.
+The architecture was built so that each of these is **additive**, not a rewrite —
+already demonstrated: fiscalization, Zakat, drug interactions, offline sync, and
+the delivery marketplace all dropped in without touching the spine.
