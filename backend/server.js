@@ -201,6 +201,9 @@ try {
   app.use('/r', checkoutRoutes);
   
   app.use('/api/v1/sync', apiLimiter, require('./routes/sync'));
+  const fiscalRoutes = require('./routes/fiscal');
+  app.use('/api/v1/fiscal', apiLimiter, fiscalRoutes);
+  app.use('/fiscal', fiscalRoutes.publicRouter); // public QR verification
   app.use('/api/v1/export', apiLimiter, exportRoutes);
   app.use('/api/v1/accounting', apiLimiter, accountingRoutes);
   app.use('/api/v1/lending', apiLimiter, lendingRoutes);
