@@ -43,6 +43,7 @@ export const NAV = [
   ]},
   { sect: 'Verticals', items: [
     { id: 'pharmacy', label: 'Pharmacy', icon: '✚' },
+    { id: 'interactions', label: 'Drug Interactions', icon: '⚕' },
     { id: 'wholesale', label: 'Wholesale', icon: '⊟' },
     { id: 'construction', label: 'Construction', icon: '◭' },
   ]},
@@ -78,7 +79,7 @@ export const NAV = [
 // unless that module is enabled for the business. Everything else is core.
 const NAV_MODULE: Record<string, string> = {
   hotel: 'hotel', restaurant: 'restaurant',
-  pharmacy: 'pharmacy', wholesale: 'wholesale', construction: 'construction',
+  pharmacy: 'pharmacy', interactions: 'pharmacy', wholesale: 'wholesale', construction: 'construction',
   hrm: 'hrm', insights: 'insights', superadmin: 'superadmin',
 };
 

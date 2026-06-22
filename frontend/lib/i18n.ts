@@ -105,6 +105,17 @@ const MESSAGES = {
 
   // Pharmacy clinical safety
   'rx.interaction_warning': { en: 'Drug interaction warning', so: 'Digniin isdhexgalka daawada', ar: 'تحذير تفاعل دوائي' },
+  'rx.title':       { en: 'Drug Interactions', so: 'Isdhexgalka daawada', ar: 'تفاعلات الأدوية' },
+  'rx.subtitle':    { en: 'Clinical safety check', so: 'Hubinta badbaadada caafimaad', ar: 'فحص السلامة السريرية' },
+  'rx.check':       { en: 'Check', so: 'Hubi', ar: 'فحص' },
+  'rx.add_drug':    { en: 'Add a drug name…', so: 'Ku dar magaca daawada…', ar: 'أضف اسم دواء…' },
+  'rx.no_interactions': { en: 'No interactions found.', so: 'Wax isdhexgal ah lama helin.', ar: 'لا توجد تفاعلات.' },
+  'rx.kb_title':    { en: 'Known Interactions', so: 'Isdhexgallada la yaqaan', ar: 'التفاعلات المعروفة' },
+  'rx.live_required': { en: 'Connect the live backend to check interactions.', so: 'Ku xidh server-ka.', ar: 'اتصل بالخادم.' },
+  'rx.sev.minor':   { en: 'Minor', so: 'Yar', ar: 'طفيف' },
+  'rx.sev.moderate':{ en: 'Moderate', so: 'Dhexdhexaad', ar: 'متوسط' },
+  'rx.sev.major':   { en: 'Major', so: 'Weyn', ar: 'كبير' },
+  'rx.sev.contraindicated': { en: 'Contraindicated', so: 'Mamnuuc', ar: 'مضاد استطباب' },
   'rx.contraindicated':     { en: 'Contraindicated', so: 'Mamnuuc', ar: 'مضاد استطباب' },
 
   // Language picker
@@ -142,6 +153,7 @@ const NAV_LABELS: Record<string, Partial<Record<Locale, string>>> = {
   'hotel':           { so: 'Hudheelka', ar: 'الفندق' },
   'restaurant':      { so: 'Maqaaxida', ar: 'المطعم' },
   'pharmacy':        { so: 'Farmashiyaha', ar: 'الصيدلية' },
+  'interactions':    { so: 'Isdhexgalka daawada', ar: 'تفاعلات الأدوية' },
   'wholesale':       { so: 'Jumlada', ar: 'الجملة' },
   'construction':    { so: 'Dhismaha', ar: 'الإنشاءات' },
   'expenses':        { so: 'Kharashaadka', ar: 'المصروفات' },
