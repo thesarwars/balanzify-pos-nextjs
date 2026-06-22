@@ -843,6 +843,64 @@ describe('wholesale', () => {
     expect(tb.accounts.find(a => a.code === '4000').balance).toBeCloseTo(50, 2); // revenue
     expect(tb.accounts.find(a => a.code === '1000').balance).toBeCloseTo(50, 2); // cash collected
   });
+
+  test('partial fulfillment: backorder shortfall, bill only what shipped', async () => {
+    // Isolated business so the GL assertions stand alone.
+    const t = await register();
+    await enableModule(t, 'wholesale');
+    const l = await location(t);
+    const a = await stockedProduct(t, l, 10, 100); // price 10
+    const b = await stockedProduct(t, l, 10, 100); // price 10
+    const c = await request(app).post('/api/v1/customers').set(auth(t)).send({ name: 'Backorder Shop', phone: '0700333444' });
+    const cust = c.body.id;
+
+    // Order: line A qty 5 (=50), line B qty 4 (=40), total 90.
+    const created = await request(app).post('/api/v1/wholesale/orders').set(auth(t))
+      .send({ customer_id: cust, items: [{ product_id: a, quantity: 5 }, { product_id: b, quantity: 4 }] });
+    expect(created.status).toBe(201);
+    const id = created.body.id;
+    expect(Number(created.body.total)).toBe(90);
+    const itemA = created.body.items.find(i => i.productId === a).id;
+    const itemB = created.body.items.find(i => i.productId === b).id;
+
+    // Fulfil A fully (5), B partially (2) → 2 units of B on backorder.
+    const ful = await request(app).post(`/api/v1/wholesale/orders/${id}/fulfill`).set(auth(t))
+      .send({ items: [{ item_id: itemA, qty: 5 }, { item_id: itemB, qty: 2 }] });
+    expect(ful.status).toBe(200);
+    expect(ful.body.status).toBe('partially_picked');
+    expect(ful.body.fully_fulfilled).toBe(false);
+    expect(ful.body.backorder_units).toBe(2);
+
+    // Backorder report shows the B remainder.
+    const bo = await request(app).get(`/api/v1/wholesale/orders/${id}/backorder`).set(auth(t));
+    expect(bo.status).toBe(200);
+    expect(bo.body.total_backorder_units).toBe(2);
+    expect(bo.body.backorder).toHaveLength(1);
+    expect(bo.body.backorder[0].item_id).toBe(itemB);
+    expect(bo.body.backorder[0].backorder).toBe(2);
+
+    // Over-fulfil is clamped: asking for 99 of A never exceeds the ordered 5.
+    const over = await request(app).post(`/api/v1/wholesale/orders/${id}/fulfill`).set(auth(t))
+      .send({ items: [{ item_id: itemA, qty: 99 }, { item_id: itemB, qty: 2 }] });
+    expect(over.body.backorder_units).toBe(2); // still just B's shortfall
+
+    // Dispatch is allowed from partially_picked.
+    expect((await request(app).post(`/api/v1/wholesale/orders/${id}/dispatch`).set(auth(t)).send({ driver_name: 'Partial Van' })).status).toBe(200);
+    // Deliver → bills only the fulfilled value: 5×10 + 2×10 = 70 (not the 90 ordered).
+    expect((await request(app).post(`/api/v1/wholesale/orders/${id}/deliver`).set(auth(t))).status).toBe(200);
+
+    const tb = (await request(app).get('/api/v1/accounting/trial-balance').set(auth(t))).body;
+    expect(tb.totals.balanced).toBe(true);
+    expect(tb.accounts.find(a2 => a2.code === '1100').balance).toBeCloseTo(70, 2); // receivable = shipped value
+    expect(tb.accounts.find(a2 => a2.code === '4000').balance).toBeCloseTo(70, 2); // revenue = shipped value
+
+    // Outstanding reflects the billed 70, and a payment cannot exceed it.
+    const pay = await request(app).post(`/api/v1/wholesale/orders/${id}/payment`).set(auth(t)).send({ amount: 1000 });
+    expect(pay.body.payment_status).toBe('paid');
+    const tb2 = (await request(app).get('/api/v1/accounting/trial-balance').set(auth(t))).body;
+    expect(tb2.accounts.find(a2 => a2.code === '1100').balance).toBeCloseTo(0, 2);  // settled
+    expect(tb2.accounts.find(a2 => a2.code === '1000').balance).toBeCloseTo(70, 2); // collected only 70
+  });
 });
 
 describe('restaurant recipes (BOM ingredient depletion)', () => {

@@ -3678,13 +3678,14 @@ model WholesaleOrder {
 }
 
 model WholesaleOrderItem {
-  id        String  @id @default(uuid()) @db.Uuid
-  orderId   String  @map("order_id") @db.Uuid
-  productId String  @map("product_id") @db.Uuid
-  quantity  Int
-  unitPrice Decimal @map("unit_price") @db.Decimal(12, 2)
-  lineTotal Decimal @map("line_total") @db.Decimal(12, 2)
-  picked    Boolean @default(false)
+  id           String  @id @default(uuid()) @db.Uuid
+  orderId      String  @map("order_id") @db.Uuid
+  productId    String  @map("product_id") @db.Uuid
+  quantity     Int
+  fulfilledQty Int     @default(0) @map("fulfilled_qty") // for partial fulfillment / backorders
+  unitPrice    Decimal @map("unit_price") @db.Decimal(12, 2)
+  lineTotal    Decimal @map("line_total") @db.Decimal(12, 2)
+  picked       Boolean @default(false)
 
   order   WholesaleOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
   product Product        @relation("wholesale_item_product", fields: [productId], references: [id])
