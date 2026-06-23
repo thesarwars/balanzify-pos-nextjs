@@ -4,6 +4,13 @@
 #   2. ./scripts/deploy-ec2.sh
 #   3. ./scripts/setup-ssl-ec2.sh
 
+# Cap container log growth (json-file driver) so logs can't fill the disk.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
 networks:
   frontend_net:
     driver: bridge
@@ -22,6 +29,7 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    logging: *default-logging
     command: >
       redis-server
         --maxmemory 256mb
@@ -42,6 +50,7 @@ services:
       dockerfile: Dockerfile
       target: production
     restart: unless-stopped
+    logging: *default-logging
     env_file:
       - .env
     environment:
@@ -69,6 +78,7 @@ services:
       dockerfile: Dockerfile
       target: production
     restart: unless-stopped
+    logging: *default-logging
     networks:
       - frontend_net
     depends_on:
@@ -82,6 +92,7 @@ services:
   nginx:
     image: nginx:1.25-alpine
     restart: unless-stopped
+    logging: *default-logging
     ports:
       - "80:80"
       - "443:443"
@@ -108,6 +119,7 @@ services:
   certbot:
     image: certbot/certbot:latest
     restart: unless-stopped
+    logging: *default-logging
     volumes:
       - nginx_certs:/etc/letsencrypt
       - certbot_webroot:/var/www/certbot
