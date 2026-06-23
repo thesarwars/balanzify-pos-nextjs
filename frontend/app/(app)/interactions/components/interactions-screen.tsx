@@ -11,7 +11,7 @@ import { API, type DrugInteractionResult, type InteractionSeverity } from '@/lib
 import { useT } from '@/lib/locale-context';
 import type { MessageKey } from '@/lib/i18n';
 import { Topbar } from '@/components/shell';
-import { Panel, Btn, Badge, TextField, SelectField, Field } from '@/components/kit';
+import { Panel, Btn, Badge, TextField, SelectField, Field, useViewport } from '@/components/kit';
 
 type KbRow = DrugInteractionResult & { id?: string; custom?: boolean };
 
@@ -44,6 +44,7 @@ function InteractionRow({ T, t, i, onRemove }: { T: any; t: (k: MessageKey) => s
 
 export function InteractionsScreen({ T }: { T: any }) {
   const t = useT();
+  const { isMobile } = useViewport();
   const [drugs, setDrugs] = useState<string[]>([]);
   const [entry, setEntry] = useState('');
   const [results, setResults] = useState<DrugInteractionResult[] | null>(null);
@@ -111,7 +112,9 @@ export function InteractionsScreen({ T }: { T: any }) {
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: T.paperAlt }}>
       <Topbar T={T} title={t('rx.title')} subtitle={t('rx.subtitle')} />
-      <div style={{ flex: 1, overflowY: 'auto', minHeight: 0, padding: 24, maxWidth: 960, display: 'grid', gap: 16 }}>
+      <div style={{ flex: 1, minHeight: 0, padding: 24, display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: 16, overflow: isMobile ? 'auto' : 'hidden' }}>
+        {/* Left column: checker + add-custom (scrolls on its own when tall) */}
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 16, ...(isMobile ? {} : { minHeight: 0, overflowY: 'auto' }) }}>
         <Panel T={T} title={t('rx.title')}>
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
             <div style={{ flex: 1 }}>
@@ -164,11 +167,21 @@ export function InteractionsScreen({ T }: { T: any }) {
             {msg && <span style={{ fontSize: 12, color: msg.ok ? T.greenText : T.redText, marginInlineStart: 'auto' }}>{msg.text}</span>}
           </div>
         </Panel>
+        </div>
 
-        <Panel T={T} title={t('rx.kb_title')} action={<Badge T={T} tone="gray">{kb.length}</Badge>}>
-          {kb.length === 0 && <div style={{ color: T.inkSub, fontSize: 13 }}>{t('rx.live_required')}</div>}
-          {kb.map((i, idx) => <InteractionRow key={i.id || idx} T={T} t={t} i={i} onRemove={removeInteraction} />)}
-        </Panel>
+        {/* Right column: Known Interactions — fills the gap and scrolls on its own */}
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', ...(isMobile ? {} : { minHeight: 0 }) }}>
+          <div style={{ background: T.card, border: `1px solid ${T.line}`, borderRadius: T.rLg, boxShadow: T.sh1, display: 'flex', flexDirection: 'column', ...(isMobile ? {} : { flex: 1, minHeight: 0, overflow: 'hidden' }) }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 20px', borderBottom: `1px solid ${T.line}`, flexShrink: 0 }}>
+              <span style={{ fontSize: 11.5, fontWeight: 700, color: T.inkMid, textTransform: 'uppercase', letterSpacing: 0.7 }}>{t('rx.kb_title')}</span>
+              <Badge T={T} tone="gray">{kb.length}</Badge>
+            </div>
+            <div style={{ padding: '6px 20px 14px', ...(isMobile ? {} : { overflowY: 'auto', minHeight: 0 }) }}>
+              {kb.length === 0 && <div style={{ color: T.inkSub, fontSize: 13, paddingTop: 8 }}>{t('rx.live_required')}</div>}
+              {kb.map((i, idx) => <InteractionRow key={i.id || idx} T={T} t={t} i={i} onRemove={removeInteraction} />)}
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
