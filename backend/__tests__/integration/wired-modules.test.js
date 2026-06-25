@@ -2358,4 +2358,26 @@ describe('expense capture with receipt photo → GL', () => {
   });
 });
 
+describe('Zakat / Sadaqah collection → GL', () => {
+  let token, bizId;
+  const at = (b, c) => (b.find(a => a.code === c) || { balance: 0 }).balance;
+  beforeAll(async () => { token = await register(); bizId = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString()).businessId; });
+
+  test('giving Zakat and Sadaqah books to Charity, tracks totals, and balances', async () => {
+    expect((await request(app).post('/api/v1/islamic/zakat/pay').set(auth(token)).send({ type: 'zakat', amount: 50, recipient: 'Local mosque', method: 'cash' })).status).toBe(201);
+    expect((await request(app).post('/api/v1/islamic/zakat/pay').set(auth(token)).send({ type: 'sadaqah', amount: 10, method: 'zaad' })).status).toBe(201);
+
+    const bal = await accounting.accountBalances(bizId);
+    expect(at(bal, '5400')).toBeCloseTo(60, 2);  // charity given (Zakat + Sadaqah)
+    expect(at(bal, '1000')).toBeCloseTo(-50, 2);  // 50 from cash
+    expect(at(bal, '1010')).toBeCloseTo(-10, 2);  // 10 from mobile money
+    expect((await request(app).get('/api/v1/accounting/trial-balance').set(auth(token))).body.totals.balanced).toBe(true);
+
+    const hist = (await request(app).get('/api/v1/islamic/zakat/payments').set(auth(token))).body;
+    expect(hist.totals.all).toBeCloseTo(60, 2);
+    expect(hist.totals.zakat).toBeCloseTo(50, 2);
+    expect(hist.totals.sadaqah).toBeCloseTo(10, 2);
+  });
+});
+
 afterAll(async () => { await prisma.$disconnect(); });

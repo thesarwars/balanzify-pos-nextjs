@@ -183,6 +183,24 @@ model SavingsPayout {
   @@map("savings_payouts")
 }
 
+// Zakat / Sadaqah given by the business — a charitable outflow recorded for the
+// books and for the owner's giving history (Zakat is computed from the ledger by
+// lib/zakat; this records what was actually paid out).
+model ZakatPayment {
+  id          String   @id @default(uuid()) @db.Uuid
+  businessId  String   @map("business_id") @db.Uuid
+  type        String   @db.VarChar(10) // zakat | sadaqah
+  amount      Decimal  @db.Decimal(14, 2)
+  recipient   String?  @db.VarChar(200)
+  method      String   @default("cash") @db.VarChar(30)
+  note        String?  @db.VarChar(300)
+  createdById String?  @map("created_by") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([businessId])
+  @@map("zakat_payments")
+}
+
 // Stamp / punch card loyalty ("buy 9 coffees, get 1 free"). A program defines how
 // many stamps earn a reward; each customer accrues toward it and rolls over.
 model StampCard {
