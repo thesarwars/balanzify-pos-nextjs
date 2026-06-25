@@ -2380,4 +2380,28 @@ describe('Zakat / Sadaqah collection → GL', () => {
   });
 });
 
+describe('demand forecasting / predictive reorder', () => {
+  let token, loc, prod;
+  beforeAll(async () => {
+    token = await register();
+    loc = await location(token);
+    prod = await stockedProduct(token, loc, 10, 100); // 100 in stock
+    await makeSale(token, loc, prod, { qty: 60, price: 10 }); // sell 60 → 40 left
+  });
+
+  test('off-take drives days-left and a suggested reorder qty (cover-days based)', async () => {
+    // 60 sold over a 30-day window = 2/day; 40 left = 20 days; cover 30 days → order 20.
+    const f = (await request(app).get('/api/v1/forecast').set(auth(token)).query({ days: 30, cover_days: 30 })).body;
+    const row = f.items.find(i => i.product_id === prod);
+    expect(row).toBeTruthy();
+    expect(row.units_sold).toBe(60);
+    expect(row.avg_daily).toBeCloseTo(2, 2);
+    expect(row.stock).toBe(40);
+    expect(row.days_left).toBeCloseTo(20, 1);
+    expect(row.suggested_qty).toBe(20); // 2/day × 30 cover − 40 stock
+    expect(row.urgency).toBe('reorder');
+    expect(typeof f.is_ramadan).toBe('boolean');
+  });
+});
+
 afterAll(async () => { await prisma.$disconnect(); });
