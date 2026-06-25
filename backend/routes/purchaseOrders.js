@@ -1,4 +1,5 @@
 const express = require('express');
+const { z } = require('zod');
 const prisma = require('../lib/prisma');
 const { auth, requireRole } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
@@ -85,6 +86,55 @@ router.post('/', auth, requireRole('owner', 'manager'), validate(PurchaseOrderSc
       include: { items: true, supplier: { select: { name: true } } },
     });
     res.status(201).json(po);
+  } catch (err) { next(err); }
+});
+
+// One-tap reorder: draft a PO to a supplier for everything at/below its reorder
+// point (or a given product list), ordering up to the max level (or 2× the point)
+// at standard cost. Turns reorder *suggestions* into an actual purchase order.
+router.post('/quick-reorder', auth, requireRole('owner', 'manager'), validate(z.object({
+  supplier_id: z.string().uuid(),
+  location_id: z.string().uuid().optional().nullable(),
+  product_ids: z.array(z.string().uuid()).optional(),
+})), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const explicit = req.body.product_ids?.length ? req.body.product_ids : null;
+    const products = await prisma.product.findMany({
+      where: { businessId, isActive: true, ...(explicit ? { id: { in: explicit } } : { reorderPoint: { gt: 0 } }) },
+      select: { id: true, name: true, reorderPoint: true, maxStockLevel: true, costPrice: true },
+    });
+    if (!products.length) return res.status(400).json({ title: 'No products to reorder', status: 400 });
+
+    const ids = products.map(p => p.id);
+    const levels = await prisma.stockLevel.findMany({ where: { productId: { in: ids }, ...(req.body.location_id && { locationId: req.body.location_id }) }, select: { productId: true, quantity: true } });
+    const stockBy = {};
+    for (const l of levels) stockBy[l.productId] = (stockBy[l.productId] || 0) + l.quantity;
+
+    const lines = [];
+    for (const p of products) {
+      const stock = stockBy[p.id] || 0;
+      // Auto mode reorders only what's at/below its point; an explicit list always tops up.
+      if (!explicit && stock > p.reorderPoint) continue;
+      const target = p.maxStockLevel > 0 ? p.maxStockLevel : Math.max(p.reorderPoint * 2, 1);
+      const qty = Math.max(0, target - stock);
+      if (qty <= 0) continue;
+      const unitPrice = parseFloat(p.costPrice);
+      lines.push({ productId: p.id, orderedQty: qty, unitPrice, totalPrice: +(unitPrice * qty).toFixed(2) });
+    }
+    if (!lines.length) return res.status(400).json({ title: 'Nothing is below its reorder point', status: 400 });
+
+    const subtotal = +lines.reduce((s, l) => s + l.totalPrice, 0).toFixed(2);
+    const po = await prisma.purchaseOrder.create({
+      data: {
+        businessId, supplierId: req.body.supplier_id, locationId: req.body.location_id || null,
+        poNumber: `PO-${Date.now()}`, subtotal, freightCost: 0, customsDuty: 0, otherCharges: 0,
+        totalAmount: subtotal, currency: 'USD', paymentTerms: 0, createdById: req.user.id,
+        items: { create: lines },
+      },
+      include: { items: true, supplier: { select: { name: true } } },
+    });
+    res.status(201).json({ message: `Reorder PO drafted — ${lines.length} line(s).`, ...po });
   } catch (err) { next(err); }
 });
 
