@@ -2482,4 +2482,46 @@ describe('merchant wallet / settlement account — scaffolding', () => {
   });
 });
 
+describe('takaful micro-insurance — scaffolding', () => {
+  let token, bizId;
+  const at = (b, c) => (b.find(a => a.code === c) || { balance: 0 }).balance;
+  beforeAll(async () => {
+    token = await register();
+    await enableModule(token, 'takaful');
+    bizId = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString()).businessId;
+  });
+
+  test('gated off by default', async () => {
+    const other = await register();
+    expect((await request(app).get('/api/v1/takaful/policies').set(auth(other))).status).toBe(403);
+  });
+
+  test('contributions build the pool; an approved claim is paid from it', async () => {
+    const pol = await request(app).post('/api/v1/takaful/policies').set(auth(token)).send({
+      policyholder: 'Khadija Stores', cover_type: 'inventory', coverage_amount: 1000,
+      contribution: 20, term_months: 12, method: 'zaad',
+    });
+    expect(pol.status).toBe(201);
+    const id = pol.body.id;
+    // a second contribution → pool = 40
+    expect((await request(app).post(`/api/v1/takaful/policies/${id}/contribute`).set(auth(token)).send({ method: 'zaad' })).status).toBe(201);
+
+    let bal = await accounting.accountBalances(bizId);
+    expect(at(bal, '2500')).toBeCloseTo(40, 2); // takaful pool held in trust
+
+    // a claim over the coverage is rejected at filing
+    expect((await request(app).post(`/api/v1/takaful/policies/${id}/claims`).set(auth(token)).send({ amount: 5000, reason: 'fire' })).status).toBe(400);
+
+    // file a valid claim and pay it out of the pool
+    const claim = await request(app).post(`/api/v1/takaful/policies/${id}/claims`).set(auth(token)).send({ amount: 30, reason: 'Spoiled stock' });
+    expect(claim.status).toBe(201);
+    const decided = await request(app).post(`/api/v1/takaful/claims/${claim.body.id}/decide`).set(auth(token)).send({ decision: 'paid', method: 'cash' });
+    expect(decided.body.status).toBe('paid');
+
+    bal = await accounting.accountBalances(bizId);
+    expect(at(bal, '2500')).toBeCloseTo(10, 2);  // pool down by the 30 paid out
+    expect((await request(app).get('/api/v1/accounting/trial-balance').set(auth(token))).body.totals.balanced).toBe(true);
+  });
+});
+
 afterAll(async () => { await prisma.$disconnect(); });
