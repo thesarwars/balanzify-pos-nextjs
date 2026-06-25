@@ -33,6 +33,7 @@ const CHART = [
   { code: '2200', name: 'Financing Payable',   type: 'liability', normal: 'credit' },
   { code: '2300', name: 'Charity Payable',     type: 'liability', normal: 'credit' },
   { code: '2400', name: 'Savings Group Payable', type: 'liability', normal: 'credit' },
+  { code: '2500', name: 'Takaful Pool',         type: 'liability', normal: 'credit' },
   { code: '3000', name: "Owner's Equity",      type: 'equity',    normal: 'credit' },
   { code: '4000', name: 'Sales Revenue',       type: 'revenue',   normal: 'credit' },
   { code: '4100', name: 'Delivery Revenue',    type: 'revenue',   normal: 'credit' },

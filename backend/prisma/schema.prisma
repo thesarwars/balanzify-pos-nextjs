@@ -183,6 +183,46 @@ model SavingsPayout {
   @@map("savings_payouts")
 }
 
+// Takaful — Islamic cooperative micro-insurance. Contributions (tabarru',
+// donations) pool to cover members' losses; claims are paid from the pool. The
+// pool is a liability held in trust (2500). SCAFFOLDING — real underwriting needs
+// a takaful partner + Sharia board; the cooperative ledger + GL are here.
+model TakafulPolicy {
+  id              String    @id @default(uuid()) @db.Uuid
+  businessId      String    @map("business_id") @db.Uuid
+  reference       String    @db.VarChar(40)
+  policyholder    String    @db.VarChar(200)
+  phone           String?   @db.VarChar(50)
+  coverType       String    @map("cover_type") @db.VarChar(30) // inventory | vehicle | health | property
+  coverageAmount  Decimal   @map("coverage_amount") @db.Decimal(14, 2)
+  contribution    Decimal   @db.Decimal(14, 2) // periodic tabarru'
+  contributedTotal Decimal  @default(0) @map("contributed_total") @db.Decimal(14, 2)
+  termMonths      Int       @map("term_months")
+  status          String    @default("active") @db.VarChar(20) // active | expired | cancelled
+  startDate       DateTime  @default(now()) @map("start_date")
+  createdById     String?   @map("created_by") @db.Uuid
+  createdAt       DateTime  @default(now()) @map("created_at")
+
+  claims TakafulClaim[]
+  @@index([businessId, status])
+  @@map("takaful_policies")
+}
+
+model TakafulClaim {
+  id        String   @id @default(uuid()) @db.Uuid
+  policyId  String   @map("policy_id") @db.Uuid
+  amount    Decimal  @db.Decimal(14, 2)
+  reason    String   @db.VarChar(300)
+  status    String   @default("pending") @db.VarChar(20) // pending | paid | rejected
+  method    String?  @db.VarChar(30)
+  decidedAt DateTime? @map("decided_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  policy TakafulPolicy @relation(fields: [policyId], references: [id], onDelete: Cascade)
+  @@index([policyId])
+  @@map("takaful_claims")
+}
+
 // Merchant settlement / wallet account (the Kaspi / Mercado model): an in-app
 // balance the merchant tops up, holds, and pays out from. SCAFFOLDING — holding
 // real float requires an EMI licence / bank partner; the ledger + GL are here.
