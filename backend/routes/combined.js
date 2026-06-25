@@ -1176,7 +1176,7 @@ expensesRouter.get('/', auth, async (req, res, next) => {
 
 expensesRouter.post('/', auth, validate(ExpenseSchema), async (req, res, next) => {
   try {
-    const { category_id, location_id, amount, date, payment_status, expense_for, note, is_refund } = req.body;
+    const { category_id, location_id, amount, date, payment_status, expense_for, note, is_refund, receipt_url } = req.body;
     const expense = await prisma.$transaction(async (tx) => {
       const e = await tx.expense.create({
         data: {
@@ -1188,6 +1188,7 @@ expensesRouter.post('/', auth, validate(ExpenseSchema), async (req, res, next) =
           paymentStatus: payment_status || 'paid',
           expenseFor: expense_for || null,
           note: note || null,
+          receiptUrl: receipt_url || null,
           isRefund: is_refund || false,
           expenseDate: date ? new Date(date) : new Date(),
           createdById: req.user.id,
