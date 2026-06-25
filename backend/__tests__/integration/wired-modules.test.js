@@ -2524,4 +2524,29 @@ describe('takaful micro-insurance — scaffolding', () => {
   });
 });
 
+describe('peer benchmarking (anonymized aggregates)', () => {
+  let token, loc, prod;
+  beforeAll(async () => {
+    token = await register(); loc = await location(token); prod = await stockedProduct(token, loc, 10, 1000);
+    await makeSale(token, loc, prod, { qty: 2, price: 10 }); // basket 20
+    await makeSale(token, loc, prod, { qty: 2, price: 10 }); // basket 20
+    // At least MIN_PEERS other businesses with their own sales.
+    for (let i = 0; i < 3; i++) {
+      const t = await register(); const l = await location(t); const p = await stockedProduct(t, l, 10, 100);
+      await makeSale(t, l, p, { qty: 1, price: 10 });
+    }
+  });
+
+  test('compares your basket/volume to anonymized peer aggregates (never a single peer)', async () => {
+    const b = (await request(app).get('/api/v1/benchmarking').set(auth(token)).query({ days: 30 })).body;
+    expect(b.you.sales).toBe(2);
+    expect(b.you.avg_basket).toBeCloseTo(20, 2);
+    expect(b.peers.businesses).toBeGreaterThanOrEqual(3); // aggregate only, never one competitor
+    expect(typeof b.peers.avg_basket).toBe('number');
+    expect(b.peers.avg_basket).toBeGreaterThan(0);
+    expect(['above', 'below']).toContain(b.comparison.basket);
+    expect(typeof b.comparison.avg_basket_vs_peers_pct).toBe('number');
+  });
+});
+
 afterAll(async () => { await prisma.$disconnect(); });
