@@ -194,7 +194,8 @@ try {
   app.use('/api/v1/checkout',   apiLimiter, checkoutRoutes);
   app.use('/api/v1/insights',   apiLimiter, gateAuth, requireModule('insights'), insightsRoutes);
   app.use('/api/v1/credit',     apiLimiter, gateAuth, requireModule('credit'), creditRoutes);
-  
+  app.use('/api/v1/savings',    apiLimiter, gateAuth, requireModule('savings'), require('./routes/savings'));
+
   // Public diaspora payment pages — no auth, token is unguessable
   app.use('/pay', creditRoutes);
   

@@ -86,6 +86,16 @@ const MODULES = {
     routes: ['/api/v1/credit'],
   },
 
+  savings: {
+    key: 'savings',
+    default: false,
+    name: 'Balanzify Savings Circles',
+    description: 'Digitize hagbad / ayuuto / chama rotating savings groups: members, contribution tracking, rotation schedule, payouts, mobile-money collection. Free — the value is the relationship + contribution history.',
+    standalone: false,                      // free add-on
+    requires: ['core'],
+    routes: ['/api/v1/savings'],
+  },
+
   insights: {
     key: 'insights',
     default: false,
@@ -159,7 +169,7 @@ const MODULES = {
 // Monthly price (USD) for each paid add-on — authoritative source for billing.
 const MODULE_PRICES = {
   pharmacy: 15, hotel: 25, restaurant: 19, credit: 9, insights: 12,
-  wholesale: 14, construction: 22, hrm: 18, superadmin: 39, delivery: 12,
+  wholesale: 14, construction: 22, hrm: 18, superadmin: 39, delivery: 12, savings: 0,
 };
 const modulePrice = (key) => MODULE_PRICES[key] || 0;
 
