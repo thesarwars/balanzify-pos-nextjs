@@ -183,6 +183,41 @@ model SavingsPayout {
   @@map("savings_payouts")
 }
 
+// B2B trade rail: an order placed by one on-platform business (buyer / duka) to
+// another (seller / distributor). The network-liquidity play — a distributor and
+// the shops it supplies both transact on the same system, and the accepted order
+// posts to BOTH ledgers at once (seller AR↔revenue, buyer inventory↔payable).
+model TradeOrder {
+  id               String   @id @default(uuid()) @db.Uuid
+  sellerBusinessId String   @map("seller_business_id") @db.Uuid
+  buyerBusinessId  String   @map("buyer_business_id") @db.Uuid
+  orderNumber      String   @map("order_number") @db.VarChar(40)
+  status           String   @default("pending") @db.VarChar(20) // pending | accepted | rejected
+  total            Decimal  @default(0) @db.Decimal(14, 2)
+  note             String?  @db.VarChar(300)
+  createdById      String?  @map("created_by") @db.Uuid
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  items TradeOrderItem[]
+  @@index([sellerBusinessId, status])
+  @@index([buyerBusinessId, status])
+  @@map("trade_orders")
+}
+
+model TradeOrderItem {
+  id           String  @id @default(uuid()) @db.Uuid
+  tradeOrderId String  @map("trade_order_id") @db.Uuid
+  productId    String  @map("product_id") @db.Uuid
+  productName  String  @map("product_name") @db.VarChar(255)
+  quantity     Int
+  unitPrice    Decimal @map("unit_price") @db.Decimal(12, 2)
+  lineTotal    Decimal @map("line_total") @db.Decimal(12, 2)
+
+  order TradeOrder @relation(fields: [tradeOrderId], references: [id], onDelete: Cascade)
+  @@index([tradeOrderId])
+  @@map("trade_order_items")
+}
+
 // Takaful — Islamic cooperative micro-insurance. Contributions (tabarru',
 // donations) pool to cover members' losses; claims are paid from the pool. The
 // pool is a liability held in trust (2500). SCAFFOLDING — real underwriting needs

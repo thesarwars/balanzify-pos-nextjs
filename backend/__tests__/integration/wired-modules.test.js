@@ -2599,4 +2599,49 @@ describe('WhatsApp storefront (shareable catalog + order deep link)', () => {
   });
 });
 
+describe('B2B trade rails (merchant-to-merchant, posts to both ledgers)', () => {
+  let sellerTok, buyerTok, sellerBiz, buyerBiz, prod;
+  const at = (b, c) => (b.find(a => a.code === c) || { balance: 0 }).balance;
+  beforeAll(async () => {
+    sellerTok = await register(); await enableModule(sellerTok, 'trade');
+    const loc = await location(sellerTok); prod = await stockedProduct(sellerTok, loc, 10, 100);
+    buyerTok = await register(); await enableModule(buyerTok, 'trade');
+    sellerBiz = JSON.parse(Buffer.from(sellerTok.split('.')[1], 'base64').toString()).businessId;
+    buyerBiz = JSON.parse(Buffer.from(buyerTok.split('.')[1], 'base64').toString()).businessId;
+  });
+
+  test('gated off by default', async () => {
+    const other = await register();
+    expect((await request(app).get('/api/v1/trade/orders').set(auth(other))).status).toBe(403);
+  });
+
+  test('buyer orders from seller; only the seller can accept; acceptance posts to BOTH ledgers', async () => {
+    const cat = (await request(app).get(`/api/v1/trade/suppliers/${sellerBiz}/catalog`).set(auth(buyerTok))).body;
+    expect(cat.products.find(p => p.id === prod)).toBeTruthy();
+
+    const o = await request(app).post('/api/v1/trade/orders').set(auth(buyerTok)).send({ seller_business_id: sellerBiz, items: [{ product_id: prod, quantity: 5 }] });
+    expect(o.status).toBe(201);
+    expect(Number(o.body.total)).toBeCloseTo(50, 2);
+    const id = o.body.id;
+
+    // The seller sees it as received.
+    const recv = (await request(app).get('/api/v1/trade/orders?role=seller').set(auth(sellerTok))).body;
+    expect(recv.orders.find(x => x.id === id)).toBeTruthy();
+
+    // The buyer cannot accept their own order (only the seller decides).
+    expect((await request(app).post(`/api/v1/trade/orders/${id}/decide`).set(auth(buyerTok)).send({ decision: 'accept' })).status).toBe(404);
+
+    // Seller accepts → posts to both businesses' books at once.
+    const acc = await request(app).post(`/api/v1/trade/orders/${id}/decide`).set(auth(sellerTok)).send({ decision: 'accept' });
+    expect(acc.body.status).toBe('accepted');
+
+    const sBal = await accounting.accountBalances(sellerBiz);
+    expect(at(sBal, '1100')).toBeCloseTo(50, 2); // seller: receivable
+    expect(at(sBal, '4000')).toBeCloseTo(50, 2); // seller: revenue
+    const bBal = await accounting.accountBalances(buyerBiz);
+    expect(at(bBal, '1200')).toBeCloseTo(50, 2); // buyer: inventory received
+    expect(at(bBal, '2000')).toBeCloseTo(50, 2); // buyer: payable owed
+  });
+});
+
 afterAll(async () => { await prisma.$disconnect(); });
