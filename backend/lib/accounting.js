@@ -24,6 +24,7 @@ const CHART = [
   { code: '1100', name: 'Accounts Receivable', type: 'asset',     normal: 'debit'  },
   { code: '1110', name: 'Employee Advances',   type: 'asset',     normal: 'debit'  },
   { code: '1120', name: 'Retention Receivable', type: 'asset',    normal: 'debit'  },
+  { code: '1130', name: 'Asset Finance Receivable', type: 'asset', normal: 'debit' },
   { code: '1200', name: 'Inventory',           type: 'asset',     normal: 'debit'  },
   { code: '2000', name: 'Accounts Payable',    type: 'liability', normal: 'credit' },
   { code: '2100', name: 'Tax Payable',         type: 'liability', normal: 'credit' },
