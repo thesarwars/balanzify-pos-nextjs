@@ -2445,4 +2445,41 @@ describe('asset / vehicle finance (Murabaha) — scaffolding', () => {
   });
 });
 
+describe('merchant wallet / settlement account — scaffolding', () => {
+  let token, bizId;
+  const at = (b, c) => (b.find(a => a.code === c) || { balance: 0 }).balance;
+  beforeAll(async () => {
+    token = await register();
+    await enableModule(token, 'wallet');
+    bizId = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString()).businessId;
+  });
+
+  test('gated off by default', async () => {
+    const other = await register();
+    expect((await request(app).get('/api/v1/wallet').set(auth(other))).status).toBe(403);
+  });
+
+  test('deposit and withdraw move the balance and the GL wallet account together', async () => {
+    expect((await request(app).post('/api/v1/wallet/deposit').set(auth(token)).send({ amount: 100, method: 'zaad' })).status).toBe(201);
+    let w = (await request(app).get('/api/v1/wallet').set(auth(token))).body;
+    expect(w.balance).toBeCloseTo(100, 2);
+
+    const wd = await request(app).post('/api/v1/wallet/withdraw').set(auth(token)).send({ amount: 30, method: 'cash', note: 'Supplier' });
+    expect(wd.status).toBe(201);
+    expect(Number(wd.body.balanceAfter)).toBeCloseTo(70, 2);
+
+    // Can't overdraw.
+    expect((await request(app).post('/api/v1/wallet/withdraw').set(auth(token)).send({ amount: 1000 })).status).toBe(400);
+
+    // GL: wallet asset (1025) holds the running 70; books balanced.
+    const bal = await accounting.accountBalances(bizId);
+    expect(at(bal, '1025')).toBeCloseTo(70, 2);
+    expect((await request(app).get('/api/v1/accounting/trial-balance').set(auth(token))).body.totals.balanced).toBe(true);
+
+    w = (await request(app).get('/api/v1/wallet').set(auth(token))).body;
+    expect(w.balance).toBeCloseTo(70, 2);
+    expect(w.transactions).toHaveLength(2);
+  });
+});
+
 afterAll(async () => { await prisma.$disconnect(); });

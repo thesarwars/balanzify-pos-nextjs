@@ -183,6 +183,24 @@ model SavingsPayout {
   @@map("savings_payouts")
 }
 
+// Merchant settlement / wallet account (the Kaspi / Mercado model): an in-app
+// balance the merchant tops up, holds, and pays out from. SCAFFOLDING — holding
+// real float requires an EMI licence / bank partner; the ledger + GL are here.
+model WalletTransaction {
+  id           String   @id @default(uuid()) @db.Uuid
+  businessId   String   @map("business_id") @db.Uuid
+  type         String   @db.VarChar(20) // deposit | withdraw
+  amount       Decimal  @db.Decimal(14, 2)
+  method       String   @default("cash") @db.VarChar(30)
+  note         String?  @db.VarChar(255)
+  balanceAfter Decimal  @map("balance_after") @db.Decimal(14, 2)
+  createdById  String?  @map("created_by") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([businessId, createdAt])
+  @@map("wallet_transactions")
+}
+
 // Asset / vehicle finance (Murabaha cost-plus or Ijara lease-to-own). The proven
 // durable model for the corridor (M-Kopa / Watu): finance a productive asset and
 // collect against the income it unlocks. SCAFFOLDING — moving real money needs a
