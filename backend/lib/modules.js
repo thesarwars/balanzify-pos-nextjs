@@ -96,6 +96,16 @@ const MODULES = {
     routes: ['/api/v1/savings'],
   },
 
+  asset_finance: {
+    key: 'asset_finance',
+    default: false,
+    name: 'Balanzify Asset Finance',
+    description: 'Sharia-compliant asset / vehicle finance (Murabaha cost-plus, Ijara lease-to-own): finance a productive asset and collect against the income it unlocks. Requires a lending licence + capital.',
+    standalone: false,
+    requires: ['core'],
+    routes: ['/api/v1/asset-finance'],
+  },
+
   insights: {
     key: 'insights',
     default: false,
@@ -169,7 +179,7 @@ const MODULES = {
 // Monthly price (USD) for each paid add-on — authoritative source for billing.
 const MODULE_PRICES = {
   pharmacy: 15, hotel: 25, restaurant: 19, credit: 9, insights: 12,
-  wholesale: 14, construction: 22, hrm: 18, superadmin: 39, delivery: 12, savings: 0,
+  wholesale: 14, construction: 22, hrm: 18, superadmin: 39, delivery: 12, savings: 0, asset_finance: 30,
 };
 const modulePrice = (key) => MODULE_PRICES[key] || 0;
 

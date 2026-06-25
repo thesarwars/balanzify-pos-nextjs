@@ -2404,4 +2404,45 @@ describe('demand forecasting / predictive reorder', () => {
   });
 });
 
+describe('asset / vehicle finance (Murabaha) — scaffolding', () => {
+  let token, bizId;
+  const at = (b, c) => (b.find(a => a.code === c) || { balance: 0 }).balance;
+  beforeAll(async () => {
+    token = await register();
+    await enableModule(token, 'asset_finance');
+    bizId = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString()).businessId;
+  });
+
+  test('gated off by default', async () => {
+    const other = await register();
+    expect((await request(app).get('/api/v1/asset-finance').set(auth(other))).status).toBe(403);
+  });
+
+  test('disburse books the receivable + disclosed markup; repayment settles it', async () => {
+    const offer = await request(app).post('/api/v1/asset-finance/offers').set(auth(token)).send({
+      borrower_name: 'Driver Cabdi', structure: 'murabaha', asset_type: 'vehicle',
+      asset_description: 'Bajaj boda', asset_cost: 1000, markup: 200, term_months: 12,
+    });
+    expect(offer.status).toBe(201);
+    expect(Number(offer.body.totalPayable)).toBeCloseTo(1200, 2);
+    const id = offer.body.id;
+
+    expect((await request(app).post(`/api/v1/asset-finance/${id}/disburse`).set(auth(token))).status).toBe(200);
+    let bal = await accounting.accountBalances(bizId);
+    expect(at(bal, '1130')).toBeCloseTo(1200, 2);  // asset finance receivable
+    expect(at(bal, '4000')).toBeCloseTo(200, 2);   // disclosed markup booked as revenue
+    expect(at(bal, '1000')).toBeCloseTo(-1000, 2); // cash paid for the asset
+    expect((await request(app).get('/api/v1/accounting/trial-balance').set(auth(token))).body.totals.balanced).toBe(true);
+
+    // Repay (mobile money), over-paying the last leg → capped, settled.
+    expect((await request(app).post(`/api/v1/asset-finance/${id}/repay`).set(auth(token)).send({ amount: 600, method: 'mpesa' })).status).toBe(200);
+    const done = await request(app).post(`/api/v1/asset-finance/${id}/repay`).set(auth(token)).send({ amount: 9999, method: 'mpesa' });
+    expect(done.body.status).toBe('settled');
+    expect(Number(done.body.outstanding)).toBeCloseTo(0, 2);
+    bal = await accounting.accountBalances(bizId);
+    expect(at(bal, '1130')).toBeCloseTo(0, 2);    // receivable cleared
+    expect(at(bal, '1010')).toBeCloseTo(1200, 2); // collected via mobile money
+  });
+});
+
 afterAll(async () => { await prisma.$disconnect(); });

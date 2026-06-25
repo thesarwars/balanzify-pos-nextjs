@@ -183,6 +183,48 @@ model SavingsPayout {
   @@map("savings_payouts")
 }
 
+// Asset / vehicle finance (Murabaha cost-plus or Ijara lease-to-own). The proven
+// durable model for the corridor (M-Kopa / Watu): finance a productive asset and
+// collect against the income it unlocks. SCAFFOLDING — moving real money needs a
+// lending licence + capital; the software + GL + lifecycle are here and tested.
+model AssetFinance {
+  id               String    @id @default(uuid()) @db.Uuid
+  businessId       String    @map("business_id") @db.Uuid
+  reference        String    @db.VarChar(40)
+  borrowerName     String    @map("borrower_name") @db.VarChar(200)
+  borrowerPhone    String?   @map("borrower_phone") @db.VarChar(50)
+  structure        String    @default("murabaha") @db.VarChar(20) // murabaha | ijara
+  assetType        String    @map("asset_type") @db.VarChar(50)   // vehicle | equipment | phone | other
+  assetDescription String?   @map("asset_description") @db.VarChar(255)
+  assetCost        Decimal   @map("asset_cost") @db.Decimal(14, 2) // what we pay for the asset
+  markup           Decimal   @db.Decimal(14, 2)                    // fixed, disclosed profit (not interest)
+  totalPayable     Decimal   @map("total_payable") @db.Decimal(14, 2)
+  termMonths       Int       @map("term_months")
+  amountRepaid     Decimal   @default(0) @map("amount_repaid") @db.Decimal(14, 2)
+  status           String    @default("offered") @db.VarChar(20)   // offered | active | settled | defaulted
+  disbursedAt      DateTime? @map("disbursed_at")
+  settledAt        DateTime? @map("settled_at")
+  defaultedAt      DateTime? @map("defaulted_at")
+  createdById      String?   @map("created_by") @db.Uuid
+  createdAt        DateTime  @default(now()) @map("created_at")
+
+  repayments AssetFinanceRepayment[]
+  @@index([businessId, status])
+  @@map("asset_finance")
+}
+
+model AssetFinanceRepayment {
+  id        String   @id @default(uuid()) @db.Uuid
+  financeId String   @map("finance_id") @db.Uuid
+  amount    Decimal  @db.Decimal(14, 2)
+  method    String   @default("cash") @db.VarChar(30)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  finance AssetFinance @relation(fields: [financeId], references: [id], onDelete: Cascade)
+  @@index([financeId])
+  @@map("asset_finance_repayments")
+}
+
 // Zakat / Sadaqah given by the business — a charitable outflow recorded for the
 // books and for the owner's giving history (Zakat is computed from the ledger by
 // lib/zakat; this records what was actually paid out).

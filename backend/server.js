@@ -196,6 +196,7 @@ try {
   app.use('/api/v1/credit',     apiLimiter, gateAuth, requireModule('credit'), creditRoutes);
   app.use('/api/v1/savings',    apiLimiter, gateAuth, requireModule('savings'), require('./routes/savings'));
   app.use('/api/v1/forecast',   apiLimiter, require('./routes/forecast'));
+  app.use('/api/v1/asset-finance', apiLimiter, gateAuth, requireModule('asset_finance'), require('./routes/assetFinance'));
 
   // Public diaspora payment pages — no auth, token is unguessable
   app.use('/pay', creditRoutes);
