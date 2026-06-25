@@ -500,6 +500,7 @@ model Expense {
   paymentStatus String   @default("paid") @map("payment_status") @db.VarChar(20)
   expenseFor    String?  @map("expense_for") @db.VarChar(255)
   note          String?
+  receiptUrl    String?  @map("receipt_url") // snapped receipt photo
   isRefund      Boolean  @default(false) @map("is_refund")
   expenseDate   DateTime @map("expense_date")
   createdById   String?  @map("created_by") @db.Uuid

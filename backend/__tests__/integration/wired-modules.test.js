@@ -2340,4 +2340,22 @@ describe('loyalty stamp cards (buy-N-get-1)', () => {
   });
 });
 
+describe('expense capture with receipt photo → GL', () => {
+  let token, bizId;
+  const at = (b, c) => (b.find(a => a.code === c) || { balance: 0 }).balance;
+  beforeAll(async () => { token = await register(); bizId = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString()).businessId; });
+
+  test('a paid expense with a snapped receipt books to OpEx and stores the photo', async () => {
+    const r = await request(app).post('/api/v1/expenses').set(auth(token)).send({
+      amount: 25, date: '2026-06-01', payment_status: 'paid', expense_for: 'Generator fuel',
+      receipt_url: 'https://example.com/receipt.jpg',
+    });
+    expect(r.status).toBe(201);
+    expect(r.body.receiptUrl).toBe('https://example.com/receipt.jpg');
+    const bal = await accounting.accountBalances(bizId);
+    expect(at(bal, '5200')).toBeCloseTo(25, 2);  // operating expense
+    expect(at(bal, '1000')).toBeCloseTo(-25, 2); // paid out of cash
+  });
+});
+
 afterAll(async () => { await prisma.$disconnect(); });

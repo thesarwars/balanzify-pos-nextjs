@@ -524,6 +524,7 @@ const ExpenseSchema = z.object({
   expense_for:    optStr(255),
   note:           optStr(1000),
   is_refund:      z.boolean().default(false),
+  receipt_url:    z.string().url().optional().nullable(), // snapped receipt photo
 });
 
 const ExpenseCategorySchema = z.object({ name: shortStr(255) });
