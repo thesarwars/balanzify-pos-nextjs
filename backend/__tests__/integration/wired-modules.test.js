@@ -2571,4 +2571,32 @@ describe('one-tap supplier reorder (quick PO)', () => {
   });
 });
 
+describe('WhatsApp storefront (shareable catalog + order deep link)', () => {
+  let token, bizId, prod, loc;
+  beforeAll(async () => {
+    token = await register();
+    await enableModule(token, 'delivery');
+    loc = await location(token);
+    prod = await stockedProduct(token, loc, 10, 100);
+    bizId = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString()).businessId;
+    await prisma.business.update({ where: { id: bizId }, data: { phone: '252634445566' } });
+  });
+
+  test('share endpoint returns the shop link + a WhatsApp broadcast message', async () => {
+    const s = await request(app).get(`/api/v1/shop/${bizId}/share`);
+    expect(s.status).toBe(200);
+    expect(s.body.shop_url).toContain(`/shop?b=${bizId}`);
+    expect(s.body.whatsapp_share_url).toContain('wa.me');
+    expect(decodeURIComponent(s.body.whatsapp_share_url)).toContain(s.body.shop_url);
+  });
+
+  test('a consumer order returns a wa.me link to confirm with the merchant', async () => {
+    const o = await request(app).post(`/api/v1/shop/${bizId}/order`).send({
+      customer_name: 'Hodan', address: 'Street 5', items: [{ product_id: prod, quantity: 2 }],
+    });
+    expect(o.status).toBe(201);
+    expect(o.body.whatsapp_url).toContain('wa.me/252634445566');
+  });
+});
+
 afterAll(async () => { await prisma.$disconnect(); });
