@@ -2549,4 +2549,26 @@ describe('peer benchmarking (anonymized aggregates)', () => {
   });
 });
 
+describe('one-tap supplier reorder (quick PO)', () => {
+  let token, loc, prod, supplierId;
+  beforeAll(async () => {
+    token = await register();
+    loc = await location(token);
+    prod = await stockedProduct(token, loc, 10, 2); // cost 5, only 2 in stock
+    await prisma.product.update({ where: { id: prod }, data: { reorderPoint: 10, maxStockLevel: 50 } });
+    const s = await request(app).post('/api/v1/suppliers').set(auth(token)).send({ name: 'Acme Distributors' });
+    supplierId = s.body.id;
+  });
+
+  test('drafts a PO topping up everything at/below its reorder point', async () => {
+    const r = await request(app).post('/api/v1/purchase-orders/quick-reorder').set(auth(token))
+      .send({ supplier_id: supplierId, location_id: loc });
+    expect(r.status).toBe(201);
+    const line = r.body.items.find(i => i.productId === prod);
+    expect(line).toBeTruthy();
+    expect(line.orderedQty).toBe(48);                       // 50 max − 2 on hand
+    expect(Number(r.body.totalAmount)).toBeCloseTo(240, 2); // 48 × 5 cost
+  });
+});
+
 afterAll(async () => { await prisma.$disconnect(); });
