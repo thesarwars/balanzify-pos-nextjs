@@ -183,6 +183,37 @@ model SavingsPayout {
   @@map("savings_payouts")
 }
 
+// Stamp / punch card loyalty ("buy 9 coffees, get 1 free"). A program defines how
+// many stamps earn a reward; each customer accrues toward it and rolls over.
+model StampCard {
+  id             String   @id @default(uuid()) @db.Uuid
+  businessId     String   @map("business_id") @db.Uuid
+  name           String   @db.VarChar(150)
+  productId      String?  @map("product_id") @db.Uuid // null = any qualifying purchase
+  stampsRequired Int      @map("stamps_required")
+  reward         String   @db.VarChar(200)
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  cards CustomerStampCard[]
+  @@index([businessId])
+  @@map("stamp_cards")
+}
+
+model CustomerStampCard {
+  id             String   @id @default(uuid()) @db.Uuid
+  stampCardId    String   @map("stamp_card_id") @db.Uuid
+  customerId     String   @map("customer_id") @db.Uuid
+  stamps         Int      @default(0)
+  completedCount Int      @default(0) @map("completed_count") // rewards earned over time
+  updatedAt      DateTime @default(now()) @updatedAt @map("updated_at")
+
+  stampCard StampCard @relation(fields: [stampCardId], references: [id], onDelete: Cascade)
+  @@unique([stampCardId, customerId])
+  @@index([stampCardId])
+  @@map("customer_stamp_cards")
+}
+
 enum PaymentMethod {
   cash
   zaad

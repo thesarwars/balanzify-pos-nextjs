@@ -2304,4 +2304,40 @@ describe('savings circles (hagbad/ayuuto) — rotating group held in trust', () 
   });
 });
 
+describe('loyalty stamp cards (buy-N-get-1)', () => {
+  let token, custId, cardId;
+  beforeAll(async () => {
+    token = await register();
+    const c = await request(app).post('/api/v1/customers').set(auth(token)).send({ name: 'Coffee Regular', phone: '0700222' });
+    custId = c.body.id;
+    const card = await request(app).post('/api/v1/loyalty/stamp-cards').set(auth(token)).send({ name: 'Coffee Card', stamps_required: 9, reward: 'Free coffee' });
+    expect(card.status).toBe(201);
+    cardId = card.body.id;
+  });
+
+  test('stamps accrue, the reward fires on completion, and extra stamps roll over', async () => {
+    // 8 stamps → not yet
+    let r = await request(app).post(`/api/v1/loyalty/stamp-cards/${cardId}/stamp`).set(auth(token)).send({ customer_id: custId, count: 8 });
+    expect(r.body.stamps).toBe(8);
+    expect(r.body.reward_earned).toBe(false);
+
+    // 9th stamp → reward earned, card resets
+    r = await request(app).post(`/api/v1/loyalty/stamp-cards/${cardId}/stamp`).set(auth(token)).send({ customer_id: custId, count: 1 });
+    expect(r.body.reward_earned).toBe(true);
+    expect(r.body.reward).toBe('Free coffee');
+    expect(r.body.stamps).toBe(0);
+    expect(r.body.completed_count).toBe(1);
+
+    // 10 at once → one more reward + a single rolled-over stamp
+    r = await request(app).post(`/api/v1/loyalty/stamp-cards/${cardId}/stamp`).set(auth(token)).send({ customer_id: custId, count: 10 });
+    expect(r.body.rewards_earned).toBe(1);
+    expect(r.body.stamps).toBe(1);
+    expect(r.body.completed_count).toBe(2);
+
+    const p = (await request(app).get(`/api/v1/loyalty/stamp-cards/${cardId}/customer/${custId}`).set(auth(token))).body;
+    expect(p.stamps).toBe(1);
+    expect(p.completed_count).toBe(2);
+  });
+});
+
 afterAll(async () => { await prisma.$disconnect(); });
