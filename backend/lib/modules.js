@@ -126,6 +126,16 @@ const MODULES = {
     routes: ['/api/v1/takaful'],
   },
 
+  trade: {
+    key: 'trade',
+    default: false,
+    name: 'Balanzify Trade',
+    description: 'B2B trade rails between on-platform businesses: a distributor and the dukas it supplies order from each other, and accepted orders post to both ledgers at once.',
+    standalone: false,
+    requires: ['core'],
+    routes: ['/api/v1/trade'],
+  },
+
   insights: {
     key: 'insights',
     default: false,
@@ -199,7 +209,7 @@ const MODULES = {
 // Monthly price (USD) for each paid add-on — authoritative source for billing.
 const MODULE_PRICES = {
   pharmacy: 15, hotel: 25, restaurant: 19, credit: 9, insights: 12,
-  wholesale: 14, construction: 22, hrm: 18, superadmin: 39, delivery: 12, savings: 0, asset_finance: 30, wallet: 0, takaful: 8,
+  wholesale: 14, construction: 22, hrm: 18, superadmin: 39, delivery: 12, savings: 0, asset_finance: 30, wallet: 0, takaful: 8, trade: 10,
 };
 const modulePrice = (key) => MODULE_PRICES[key] || 0;
 
