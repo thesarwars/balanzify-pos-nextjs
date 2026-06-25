@@ -21,6 +21,7 @@ const CHART = [
   { code: '1010', name: 'Mobile Money',        type: 'asset',     normal: 'debit'  },
   { code: '1015', name: 'Mobile Money (In-Transit)', type: 'asset', normal: 'debit' },
   { code: '1020', name: 'Bank / Card',         type: 'asset',     normal: 'debit'  },
+  { code: '1025', name: 'Merchant Wallet',     type: 'asset',     normal: 'debit'  },
   { code: '1100', name: 'Accounts Receivable', type: 'asset',     normal: 'debit'  },
   { code: '1110', name: 'Employee Advances',   type: 'asset',     normal: 'debit'  },
   { code: '1120', name: 'Retention Receivable', type: 'asset',    normal: 'debit'  },

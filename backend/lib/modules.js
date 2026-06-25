@@ -106,6 +106,16 @@ const MODULES = {
     routes: ['/api/v1/asset-finance'],
   },
 
+  wallet: {
+    key: 'wallet',
+    default: false,
+    name: 'Balanzify Wallet',
+    description: 'Merchant settlement / wallet account: top up, hold, and pay out an in-app balance (the Kaspi / Mercado model). Holding real float requires an EMI licence / bank partner.',
+    standalone: false,
+    requires: ['core'],
+    routes: ['/api/v1/wallet'],
+  },
+
   insights: {
     key: 'insights',
     default: false,
@@ -179,7 +189,7 @@ const MODULES = {
 // Monthly price (USD) for each paid add-on — authoritative source for billing.
 const MODULE_PRICES = {
   pharmacy: 15, hotel: 25, restaurant: 19, credit: 9, insights: 12,
-  wholesale: 14, construction: 22, hrm: 18, superadmin: 39, delivery: 12, savings: 0, asset_finance: 30,
+  wholesale: 14, construction: 22, hrm: 18, superadmin: 39, delivery: 12, savings: 0, asset_finance: 30, wallet: 0,
 };
 const modulePrice = (key) => MODULE_PRICES[key] || 0;
 
