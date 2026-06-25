@@ -196,6 +196,7 @@ try {
   app.use('/api/v1/credit',     apiLimiter, gateAuth, requireModule('credit'), creditRoutes);
   app.use('/api/v1/savings',    apiLimiter, gateAuth, requireModule('savings'), require('./routes/savings'));
   app.use('/api/v1/forecast',   apiLimiter, require('./routes/forecast'));
+  app.use('/api/v1/benchmarking', apiLimiter, require('./routes/benchmarking'));
   app.use('/api/v1/asset-finance', apiLimiter, gateAuth, requireModule('asset_finance'), require('./routes/assetFinance'));
   app.use('/api/v1/wallet',     apiLimiter, gateAuth, requireModule('wallet'), require('./routes/wallet'));
   app.use('/api/v1/takaful',    apiLimiter, gateAuth, requireModule('takaful'), require('./routes/takaful'));
