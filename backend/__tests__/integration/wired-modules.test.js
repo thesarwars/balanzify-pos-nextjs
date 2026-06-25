@@ -2243,4 +2243,65 @@ describe('mobile-money rails — manual-confirm tenders book to Mobile Money (10
   });
 });
 
+describe('savings circles (hagbad/ayuuto) — rotating group held in trust', () => {
+  let token, bizId;
+  const at = (bal, c) => (bal.find(a => a.code === c) || { balance: 0 }).balance;
+
+  beforeAll(async () => {
+    token = await register();
+    await enableModule(token, 'savings');
+    bizId = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString()).businessId;
+  });
+
+  test('gated off by default', async () => {
+    const other = await register();
+    expect((await request(app).get('/api/v1/savings/groups').set(auth(other))).status).toBe(403);
+  });
+
+  test('contributions held in 2400; payout rotates and nets the pot to zero', async () => {
+    const g = await request(app).post('/api/v1/savings/groups').set(auth(token)).send({
+      name: 'Suuqa Hagbad', contribution_amount: 10,
+      members: [{ name: 'Amina' }, { name: 'Bashir' }, { name: 'Cawo' }],
+    });
+    expect(g.status).toBe(201);
+    const id = g.body.id;
+    const members = g.body.member_list;
+    expect(members).toHaveLength(3);
+
+    // Everyone contributes cycle 1 via Zaad → 30 held in the savings-payable liability.
+    for (const m of members) {
+      expect((await request(app).post(`/api/v1/savings/groups/${id}/contribute`).set(auth(token)).send({ member_id: m.id, method: 'zaad' })).status).toBe(201);
+    }
+    // A member can't contribute twice in one cycle.
+    expect((await request(app).post(`/api/v1/savings/groups/${id}/contribute`).set(auth(token)).send({ member_id: members[0].id, method: 'zaad' })).status).toBe(400);
+
+    let bal = await accounting.accountBalances(bizId);
+    expect(at(bal, '2400')).toBeCloseTo(30, 2); // held in trust
+    expect(at(bal, '1010')).toBeCloseTo(30, 2); // collected via Zaad (mobile money)
+
+    const detail = (await request(app).get(`/api/v1/savings/groups/${id}`).set(auth(token))).body;
+    expect(detail.collected_this_cycle).toBeCloseTo(30, 2);
+    expect(detail.next_recipient.name).toBe('Amina');
+
+    // Payout cycle 1 → Amina receives the whole pot; the liability nets to zero.
+    const p = await request(app).post(`/api/v1/savings/groups/${id}/payout`).set(auth(token)).send({ method: 'zaad' });
+    expect(p.status).toBe(201);
+    expect(p.body.recipient).toBe('Amina');
+    expect(p.body.pot).toBeCloseTo(30, 2);
+
+    bal = await accounting.accountBalances(bizId);
+    expect(at(bal, '2400')).toBeCloseTo(0, 2); // released — full cycle nets to zero
+    expect((await request(app).get('/api/v1/accounting/trial-balance').set(auth(token))).body.totals.balanced).toBe(true);
+
+    // Rotation advanced; Amina marked paid out; Bashir is next.
+    const d2 = (await request(app).get(`/api/v1/savings/groups/${id}`).set(auth(token))).body;
+    expect(d2.current_cycle).toBe(2);
+    expect(d2.next_recipient.name).toBe('Bashir');
+    expect(d2.schedule.find(s => s.name === 'Amina').paid_out).toBe(true);
+
+    // Can't pay out before anyone has contributed in the new cycle.
+    expect((await request(app).post(`/api/v1/savings/groups/${id}/payout`).set(auth(token)).send({})).status).toBe(400);
+  });
+});
+
 afterAll(async () => { await prisma.$disconnect(); });

@@ -118,6 +118,71 @@ enum SaleStatus {
   cancelled
 }
 
+// Rotating savings group (hagbad / ayuuto / chama). Members contribute a fixed
+// amount each cycle; the whole pot rotates to one member per cycle. The platform
+// holds contributions as a liability (Savings Group Payable) until paid out —
+// auditable money is the whole point of digitizing a trust-based circle. Free.
+model SavingsGroup {
+  id                 String   @id @default(uuid()) @db.Uuid
+  businessId         String   @map("business_id") @db.Uuid
+  name               String   @db.VarChar(150)
+  contributionAmount Decimal  @map("contribution_amount") @db.Decimal(12, 2)
+  frequency          String   @default("monthly") @db.VarChar(20) // weekly | monthly
+  currency           String   @default("USD") @db.VarChar(3)
+  currentCycle       Int      @default(1) @map("current_cycle")
+  status             String   @default("active") @db.VarChar(20) // active | completed
+  createdById        String?  @map("created_by") @db.Uuid
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  members       SavingsGroupMember[]
+  contributions SavingsContribution[]
+  payouts       SavingsPayout[]
+  @@index([businessId])
+  @@map("savings_groups")
+}
+
+model SavingsGroupMember {
+  id             String   @id @default(uuid()) @db.Uuid
+  groupId        String   @map("group_id") @db.Uuid
+  name           String   @db.VarChar(150)
+  phone          String?  @db.VarChar(50)
+  payoutPosition Int      @map("payout_position") // 1-based rotation order
+  paidOut        Boolean  @default(false) @map("paid_out")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  group SavingsGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  @@index([groupId])
+  @@map("savings_group_members")
+}
+
+model SavingsContribution {
+  id        String   @id @default(uuid()) @db.Uuid
+  groupId   String   @map("group_id") @db.Uuid
+  memberId  String   @map("member_id") @db.Uuid
+  cycle     Int
+  amount    Decimal  @db.Decimal(12, 2)
+  method    String   @default("cash") @db.VarChar(30)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  group SavingsGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  @@index([groupId, cycle])
+  @@map("savings_contributions")
+}
+
+model SavingsPayout {
+  id        String   @id @default(uuid()) @db.Uuid
+  groupId   String   @map("group_id") @db.Uuid
+  memberId  String   @map("member_id") @db.Uuid
+  cycle     Int
+  amount    Decimal  @db.Decimal(12, 2)
+  method    String   @default("cash") @db.VarChar(30)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  group SavingsGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  @@index([groupId])
+  @@map("savings_payouts")
+}
+
 enum PaymentMethod {
   cash
   zaad
