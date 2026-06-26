@@ -1,5 +1,6 @@
 const express = require('express');
 const prisma = require('../lib/prisma');
+const accounting = require('../lib/accounting');
 const { auth, requireRole } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { z } = require('zod');
@@ -184,10 +185,17 @@ router.post('/:id/approve', auth, requireRole('owner', 'manager'), async (req, r
     if (!count || count.businessId !== req.user.business_id) return res.status(404).json({ title: 'Not found', status: 404 });
     if (count.status !== 'completed') return res.status(400).json({ title: 'Count must be completed before approval', status: 400 });
 
+    // Value each line's variance at product cost; the net is one GL entry.
+    const productIds = [...new Set(count.items.map(i => i.productId))];
+    const products = await prisma.product.findMany({ where: { id: { in: productIds } }, select: { id: true, costPrice: true } });
+    const costOf = Object.fromEntries(products.map(p => [p.id, parseFloat(p.costPrice || 0)]));
+
     await prisma.$transaction(async (tx) => {
+      let netVariance = 0; // +ve = stock gained, -ve = shrinkage
       for (const item of count.items) {
         if (item.countedQty == null || item.systemQty === item.countedQty) continue;
         const diff = item.countedQty - item.systemQty;
+        netVariance += diff * (costOf[item.productId] || 0);
         if (count.locationId) {
           await tx.$executeRaw`
             INSERT INTO stock_levels (id, product_id, location_id, quantity)
@@ -212,6 +220,14 @@ router.post('/:id/approve', auth, requireRole('owner', 'manager'), async (req, r
         where: { id: req.params.id },
         data: { status: 'approved', approvedById: req.user.id, approvedAt: new Date() },
       });
+      // GL: book the net count variance so the Inventory balance matches the floor.
+      const value = Math.abs(+netVariance.toFixed(2));
+      if (value > 0) {
+        await accounting.postInventoryAdjustment(tx, {
+          businessId: req.user.business_id, amount: value, gain: netVariance > 0,
+          sourceType: 'stocktake_variance', sourceId: count.id, createdById: req.user.id,
+        });
+      }
     });
     res.json({ message: 'Stocktake approved and stock levels updated.' });
   } catch (err) { next(err); }

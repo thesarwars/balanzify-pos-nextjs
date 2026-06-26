@@ -3288,4 +3288,56 @@ describe('restaurant completeness — control & reporting', () => {
   });
 });
 
+describe('inventory completeness — adjustments & stocktake variance post to the GL', () => {
+  const biz = (t) => JSON.parse(Buffer.from(t.split('.')[1], 'base64').toString()).businessId;
+
+  test('an approved write-off books a loss against inventory (5050 / 1200)', async () => {
+    const token = await register();
+    const loc = await location(token);
+    const prod = await stockedProduct(token, loc, 20, 100); // cost 5, 100 in stock
+
+    const adj = (await request(app).post('/api/v1/stock/adjustments').set(auth(token))
+      .send({ product_id: prod, location_id: loc, type: 'write_off', quantity: -10, reason: 'Damaged crate' })).body;
+    expect((await request(app).post(`/api/v1/stock/adjustments/${adj.id}/approve`).set(auth(token))).status).toBe(200);
+
+    expect((await prisma.stockLevel.findFirst({ where: { productId: prod, locationId: loc } })).quantity).toBe(90);
+
+    const je = await prisma.journalEntry.findFirst({
+      where: { businessId: biz(token), sourceType: 'stock_adjustment', sourceId: adj.id },
+      include: { lines: { include: { account: true } } },
+    });
+    expect(je).toBeTruthy();
+    const by = Object.fromEntries(je.lines.map(l => [l.account.code, l]));
+    expect(parseFloat(by['5050'].debit)).toBeCloseTo(50, 2);   // 10 × cost 5
+    expect(parseFloat(by['1200'].credit)).toBeCloseTo(50, 2);
+
+    const tb = (await request(app).get('/api/v1/accounting/trial-balance').set(auth(token))).body;
+    expect(tb.totals.balanced).toBe(true);
+  });
+
+  test('an approved stocktake books the net count variance', async () => {
+    const token = await register();
+    const loc = await location(token);
+    const prod = await stockedProduct(token, loc, 20, 50); // cost 5, 50 in stock
+
+    const st = (await request(app).post('/api/v1/stocktake').set(auth(token)).send({ type: 'full', location_id: loc, name: 'Q1 count' })).body;
+    const detail = (await request(app).get(`/api/v1/stocktake/${st.id}`).set(auth(token))).body;
+    const item = detail.items.find(i => i.productId === prod);
+    await request(app).put(`/api/v1/stocktake/${st.id}/items/${item.id}`).set(auth(token)).send({ counted_qty: 44 }); // short 6
+    await request(app).post(`/api/v1/stocktake/${st.id}/complete`).set(auth(token));
+    expect((await request(app).post(`/api/v1/stocktake/${st.id}/approve`).set(auth(token))).status).toBe(200);
+
+    expect((await prisma.stockLevel.findFirst({ where: { productId: prod, locationId: loc } })).quantity).toBe(44);
+
+    const je = await prisma.journalEntry.findFirst({
+      where: { businessId: biz(token), sourceType: 'stocktake_variance', sourceId: st.id },
+      include: { lines: { include: { account: true } } },
+    });
+    expect(je).toBeTruthy();
+    const by = Object.fromEntries(je.lines.map(l => [l.account.code, l]));
+    expect(parseFloat(by['5050'].debit)).toBeCloseTo(30, 2);   // 6 short × cost 5
+    expect(parseFloat(by['1200'].credit)).toBeCloseTo(30, 2);
+  });
+});
+
 afterAll(async () => { await prisma.$disconnect(); });
