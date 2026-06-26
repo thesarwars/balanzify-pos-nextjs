@@ -2976,4 +2976,51 @@ describe('pharmacy completeness — Rx-only enforcement at checkout', () => {
   });
 });
 
+describe('pharmacy completeness — multi-drug prescriptions (groups)', () => {
+  let token, loc;
+  beforeAll(async () => {
+    token = await register();
+    await enableModule(token, 'pharmacy');
+    loc = await location(token);
+  });
+  async function rxDrug(generic) {
+    const id = await stockedProduct(token, loc, 5, 100);
+    await prisma.product.update({ where: { id }, data: { genericName: generic, isPrescriptionDrug: true } });
+    return id;
+  }
+
+  test('a script of multiple drugs creates independent, dispensable lines that share allergies', async () => {
+    const para = await rxDrug('paracetamol');
+    const amox = await rxDrug('amoxicillin');
+
+    const group = (await request(app).post('/api/v1/pharmacy/prescriptions/group').set(auth(token)).send({
+      patient_name: 'Faadumo', prescriber_name: 'Dr Group', allergies: ['amoxicillin'],
+      items: [
+        { product_id: para, quantity: 10, sig: '1 tablet twice daily' },
+        { product_id: amox, quantity: 21, sig: '1 capsule three times daily', refills_authorized: 1 },
+      ],
+    })).body;
+    expect(group.groupNumber).toMatch(/^RXG-/);
+    expect(group.items).toHaveLength(2);
+    expect(group.items.every(i => i.rxNumber)).toBe(true);
+
+    // The group reads back with both lines.
+    const got = await request(app).get(`/api/v1/pharmacy/prescriptions/group/${group.id}`).set(auth(token));
+    expect(got.status).toBe(200);
+    expect(got.body.items).toHaveLength(2);
+
+    const paraRx = group.items.find(i => i.productId === para);
+    const amoxRx = group.items.find(i => i.productId === amox);
+
+    // The non-allergic line dispenses through the normal engine.
+    const ok = await request(app).post(`/api/v1/pharmacy/prescriptions/${paraRx.id}/dispense`).set(auth(token)).send({ location_id: loc });
+    expect(ok.status).toBe(201);
+
+    // The allergic line is blocked — group allergies propagated to each line.
+    const blocked = await request(app).post(`/api/v1/pharmacy/prescriptions/${amoxRx.id}/dispense`).set(auth(token)).send({ location_id: loc });
+    expect(blocked.status).toBe(409);
+    expect(blocked.body.allergy).toBe('amoxicillin');
+  });
+});
+
 afterAll(async () => { await prisma.$disconnect(); });
