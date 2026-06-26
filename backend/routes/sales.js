@@ -12,6 +12,7 @@ const { convert }        = require('../lib/currency');
 const { generateReceiptToken, receiptUrl, generateWhatsAppReceipt } = require('../lib/receipt');
 const creditEngine = require('../lib/credit');
 const accounting = require('../lib/accounting');
+const rxgate = require('../lib/rxgate');
 const financing = require('../lib/financing');
 const fiscal = require('../lib/fiscalization');
 const router = express.Router();
@@ -977,7 +978,16 @@ async function createSale(req) {
 // Thin HTTP wrapper around the in-process sale service.
 router.post('/', auth, validate(SaleSchemaV3), async (req, res, next) => {
   try {
+    // Pharmacy Rx-only gate (no-op unless the business has enforcement on).
+    const gate = await rxgate.check({ businessId: req.user.business_id, items: req.body.items || [] });
+    if (gate.error) return res.status(400).json({ error: gate.error });
+
     const result = await createSale(req);
+
+    // Record the clinical fill against each linked Rx once the sale is committed.
+    if (gate.linked?.length && result?.id) {
+      await rxgate.recordDispenses({ user: req.user, sale: result, linked: gate.linked });
+    }
     res.status(result._retry ? 200 : 201).json(result);
   } catch (err) {
     if (err.statusCode) return res.status(err.statusCode).json({ error: err.message });

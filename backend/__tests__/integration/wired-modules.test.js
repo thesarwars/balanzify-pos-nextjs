@@ -2867,4 +2867,113 @@ describe('merchant daily cockpit', () => {
   });
 });
 
+describe('pharmacy completeness — Rx clinical safety', () => {
+  let token, loc;
+  beforeAll(async () => {
+    token = await register();
+    await enableModule(token, 'pharmacy');
+    loc = await location(token);
+  });
+  async function rxDrug(generic, stock = 100) {
+    const id = await stockedProduct(token, loc, 5, stock);
+    await prisma.product.update({ where: { id }, data: { genericName: generic, isPrescriptionDrug: true } });
+    return id;
+  }
+  const dispense = (rxId, body) => request(app).post(`/api/v1/pharmacy/prescriptions/${rxId}/dispense`).set(auth(token)).send({ location_id: loc, ...body });
+
+  test('an expired prescription cannot be dispensed', async () => {
+    const d = await rxDrug('metformin');
+    const rx = (await request(app).post('/api/v1/pharmacy/prescriptions').set(auth(token))
+      .send({ product_id: d, patient_name: 'Sahra', prescriber_name: 'Dr A', quantity: 10, valid_days: 30 })).body;
+    await prisma.prescription.update({ where: { id: rx.id }, data: { validUntil: new Date(Date.now() - 86400000) } });
+    const r = await dispense(rx.id);
+    expect(r.status).toBe(400);
+    expect(r.body.error).toMatch(/expired/i);
+  });
+
+  test('an early refill is blocked until the supply runs down, override proceeds', async () => {
+    const d = await rxDrug('lisinopril');
+    const rx = (await request(app).post('/api/v1/pharmacy/prescriptions').set(auth(token))
+      .send({ product_id: d, patient_name: 'Omar', prescriber_name: 'Dr B', quantity: 30, refills_authorized: 2, days_supply: 30 })).body;
+    expect((await dispense(rx.id)).status).toBe(201);              // first fill
+    const tooSoon = await dispense(rx.id);                          // immediate refill
+    expect(tooSoon.status).toBe(400);
+    expect(tooSoon.body.error).toMatch(/too soon/i);
+    expect((await dispense(rx.id, { override: true })).status).toBe(201); // documented early refill
+  });
+
+  test('a recorded allergy blocks the drug unless overridden', async () => {
+    const d = await rxDrug('amoxicillin');
+    const rx = (await request(app).post('/api/v1/pharmacy/prescriptions').set(auth(token))
+      .send({ product_id: d, patient_name: 'Hodan', prescriber_name: 'Dr C', quantity: 21, allergies: ['amoxicillin'] })).body;
+    const blocked = await dispense(rx.id);
+    expect(blocked.status).toBe(409);
+    expect(blocked.body.allergy).toBe('amoxicillin');
+    expect((await dispense(rx.id, { override: true })).status).toBe(201);
+  });
+
+  test('generic substitution is allowed normally but blocked when marked DAW', async () => {
+    const brand = await rxDrug('atorvastatin-brand');
+    const generic = await rxDrug('atorvastatin', 100);
+
+    // DAW prescription — substitution refused.
+    const dawRx = (await request(app).post('/api/v1/pharmacy/prescriptions').set(auth(token))
+      .send({ product_id: brand, patient_name: 'Ayan', prescriber_name: 'Dr D', quantity: 10, daw: true })).body;
+    const refused = await dispense(dawRx.id, { substitute_product_id: generic });
+    expect(refused.status).toBe(400);
+    expect(refused.body.error).toMatch(/dispense-as-written|DAW/i);
+
+    // Non-DAW prescription — substitute dispensed, the generic's stock moves.
+    const okRx = (await request(app).post('/api/v1/pharmacy/prescriptions').set(auth(token))
+      .send({ product_id: brand, patient_name: 'Ayan2', prescriber_name: 'Dr D', quantity: 10, daw: false })).body;
+    const sub = await dispense(okRx.id, { substitute_product_id: generic });
+    expect(sub.status).toBe(201);
+    expect(sub.body.substituted).toBe(true);
+    expect((await prisma.stockLevel.findFirst({ where: { productId: generic, locationId: loc } })).quantity).toBe(90);
+  });
+});
+
+describe('pharmacy completeness — Rx-only enforcement at checkout', () => {
+  let token, loc, drug;
+  beforeAll(async () => {
+    token = await register();
+    await enableModule(token, 'pharmacy');
+    loc = await location(token);
+    drug = await stockedProduct(token, loc, 20, 100);
+    await prisma.product.update({ where: { id: drug }, data: { isPrescriptionDrug: true } });
+    await request(app).post('/api/v1/sales/shifts/open').set(auth(token)).send({ location_id: loc, opening_float: 100 });
+  });
+  async function sellLine(item) {
+    const ik = (await request(app).post('/api/v1/sales/initiate').set(auth(token))).body.idempotency_key;
+    return request(app).post('/api/v1/sales').set(auth(token)).send({
+      idempotency_key: ik, items: [item], location_id: loc, payment_method: 'cash', cash_tendered: 1000,
+    });
+  }
+
+  test('off by default: an Rx drug rings up without a prescription', async () => {
+    const r = await sellLine({ product_id: drug, quantity: 1, override_price: 20 });
+    expect(r.status).toBe(201);
+  });
+
+  test('once enforced, the Rx line needs a valid prescription', async () => {
+    expect((await request(app).put('/api/v1/pharmacy/settings').set(auth(token)).send({ enforce_rx_on_sale: true })).body.enforce_rx_on_sale).toBe(true);
+
+    // No prescription on the line → blocked.
+    const blocked = await sellLine({ product_id: drug, quantity: 1, override_price: 20 });
+    expect(blocked.status).toBe(400);
+    expect(blocked.body.error).toMatch(/prescription-only/i);
+
+    // With a valid prescription → allowed, and the fill is recorded against it.
+    const rx = (await request(app).post('/api/v1/pharmacy/prescriptions').set(auth(token))
+      .send({ product_id: drug, patient_name: 'Nasra', prescriber_name: 'Dr E', quantity: 1 })).body;
+    const ok = await sellLine({ product_id: drug, quantity: 1, override_price: 20, prescription_id: rx.id });
+    expect(ok.status).toBe(201);
+
+    const dispense = await prisma.dispenseRecord.findFirst({ where: { prescriptionId: rx.id } });
+    expect(dispense).toBeTruthy();
+    expect(dispense.saleId).toBe(ok.body.id);
+    expect((await prisma.prescription.findUnique({ where: { id: rx.id } })).refillsUsed).toBe(1);
+  });
+});
+
 afterAll(async () => { await prisma.$disconnect(); });
