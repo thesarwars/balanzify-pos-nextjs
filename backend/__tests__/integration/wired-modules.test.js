@@ -2694,4 +2694,29 @@ describe('risk / anomaly detection (rule-based)', () => {
   });
 });
 
+describe('automated eKYC → lending KYC gate', () => {
+  test('a clean identity auto-verifies and unlocks disbursement', async () => {
+    const token = await register();
+    const loc = await location(token); const prod = await stockedProduct(token, loc, 20, 1000);
+    await makeSale(token, loc, prod, { qty: 300, price: 20 }); // qualify for financing
+    await request(app).put('/api/v1/lending/kyc').set(auth(token)).send({ legal_name: 'Ayaan', id_type: 'national_id', id_number: 'SL-12345678' });
+
+    const v = await request(app).post('/api/v1/lending/kyc/verify-document').set(auth(token)).send({ document_urls: ['https://example.com/id.jpg'] });
+    expect(v.status).toBe(200);
+    expect(v.body.status).toBe('verified');     // stub auto-verified a clean id
+    expect(v.body.ekyc.provider).toBe('stub');
+
+    // The automated verification satisfies the disbursement KYC gate.
+    const offer = (await request(app).post('/api/v1/lending/offer').set(auth(token)).send({ principal: 500 })).body;
+    expect((await request(app).post(`/api/v1/lending/advances/${offer.id}/disburse`).set(auth(token))).status).toBe(200);
+  });
+
+  test('a flagged identity is auto-rejected', async () => {
+    const token = await register();
+    await request(app).put('/api/v1/lending/kyc').set(auth(token)).send({ legal_name: 'X', id_type: 'national_id', id_number: 'TEST-REJECT-1' });
+    const v = await request(app).post('/api/v1/lending/kyc/verify-document').set(auth(token)).send({});
+    expect(v.body.status).toBe('rejected');
+  });
+});
+
 afterAll(async () => { await prisma.$disconnect(); });
