@@ -676,6 +676,165 @@ router.post('/pay/:token/confirm-manual', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// ── DIASPORA PAY-DOWN OF A RUNNING DEYN BALANCE ───────────────────
+// The everyday Somali case: a customer has a running shop tab (deyn) and a
+// family member abroad wants to pay it down — no formal installment plan.
+// The merchant generates one pay-link for the customer's outstanding balance
+// (or a specific amount), shares it over WhatsApp, the diaspora payer settles
+// it on existing mobile-money rails, and the merchant confirms receipt — which
+// posts the repayment to the credit ledger AND the GL and clears the deyn.
+
+// POST /api/v1/credit/customers/:id/diaspora-link
+router.post('/customers/:id/diaspora-link', auth, requireRole('owner', 'manager'), validate(z.object({
+  amount: money.refine(v => v > 0).optional(),   // omit ⇒ full outstanding balance
+  note:   z.string().max(255).optional().nullable(),
+})), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const customer = await prisma.customer.findFirst({
+      where: { id: req.params.id, businessId },
+      select: { id: true, name: true, diasporaCurrency: true },
+    });
+    if (!customer) return res.status(404).json({ error: 'Customer not found.' });
+
+    const balance = await creditEngine.getLedgerBalance(customer.id, businessId);
+    if (balance <= 0) return res.status(400).json({ error: 'This customer has no outstanding balance to pay.' });
+
+    // Cap the requested amount at what's actually owed.
+    const amount = req.body.amount ? Math.min(parseFloat(req.body.amount), balance) : balance;
+
+    const business = await prisma.business.findUnique({
+      where: { id: businessId }, select: { name: true, currency: true },
+    });
+    const currency = customer.diasporaCurrency || business?.currency || 'USD';
+    const token    = creditEngine.generatePaymentToken();
+
+    const payment = await prisma.diasporaPayment.create({
+      data: {
+        businessId, customerId: customer.id,
+        amount, currency,
+        provider: 'manual', status: 'pending',
+        paymentToken: token,
+        notes: req.body.note || `Deyn pay-down for ${customer.name}`,
+      },
+    });
+
+    const frontendUrl = process.env.FRONTEND_URL || 'https://app.balanzify.com';
+    const paymentUrl  = `${frontendUrl}/pay/${token}`;
+    const waMsg = `💳 *Pay ${customer.name}'s account at ${business?.name || 'our shop'}*\n\nOutstanding: ${currency} ${balance.toFixed(2)}\nThis payment: ${currency} ${amount.toFixed(2)}\n\nPay securely:\n${paymentUrl}\n\nPowered by Balanzify`;
+
+    res.status(201).json({
+      diaspora_payment_id: payment.id,
+      payment_url: paymentUrl,
+      token,
+      amount,
+      outstanding_balance: balance,
+      currency,
+      wa_message: waMsg,
+      wa_url: `https://wa.me/?text=${encodeURIComponent(waMsg)}`,
+    });
+  } catch (err) { next(err); }
+});
+
+// GET /api/v1/credit/diaspora/pending — incoming diaspora payments awaiting confirmation
+router.get('/diaspora/pending', auth, async (req, res, next) => {
+  try {
+    const payments = await prisma.diasporaPayment.findMany({
+      where: { businessId: req.user.business_id, status: { in: ['pending', 'processing'] } },
+      include: {
+        customer: { select: { name: true, phone: true } },
+        planItem: { select: { installmentNo: true, plan: { select: { planNumber: true } } } },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 200,
+    });
+    res.json({
+      pending: payments.map(p => ({
+        id: p.id,
+        customer: p.customer?.name,
+        amount: parseFloat(p.amount),
+        currency: p.currency,
+        status: p.status,
+        provider: p.provider,
+        plan_number: p.planItem?.plan?.planNumber || null,
+        installment: p.planItem?.installmentNo || null,
+        created_at: p.createdAt,
+      })),
+      total_incoming: payments.reduce((s, p) => s + parseFloat(p.amount), 0),
+    });
+  } catch (err) { next(err); }
+});
+
+// POST /api/v1/credit/diaspora/:id/confirm — merchant confirms the money arrived.
+// Closes the loop: posts the repayment (ledger + GL), settles any linked
+// installment, and marks the diaspora payment completed.
+router.post('/diaspora/:id/confirm', auth, requireRole('owner', 'manager'), validate(z.object({
+  payment_method: z.string().max(50).default('mobile_money'), // diaspora settles via mobile money
+  reference:      z.string().max(255).optional().nullable(),
+})), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const payment = await prisma.diasporaPayment.findFirst({
+      where: { id: req.params.id, businessId },
+    });
+    if (!payment) return res.status(404).json({ error: 'Diaspora payment not found.' });
+    if (payment.status === 'completed') return res.status(400).json({ error: 'This payment is already confirmed.' });
+
+    const result = await prisma.$transaction(async (tx) => {
+      const balance = await creditEngine.getLedgerBalance(payment.customerId, businessId, tx);
+      if (balance <= 0) {
+        throw Object.assign(new Error('The balance is already cleared — nothing to settle.'), { statusCode: 400, code: 'NO_BALANCE' });
+      }
+      const settled = Math.min(parseFloat(payment.amount), balance);
+
+      const newBalance = await creditEngine.postRepayment(tx, {
+        businessId, customerId: payment.customerId,
+        amount: settled, currency: payment.currency || 'USD',
+        paymentMethod: req.body.payment_method, reference: req.body.reference || payment.paymentToken,
+        planItemId: payment.planItemId || null,
+        diasporaPayId: payment.id,
+        description: `Diaspora payment confirmed${payment.planItemId ? ' (installment)' : ''}`,
+        recordedById: req.user.id,
+      });
+
+      // If this diaspora payment was for a plan installment, settle that installment too.
+      if (payment.planItemId) {
+        const item = await tx.paymentPlanItem.findUnique({ where: { id: payment.planItemId } });
+        if (item && item.status !== 'paid') {
+          const newPaid   = parseFloat(item.amountPaid) + settled;
+          const itemStatus = newPaid >= parseFloat(item.amount) ? 'paid' : 'partial';
+          await tx.paymentPlanItem.update({
+            where: { id: item.id },
+            data: { amountPaid: newPaid, status: itemStatus, paidAt: itemStatus === 'paid' ? new Date() : null, paymentMethod: req.body.payment_method, reference: req.body.reference || payment.paymentToken },
+          });
+          if (itemStatus === 'paid') {
+            const siblings = await tx.paymentPlanItem.findMany({ where: { planId: item.planId } });
+            if (siblings.every(s => s.id === item.id ? true : s.status === 'paid')) {
+              await tx.paymentPlan.update({ where: { id: item.planId }, data: { status: 'completed' } });
+            }
+          }
+        }
+      }
+
+      await tx.diasporaPayment.update({
+        where: { id: payment.id },
+        data: { status: 'completed', settledAt: new Date(), settlementRef: req.body.reference || null },
+      });
+
+      return { settled, newBalance };
+    });
+
+    res.json({
+      message: 'Diaspora payment confirmed and applied to the customer account.',
+      settled_amount: result.settled,
+      new_balance: result.newBalance,
+    });
+  } catch (err) {
+    if (err.statusCode) return res.status(err.statusCode).json({ error: err.message });
+    next(err);
+  }
+});
+
 // ── SETTLEMENT PROVIDERS ──────────────────────────────────────────
 
 // GET /api/v1/credit/settlement/providers

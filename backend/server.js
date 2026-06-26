@@ -198,6 +198,7 @@ try {
   app.use('/api/v1/forecast',   apiLimiter, require('./routes/forecast'));
   app.use('/api/v1/benchmarking', apiLimiter, require('./routes/benchmarking'));
   app.use('/api/v1/risk',       apiLimiter, require('./routes/risk'));
+  app.use('/api/v1/cockpit',    apiLimiter, require('./routes/cockpit'));
   app.use('/api/v1/asset-finance', apiLimiter, gateAuth, requireModule('asset_finance'), require('./routes/assetFinance'));
   app.use('/api/v1/wallet',     apiLimiter, gateAuth, requireModule('wallet'), require('./routes/wallet'));
   app.use('/api/v1/takaful',    apiLimiter, gateAuth, requireModule('takaful'), require('./routes/takaful'));

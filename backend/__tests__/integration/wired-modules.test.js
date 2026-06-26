@@ -2719,4 +2719,110 @@ describe('automated eKYC → lending KYC gate', () => {
   });
 });
 
+// Open a shift (once per business) and make a sale billed to a customer's
+// account — leaves the customer with an outstanding deyn balance.
+async function creditSale(token, loc, prod, customerId, { qty = 5, price = 20 } = {}) {
+  await request(app).post('/api/v1/sales/shifts/open').set(auth(token)).send({ location_id: loc, opening_float: 100 });
+  const ik = (await request(app).post('/api/v1/sales/initiate').set(auth(token))).body.idempotency_key;
+  return request(app).post('/api/v1/sales').set(auth(token)).send({
+    idempotency_key: ik, items: [{ product_id: prod, quantity: qty, override_price: price }],
+    location_id: loc, payment_method: 'credit', customer_id: customerId,
+  });
+}
+const bizOf = (t) => JSON.parse(Buffer.from(t.split('.')[1], 'base64').toString()).businessId;
+
+describe('diaspora pays the shop — deyn pay-down + closed reconciliation loop', () => {
+  test('merchant links a deyn balance, payer is queued, merchant confirms → ledger + GL settle the debt', async () => {
+    const token = await register();
+    await enableModule(token, 'credit');
+    const loc = await location(token);
+    const prod = await stockedProduct(token, loc, 20, 1000);
+    const customerId = (await request(app).post('/api/v1/customers').set(auth(token))
+      .send({ name: 'Hooyo', phone: '0634000111', credit_limit: 1000 })).body.id;
+
+    // A credit sale of 5 × 20 = 100 leaves a 100 deyn balance.
+    expect((await creditSale(token, loc, prod, customerId)).status).toBe(201);
+
+    // Merchant generates one pay-link for the full outstanding balance.
+    const link = await request(app).post(`/api/v1/credit/customers/${customerId}/diaspora-link`)
+      .set(auth(token)).send({});
+    expect(link.status).toBe(201);
+    expect(link.body.amount).toBeCloseTo(100, 2);
+    expect(link.body.outstanding_balance).toBeCloseTo(100, 2);
+    expect(link.body.payment_url).toContain(link.body.token);
+    expect(link.body.wa_url).toContain('wa.me');
+    const payId = link.body.diaspora_payment_id;
+
+    // It shows up as money coming in, awaiting confirmation.
+    const pending = await request(app).get('/api/v1/credit/diaspora/pending').set(auth(token));
+    expect(pending.status).toBe(200);
+    expect(pending.body.total_incoming).toBeCloseTo(100, 2);
+    expect(pending.body.pending.find(p => p.id === payId)).toBeTruthy();
+
+    // Merchant confirms receipt → repayment posts and the deyn clears.
+    const confirm = await request(app).post(`/api/v1/credit/diaspora/${payId}/confirm`)
+      .set(auth(token)).send({ reference: 'ZAAD-REF-9' });
+    expect(confirm.status).toBe(200);
+    expect(confirm.body.settled_amount).toBeCloseTo(100, 2);
+    expect(confirm.body.new_balance).toBeCloseTo(0, 2);
+
+    // The repayment is on the GL (cash/mobile-money in, AR down).
+    const repay = await prisma.journalEntry.findFirst({
+      where: { businessId: bizOf(token), sourceType: 'credit_repayment', sourceId: customerId },
+      include: { lines: { include: { account: true } } }, orderBy: { createdAt: 'desc' },
+    });
+    expect(repay).toBeTruthy();
+    const byCode = Object.fromEntries(repay.lines.map(l => [l.account.code, l]));
+    expect(parseFloat(byCode['1010'].debit)).toBeCloseTo(100, 2); // mobile money received
+    expect(parseFloat(byCode['1100'].credit)).toBeCloseTo(100, 2); // accounts receivable reduced
+
+    // Confirming again is rejected — no double-credit.
+    expect((await request(app).post(`/api/v1/credit/diaspora/${payId}/confirm`).set(auth(token)).send({})).status).toBe(400);
+  });
+
+  test('a customer with no balance cannot be linked', async () => {
+    const token = await register();
+    await enableModule(token, 'credit');
+    const customerId = (await request(app).post('/api/v1/customers').set(auth(token)).send({ name: 'Paid Up' })).body.id;
+    const link = await request(app).post(`/api/v1/credit/customers/${customerId}/diaspora-link`).set(auth(token)).send({});
+    expect(link.status).toBe(400);
+  });
+});
+
+describe('merchant daily cockpit', () => {
+  test('assembles money-in, receivables, diaspora incoming, reorder-due and the briefing', async () => {
+    const token = await register();
+    const loc = await location(token);
+    const prod = await stockedProduct(token, loc, 20, 1000);
+
+    // Money in today: a cash sale.
+    await makeSale(token, loc, prod, { qty: 2, price: 20 });
+
+    // Receivables: a customer carrying a deyn balance.
+    const customerId = (await request(app).post('/api/v1/customers').set(auth(token))
+      .send({ name: 'Aabo', phone: '0634222333', credit_limit: 1000 })).body.id;
+    await creditSale(token, loc, prod, customerId, { qty: 3, price: 20 }); // 60 owed
+
+    // Money coming in: a queued diaspora payment (insert directly — cockpit needs no credit add-on).
+    await prisma.diasporaPayment.create({
+      data: { businessId: bizOf(token), customerId, amount: 25, currency: 'USD', provider: 'manual', status: 'pending', paymentToken: crypto.randomBytes(8).toString('hex') },
+    });
+
+    // Reorder due: push the product to/below its reorder point.
+    await prisma.product.update({ where: { id: prod }, data: { reorderPoint: 100000 } });
+
+    const c = await request(app).get('/api/v1/cockpit').set(auth(token));
+    expect(c.status).toBe(200);
+    expect(c.body.money_in_today.total).toBeGreaterThan(0);
+    expect(c.body.money_in_today.sales_count).toBeGreaterThanOrEqual(1);
+    expect(c.body.receivables.total_owed).toBeCloseTo(60, 2);
+    expect(c.body.receivables.top_debtors.find(d => d.id === customerId)).toBeTruthy();
+    expect(c.body.diaspora_incoming.count).toBe(1);
+    expect(c.body.diaspora_incoming.total).toBeCloseTo(25, 2);
+    expect(c.body.reorder_due).toBeGreaterThanOrEqual(1);
+    expect(c.body.briefing).toBeTruthy();
+    expect(c.body.briefing.mode).toBe('rules'); // deterministic fallback, no LLM key
+  });
+});
+
 afterAll(async () => { await prisma.$disconnect(); });
