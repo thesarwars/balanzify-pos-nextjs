@@ -152,6 +152,12 @@ stockRouter.post('/adjustments/:id/approve', auth, requireRole('owner', 'manager
     if (!adj || adj.businessId !== req.user.business_id) return res.status(404).json({ title: 'Not found', status: 404 });
     if (adj.status !== 'pending') return res.status(400).json({ title: 'Already processed', status: 400 });
 
+    // Value the adjustment at cost so the GL Inventory balance tracks the stock.
+    // unitCost defaults to 0 on capture — fall back to the product's cost then.
+    const product = await prisma.product.findUnique({ where: { id: adj.productId }, select: { costPrice: true } });
+    const unitCost = parseFloat(adj.unitCost) > 0 ? parseFloat(adj.unitCost) : parseFloat(product?.costPrice || 0);
+    const value = Math.abs(adj.quantity) * unitCost;
+
     await prisma.$transaction(async (tx) => {
       await tx.$executeRaw`
         INSERT INTO stock_levels (id, product_id, location_id, quantity)
@@ -170,6 +176,13 @@ stockRouter.post('/adjustments/:id/approve', auth, requireRole('owner', 'manager
         where: { id: req.params.id },
         data: { status: 'approved', approvedById: req.user.id, approvedAt: new Date() },
       });
+      // GL: a write-off/loss is an expense; 'found' is a gain. Inventory follows.
+      if (value > 0) {
+        await accounting.postInventoryAdjustment(tx, {
+          businessId: req.user.business_id, amount: value, gain: adj.quantity > 0,
+          sourceType: 'stock_adjustment', sourceId: adj.id, createdById: req.user.id,
+        });
+      }
     });
     res.json({ message: 'Adjustment approved.' });
   } catch (err) { next(err); }
