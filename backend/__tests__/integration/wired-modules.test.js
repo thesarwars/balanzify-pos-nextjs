@@ -3023,4 +3023,145 @@ describe('pharmacy completeness — multi-drug prescriptions (groups)', () => {
   });
 });
 
+describe('hotel completeness — policies & booking rules', () => {
+  let token;
+  beforeAll(async () => { token = await register(); await enableModule(token, 'hotel'); });
+  const setSettings = (body) => request(app).put('/api/v1/hotel/settings').set(auth(token)).send(body);
+  async function room(rate = 100, number) {
+    const rt = (await request(app).post('/api/v1/hotel/room-types').set(auth(token)).send({ name: `T${number}`, baseRate: rate, maxOccupancy: 2 })).body;
+    return (await request(app).post('/api/v1/hotel/rooms').set(auth(token)).send({ roomTypeId: rt.body?.id || rt.id, number: String(number) })).body.id;
+  }
+  const book = (body) => request(app).post('/api/v1/hotel/reservations').set(auth(token)).send(body);
+
+  test('a late cancellation charges the policy fee against the deposit', async () => {
+    await setSettings({ cancellationDeadlineHours: 720, cancellationFeePct: 0.5 });
+    const roomId = await room(100, 1101);
+    const resv = (await book({ roomId, guestName: 'Late Cancel', checkInDate: '2026-07-10', checkOutDate: '2026-07-12', ratePerNight: 100, depositPaid: 120 })).body;
+    const c = await request(app).delete(`/api/v1/hotel/reservations/${resv.id}`).set(auth(token)).send({ reason: 'changed plans' });
+    expect(c.status).toBe(200);
+    expect(c.body.late_cancel).toBe(true);
+    expect(c.body.penalty).toBeCloseTo(100, 2);   // 200 stay × 50%
+    expect(c.body.refund_due).toBeCloseTo(20, 2);  // 120 deposit − 100 fee
+  });
+
+  test('an early cancellation outside the window is free (deposit fully refundable)', async () => {
+    await setSettings({ cancellationDeadlineHours: 24, cancellationFeePct: 0.5 });
+    const roomId = await room(100, 1102);
+    const resv = (await book({ roomId, guestName: 'Early Cancel', checkInDate: '2026-12-01', checkOutDate: '2026-12-03', ratePerNight: 100, depositPaid: 30 })).body;
+    const c = await request(app).delete(`/api/v1/hotel/reservations/${resv.id}`).set(auth(token)).send({});
+    expect(c.body.late_cancel).toBe(false);
+    expect(c.body.penalty).toBeCloseTo(0, 2);
+    expect(c.body.refund_due).toBeCloseTo(30, 2);
+  });
+
+  test('a no-show applies the no-show fee', async () => {
+    await setSettings({ noShowFeePct: 0.4 });
+    const roomId = await room(100, 1103);
+    const resv = (await book({ roomId, guestName: 'Ghost', checkInDate: '2026-07-15', checkOutDate: '2026-07-17', ratePerNight: 100 })).body;
+    const ns = await request(app).post(`/api/v1/hotel/reservations/${resv.id}/no-show`).set(auth(token));
+    expect(ns.status).toBe(200);
+    expect(ns.body.penalty).toBeCloseTo(80, 2);     // 200 × 40%
+    expect(ns.body.amount_owed).toBeCloseTo(80, 2);  // no deposit on file
+    const after = (await request(app).get('/api/v1/hotel/reservations').set(auth(token)).query({ status: 'no_show' })).body.reservations;
+    expect(after.find(r => r.id === resv.id)).toBeTruthy();
+  });
+
+  test('overbooking is rejected by default and allowed once enabled', async () => {
+    await setSettings({ allowOverbooking: false });
+    const roomId = await room(100, 1104);
+    expect((await book({ roomId, guestName: 'A', checkInDate: '2026-07-20', checkOutDate: '2026-07-23', ratePerNight: 100 })).status).toBe(201);
+    expect((await book({ roomId, guestName: 'B', checkInDate: '2026-07-21', checkOutDate: '2026-07-24', ratePerNight: 100 })).status).toBe(409);
+    await setSettings({ allowOverbooking: true });
+    expect((await book({ roomId, guestName: 'C', checkInDate: '2026-07-21', checkOutDate: '2026-07-24', ratePerNight: 100 })).status).toBe(201);
+  });
+
+  test('a rate plan enforces its length-of-stay window', async () => {
+    const rt = (await request(app).post('/api/v1/hotel/room-types').set(auth(token)).send({ name: 'LOS', baseRate: 100, maxOccupancy: 2 })).body;
+    const roomId = (await request(app).post('/api/v1/hotel/rooms').set(auth(token)).send({ roomTypeId: rt.id, number: '1105' })).body.id;
+    const plan = (await request(app).post('/api/v1/hotel/rate-plans').set(auth(token)).send({ roomTypeId: rt.id, name: 'Weekly', ratePerNight: 80, minNights: 3 })).body;
+    const r = await book({ roomId, guestName: 'Short', checkInDate: '2026-07-25', checkOutDate: '2026-07-26', ratePlanId: plan.id });
+    expect(r.status).toBe(400);
+    expect(r.body.code).toBe('LOS_VIOLATION');
+  });
+
+  test('a corporate negotiated rate is applied when no rate is given', async () => {
+    const corp = (await request(app).post('/api/v1/hotel/corporate').set(auth(token)).send({ companyName: 'NegoCorp', negotiatedRate: 45 })).body;
+    const roomId = await room(100, 1106);
+    const resv = (await book({ roomId, guestName: 'Corp Guest', checkInDate: '2026-08-10', checkOutDate: '2026-08-12', corporateAccountId: corp.id })).body;
+    expect(Number(resv.ratePerNight)).toBeCloseTo(45, 2);
+    expect(Number(resv.totalRoomCharge)).toBeCloseTo(90, 2);
+  });
+});
+
+describe('hotel completeness — night audit & revenue analytics', () => {
+  async function hotelBiz() { const t = await register(); await enableModule(t, 'hotel'); return t; }
+  async function roomOf(token, number, rate = 100) {
+    const rt = (await request(app).post('/api/v1/hotel/room-types').set(auth(token)).send({ name: `RT${number}`, baseRate: rate, maxOccupancy: 2 })).body;
+    return (await request(app).post('/api/v1/hotel/rooms').set(auth(token)).send({ roomTypeId: rt.id, number: String(number) })).body.id;
+  }
+
+  test('night audit sweeps un-arrived bookings to no-show and returns the close report', async () => {
+    const token = await hotelBiz();
+    await request(app).put('/api/v1/hotel/settings').set(auth(token)).send({ noShowFeePct: 0.5 });
+    const roomId = await roomOf(token, 401);
+    // An arrival dated in the past that never checked in.
+    const resv = (await request(app).post('/api/v1/hotel/reservations').set(auth(token))
+      .send({ roomId, guestName: 'NoArrival', checkInDate: '2026-06-01', checkOutDate: '2026-06-03', ratePerNight: 100 })).body;
+
+    const audit = await request(app).post('/api/v1/hotel/night-audit/run').set(auth(token)).send({});
+    expect(audit.status).toBe(200);
+    expect(audit.body.no_shows_processed).toBe(1);
+    expect(audit.body.no_shows[0].penalty).toBeCloseTo(100, 2); // 200 stay × 50%
+    const r = await request(app).get(`/api/v1/hotel/reservations/${resv.id}`).set(auth(token));
+    expect(r.body.status).toBe('no_show');
+  });
+
+  test('revenue report computes occupancy, ADR and RevPAR', async () => {
+    const token = await hotelBiz();
+    const roomId = await roomOf(token, 501, 100);
+    const resv = (await request(app).post('/api/v1/hotel/reservations').set(auth(token))
+      .send({ roomId, guestName: 'Analytics', checkInDate: '2026-09-01', checkOutDate: '2026-09-03', ratePerNight: 100 })).body;
+    expect((await request(app).post(`/api/v1/hotel/reservations/${resv.id}/checkin`).set(auth(token))).status).toBe(200);
+
+    const rep = await request(app).get('/api/v1/hotel/reports/revenue').set(auth(token)).query({ from: '2026-09-01', to: '2026-09-05' });
+    expect(rep.status).toBe(200);
+    expect(rep.body.room_revenue).toBeCloseTo(200, 2);   // 2 nights × 100
+    expect(rep.body.room_nights_sold).toBeCloseTo(2, 2);
+    expect(rep.body.adr).toBeCloseTo(100, 2);            // 200 / 2 nights
+    expect(rep.body.occupancy_pct).toBeCloseTo(40, 1);   // 2 sold / (1 room × 5 days)
+    expect(rep.body.revpar).toBeCloseTo(40, 2);          // 200 / 5 available room-nights
+  });
+});
+
+describe('hotel completeness — corporate AR / city ledger', () => {
+  test('checkout bills the balance to the corporate account; a corporate payment clears it', async () => {
+    const token = await register(); await enableModule(token, 'hotel');
+    const corp = (await request(app).post('/api/v1/hotel/corporate').set(auth(token)).send({ companyName: 'LedgerCo' })).body;
+    const rt = (await request(app).post('/api/v1/hotel/room-types').set(auth(token)).send({ name: 'CL', baseRate: 100, maxOccupancy: 2 })).body;
+    const roomId = (await request(app).post('/api/v1/hotel/rooms').set(auth(token)).send({ roomTypeId: rt.id, number: '601' })).body.id;
+    const resv = (await request(app).post('/api/v1/hotel/reservations').set(auth(token))
+      .send({ roomId, guestName: 'Biz Traveller', checkInDate: '2026-10-01', checkOutDate: '2026-10-03', ratePerNight: 100, corporateAccountId: corp.id })).body;
+    expect((await request(app).post(`/api/v1/hotel/reservations/${resv.id}/checkin`).set(auth(token))).status).toBe(200);
+
+    // Check out billing the 200 balance to the company's city ledger.
+    const co = await request(app).post(`/api/v1/hotel/reservations/${resv.id}/checkout`).set(auth(token)).send({ bill_to_corporate: true });
+    expect(co.status).toBe(200);
+    expect(co.body.city_ledger.transferred).toBeCloseTo(200, 2);
+
+    // The corporate account now carries the outstanding balance.
+    const acct = (await request(app).get('/api/v1/hotel/corporate').set(auth(token))).body.accounts.find(a => a.id === corp.id);
+    expect(Number(acct.outstandingBalance)).toBeCloseTo(200, 2);
+
+    // A corporate payment clears the city ledger and brings cash in.
+    const pay = await request(app).post(`/api/v1/hotel/corporate/${corp.id}/payment`).set(auth(token)).send({ amount: 200, provider: 'bank' });
+    expect(pay.status).toBe(200);
+    expect(pay.body.outstanding_balance).toBeCloseTo(0, 2);
+
+    // GL balances and the receivable is fully cleared.
+    const tb = (await request(app).get('/api/v1/accounting/trial-balance').set(auth(token))).body;
+    expect(tb.totals.balanced).toBe(true);
+    expect(tb.accounts.find(a => a.code === '1100').balance).toBeCloseTo(0, 2);
+  });
+});
+
 afterAll(async () => { await prisma.$disconnect(); });
