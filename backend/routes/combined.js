@@ -146,6 +146,58 @@ stockRouter.get('/adjustments', auth, async (req, res, next) => {
   }
 });
 
+// Stock valuation at cost — from the live FIFO/FEFO cost layers, so it
+// reconciles to the GL Inventory account (1200). The number a lender or owner
+// asks for: what is the stock on hand actually worth?
+stockRouter.get('/valuation', auth, async (req, res, next) => {
+  try {
+    const rows = await prisma.$queryRaw`
+      SELECT cl.product_id, p.name, p.sku,
+             COALESCE(SUM(cl.quantity_remaining), 0)::int AS qty,
+             ROUND(SUM(cl.quantity_remaining * cl.unit_cost)::numeric, 2) AS value
+      FROM cost_layers cl
+      JOIN products p ON p.id = cl.product_id
+      WHERE cl.business_id = ${req.user.business_id}::uuid AND cl.quantity_remaining > 0
+      GROUP BY cl.product_id, p.name, p.sku
+      ORDER BY value DESC`;
+    const items = rows.map(r => ({ product_id: r.product_id, name: r.name, sku: r.sku, quantity: r.qty, value: parseFloat(r.value) }));
+    res.json({ items, total_value: +items.reduce((s, i) => s + i.value, 0).toFixed(2), product_count: items.length });
+  } catch (err) { next(err); }
+});
+
+// Expiring stock — cost layers (so quantities are live) with an expiry within
+// the window, nearest first, plus the value at risk. Drives sell-through / pull
+// decisions before write-off.
+stockRouter.get('/expiring', auth, async (req, res, next) => {
+  try {
+    const days = Math.min(Math.max(parseInt(req.query.days) || 30, 1), 365);
+    const cutoff = new Date(Date.now() + days * 86400000);
+    const rows = await prisma.$queryRaw`
+      SELECT cl.product_id, p.name, p.sku, cl.expiry_date,
+             cl.quantity_remaining::int AS qty,
+             ROUND((cl.quantity_remaining * cl.unit_cost)::numeric, 2) AS value
+      FROM cost_layers cl
+      JOIN products p ON p.id = cl.product_id
+      WHERE cl.business_id = ${req.user.business_id}::uuid
+        AND cl.quantity_remaining > 0
+        AND cl.expiry_date IS NOT NULL
+        AND cl.expiry_date <= ${cutoff}
+      ORDER BY cl.expiry_date ASC`;
+    const now = Date.now();
+    const layers = rows.map(r => ({
+      product_id: r.product_id, name: r.name, sku: r.sku,
+      expiry_date: r.expiry_date, quantity: r.qty, value: parseFloat(r.value),
+      expired: new Date(r.expiry_date).getTime() < now,
+    }));
+    res.json({
+      window_days: days,
+      expiring: layers,
+      already_expired: layers.filter(l => l.expired).length,
+      value_at_risk: +layers.reduce((s, l) => s + l.value, 0).toFixed(2),
+    });
+  } catch (err) { next(err); }
+});
+
 stockRouter.post('/adjustments/:id/approve', auth, requireRole('owner', 'manager'), async (req, res, next) => {
   try {
     const adj = await prisma.stockAdjustment.findUnique({ where: { id: req.params.id } });

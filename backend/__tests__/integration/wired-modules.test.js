@@ -3510,4 +3510,46 @@ describe('inventory completeness — landed cost & refund reversal', () => {
   });
 });
 
+describe('inventory completeness — FEFO consumption + valuation/expiring reports', () => {
+  test('a sale consumes the nearest-expiry layer first; valuation & expiring reports reconcile', async () => {
+    const token = await register();
+    const loc = await location(token);
+    const bizId = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString()).businessId;
+    const prod = (await request(app).post('/api/v1/products').set(auth(token))
+      .send({ name: 'Fresh Milk', selling_price: 5, cost_price: 2, opening_stock: 0, location_id: loc })).body.id;
+
+    // Two layers: the CHEAPER one expires LATER; the PRICIER one expires SOONER.
+    const soon  = new Date(Date.now() +  5 * 86400000);
+    const later = new Date(Date.now() + 60 * 86400000);
+    await prisma.costLayer.create({ data: { businessId: bizId, productId: prod, locationId: loc, quantityReceived: 10, quantityRemaining: 10, unitCost: 2, expiryDate: later, receivedAt: new Date(Date.now() - 86400000) } });
+    const soonLayer = await prisma.costLayer.create({ data: { businessId: bizId, productId: prod, locationId: loc, quantityReceived: 10, quantityRemaining: 10, unitCost: 3, expiryDate: soon } });
+    await prisma.$executeRaw`INSERT INTO stock_levels (id, product_id, location_id, quantity) VALUES (gen_random_uuid(), ${prod}::uuid, ${loc}::uuid, 20) ON CONFLICT (product_id, location_id) DO UPDATE SET quantity = 20`;
+
+    // Sell 5 — FEFO must draw from the soon-expiry layer (cost 3), not the older cheaper one.
+    await request(app).post('/api/v1/sales/shifts/open').set(auth(token)).send({ location_id: loc, opening_float: 100 });
+    const ik = (await request(app).post('/api/v1/sales/initiate').set(auth(token))).body.idempotency_key;
+    const sale = await request(app).post('/api/v1/sales').set(auth(token)).send({
+      idempotency_key: ik, items: [{ product_id: prod, quantity: 5, override_price: 5 }], location_id: loc, payment_method: 'cash', cash_tendered: 25,
+    });
+    expect(sale.status).toBe(201);
+
+    // The soon-expiry layer dropped to 5; the later cheaper layer is untouched (FEFO, not FIFO).
+    expect((await prisma.costLayer.findUnique({ where: { id: soonLayer.id } })).quantityRemaining).toBe(5);
+    const je = await prisma.journalEntry.findFirst({ where: { businessId: bizId, sourceType: 'sale', sourceId: sale.body.id }, include: { lines: { include: { account: true } } } });
+    const cogs = je.lines.find(l => l.account.code === '5000');
+    expect(parseFloat(cogs.debit)).toBeCloseTo(15, 2); // 5 × cost 3 (FEFO); FIFO would be 10
+
+    // Valuation: soon 5×3=15 + later 10×2=20 = 35.
+    const val = await request(app).get('/api/v1/stock/valuation').set(auth(token));
+    expect(val.status).toBe(200);
+    expect(val.body.total_value).toBeCloseTo(35, 2);
+
+    // Expiring within 10 days: only the soon layer (5 left × 3 = 15 at risk).
+    const exp = await request(app).get('/api/v1/stock/expiring').set(auth(token)).query({ days: 10 });
+    expect(exp.status).toBe(200);
+    expect(exp.body.value_at_risk).toBeCloseTo(15, 2);
+    expect(exp.body.expiring.find(e => e.product_id === prod)).toBeTruthy();
+  });
+});
+
 afterAll(async () => { await prisma.$disconnect(); });
