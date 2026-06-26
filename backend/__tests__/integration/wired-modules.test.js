@@ -2644,4 +2644,30 @@ describe('B2B trade rails (merchant-to-merchant, posts to both ledgers)', () => 
   });
 });
 
+describe('AI insights — deployable deterministic fallback (no LLM key)', () => {
+  let token, loc, prod;
+  beforeAll(async () => {
+    token = await register();
+    await enableModule(token, 'insights');
+    loc = await location(token);
+    prod = await stockedProduct(token, loc, 10, 100);
+    await makeSale(token, loc, prod, { qty: 3, price: 10 });
+  });
+
+  test('briefing answers from the ledger even with no API key', async () => {
+    const b = await request(app).get('/api/v1/insights/briefing').set(auth(token));
+    expect(b.status).toBe(200);
+    expect(b.body.ai_enabled).toBe(false);           // no key → deterministic mode
+    expect(typeof b.body.briefing).toBe('string');
+    expect(b.body.briefing.length).toBeGreaterThan(20);
+  });
+
+  test('ask answers (rules mode) grounded in the real numbers', async () => {
+    const r = await request(app).post('/api/v1/insights/ask').set(auth(token)).send({ question: 'How are my sales?' });
+    expect(r.status).toBe(200);
+    expect(r.body.ai_enabled).toBe(false);
+    expect(r.body.answer).toMatch(/sales/i);
+  });
+});
+
 afterAll(async () => { await prisma.$disconnect(); });
