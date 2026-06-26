@@ -3219,6 +3219,7 @@ model Folio {
   businessId    String      @map("business_id") @db.Uuid
   folioNumber   String      @unique @map("folio_number") @db.VarChar(30) // "FOL-001234"
   reservationId String?     @unique @map("reservation_id") @db.Uuid // null for walk-in restaurant/bar
+  splitFromReservationId String? @map("split_from_reservation_id") @db.Uuid // extra (split) folio for a reservation
   guestId       String      @map("guest_id") @db.Uuid
   status        FolioStatus @default(open)
   currency      String      @default("USD") @db.VarChar(3)
@@ -4000,6 +4001,7 @@ model HotelSettings {
   currency              String   @default("USD") @db.VarChar(3)
   taxRate               Decimal? @map("tax_rate") @db.Decimal(6, 4)
   serviceChargePct      Decimal? @map("service_charge_pct") @db.Decimal(6, 4)
+  tourismLevyPct        Decimal? @map("tourism_levy_pct") @db.Decimal(6, 4) // separate from VAT (common in the region)
   depositPct            Decimal? @map("deposit_pct") @db.Decimal(6, 4)
   nightAuditTime        String   @default("23:00") @map("night_audit_time")
   autoPostRoomCharges   Boolean  @default(true) @map("auto_post_room_charges")

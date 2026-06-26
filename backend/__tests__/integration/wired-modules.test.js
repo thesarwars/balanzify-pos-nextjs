@@ -3164,4 +3164,59 @@ describe('hotel completeness — corporate AR / city ledger', () => {
   });
 });
 
+describe('hotel completeness — tourism levy & split folios', () => {
+  async function hotelBiz() { const t = await register(); await enableModule(t, 'hotel'); return t; }
+  async function roomOf(token, number, rate = 100) {
+    const rt = (await request(app).post('/api/v1/hotel/room-types').set(auth(token)).send({ name: `RT${number}`, baseRate: rate, maxOccupancy: 2 })).body;
+    return (await request(app).post('/api/v1/hotel/rooms').set(auth(token)).send({ roomTypeId: rt.id, number: String(number) })).body.id;
+  }
+  const book = (token, body) => request(app).post('/api/v1/hotel/reservations').set(auth(token)).send(body);
+
+  test('tourism levy is posted as a separate line, distinct from VAT', async () => {
+    const token = await hotelBiz();
+    await request(app).put('/api/v1/hotel/settings').set(auth(token)).send({ taxRate: 0.05, tourismLevyPct: 0.02 });
+    const roomId = await roomOf(token, 701, 100);
+    const resv = (await book(token, { roomId, guestName: 'Levy Guest', checkInDate: '2026-11-01', checkOutDate: '2026-11-02', ratePerNight: 100 })).body;
+    expect((await request(app).post(`/api/v1/hotel/reservations/${resv.id}/checkin`).set(auth(token))).status).toBe(200);
+    expect((await request(app).post(`/api/v1/hotel/reservations/${resv.id}/checkout`).set(auth(token)).send({ force_checkout: true })).status).toBe(200);
+
+    const folioId = (await request(app).get(`/api/v1/hotel/reservations/${resv.id}`).set(auth(token))).body.folio.id;
+    const folio = (await request(app).get(`/api/v1/hotel/folios/${folioId}`).set(auth(token))).body;
+    const levy = folio.charges.find(c => c.description.includes('Tourism levy'));
+    const tax  = folio.charges.find(c => c.description.startsWith('Tax ('));
+    expect(Number(levy.totalAmount)).toBeCloseTo(2, 2);  // 100 × 2%
+    expect(Number(tax.totalAmount)).toBeCloseTo(5, 2);   // 100 × 5%
+    expect(Number(folio.totalCharges)).toBeCloseTo(107, 2);
+  });
+
+  test('split folio: a charge can move to a second bill, and checkout waits for both', async () => {
+    const token = await hotelBiz();
+    const roomId = await roomOf(token, 801, 100);
+    const resv = (await book(token, { roomId, guestName: 'Split Guest', checkInDate: '2026-11-10', checkOutDate: '2026-11-11', ratePerNight: 100 })).body;
+    expect((await request(app).post(`/api/v1/hotel/reservations/${resv.id}/checkin`).set(auth(token))).status).toBe(200);
+    const primary = (await request(app).get(`/api/v1/hotel/reservations/${resv.id}`).set(auth(token))).body.folio.id;
+
+    // Incidental on the primary bill, then a second folio to carry it.
+    const ch = await request(app).post(`/api/v1/hotel/folios/${primary}/charges`).set(auth(token)).send({ type: 'minibar', description: 'Minibar', quantity: 1, unitAmount: 20, chargeDate: '2026-11-10' });
+    const split = (await request(app).post(`/api/v1/hotel/reservations/${resv.id}/folios`).set(auth(token)).send({})).body;
+    const mv = await request(app).post(`/api/v1/hotel/folios/${primary}/charges/${ch.body.id}/move`).set(auth(token)).send({ to_folio_id: split.id });
+    expect(mv.status).toBe(200);
+    expect(mv.body.amount).toBeCloseTo(20, 2);
+
+    const folios = (await request(app).get(`/api/v1/hotel/reservations/${resv.id}/folios`).set(auth(token))).body.folios;
+    expect(Number(folios.find(f => f.is_primary).balance)).toBeCloseTo(100, 2); // room only
+    expect(Number(folios.find(f => !f.is_primary).balance)).toBeCloseTo(20, 2);  // minibar moved here
+
+    // Pay the primary; checkout is still blocked by the unsettled split.
+    await request(app).post(`/api/v1/hotel/folios/${primary}/payments`).set(auth(token)).send({ provider: 'cash', amount: 100 });
+    const blocked = await request(app).post(`/api/v1/hotel/reservations/${resv.id}/checkout`).set(auth(token)).send({});
+    expect(blocked.status).toBe(400);
+    expect(blocked.body.code).toBe('SPLIT_FOLIO_OUTSTANDING');
+
+    // Settle the split too → checkout succeeds.
+    await request(app).post(`/api/v1/hotel/folios/${split.id}/payments`).set(auth(token)).send({ provider: 'cash', amount: 20 });
+    expect((await request(app).post(`/api/v1/hotel/reservations/${resv.id}/checkout`).set(auth(token)).send({})).status).toBe(200);
+  });
+});
+
 afterAll(async () => { await prisma.$disconnect(); });
