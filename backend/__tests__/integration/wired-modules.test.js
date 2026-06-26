@@ -2789,6 +2789,48 @@ describe('diaspora pays the shop — deyn pay-down + closed reconciliation loop'
   });
 });
 
+describe('overdue-deyn WhatsApp reminders with embedded pay-links', () => {
+  test('nudges every debtor with a balance and an actionable pay-link', async () => {
+    const token = await register();
+    await enableModule(token, 'credit');
+    const loc = await location(token);
+    const prod = await stockedProduct(token, loc, 20, 1000);
+
+    // A debtor with a phone (gets a reminder) ...
+    const owing = (await request(app).post('/api/v1/customers').set(auth(token))
+      .send({ name: 'Maryan', phone: '0634777888', credit_limit: 1000 })).body.id;
+    await creditSale(token, loc, prod, owing, { qty: 4, price: 20 }); // 80 owed
+    // ... and one owing but with no phone on file (skipped).
+    const noPhone = (await request(app).post('/api/v1/customers').set(auth(token))
+      .send({ name: 'No Phone', credit_limit: 1000 })).body.id;
+    await creditSale(token, loc, prod, noPhone, { qty: 1, price: 20 }); // 20 owed
+
+    const r = await request(app).post('/api/v1/credit/deyn-reminders').set(auth(token)).send({});
+    expect(r.status).toBe(200);
+    expect(r.body.count).toBe(1);
+    expect(r.body.skipped_no_phone).toBe(1);
+    const rem = r.body.reminders[0];
+    expect(rem.customer_id).toBe(owing);
+    expect(rem.balance).toBeCloseTo(80, 2);
+    expect(rem.wa_url).toContain('wa.me/634777888');
+    expect(rem.payment_url).toContain('/pay/');
+
+    // The embedded link is a real, confirmable diaspora payment.
+    const token2 = rem.payment_url.split('/pay/')[1];
+    const pay = await prisma.diasporaPayment.findFirst({ where: { paymentToken: token2 } });
+    expect(pay).toBeTruthy();
+    expect(parseFloat(pay.amount)).toBeCloseTo(80, 2);
+
+    // Re-running reuses the same open link rather than minting a new one.
+    const r2 = await request(app).post('/api/v1/credit/deyn-reminders').set(auth(token)).send({});
+    expect(r2.body.reminders[0].payment_url).toBe(rem.payment_url);
+
+    // The age filter excludes debt younger than the threshold.
+    const r3 = await request(app).post('/api/v1/credit/deyn-reminders').set(auth(token)).send({ older_than_days: 30 });
+    expect(r3.body.count).toBe(0);
+  });
+});
+
 describe('merchant daily cockpit', () => {
   test('assembles money-in, receivables, diaspora incoming, reorder-due and the briefing', async () => {
     const token = await register();
