@@ -492,6 +492,7 @@ model Business {
   receiptFooter String?  @default("Thank you for your business!") @map("receipt_footer")
   taxNumber     String?  @map("tax_number") @db.VarChar(100)
   serviceChargePct Decimal? @map("service_charge_pct") @db.Decimal(6, 4) // accepts 10 or 0.10
+  enforceRxOnSale Boolean @default(false) @map("enforce_rx_on_sale") // pharmacy: block Rx-only drugs at POS without a valid prescription
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @default(now()) @updatedAt @map("updated_at")
 
@@ -2498,7 +2499,10 @@ model Prescription {
   quantity          Int      // quantity per fill (base units)
   refillsAuthorized Int      @default(0) @map("refills_authorized")
   refillsUsed       Int      @default(0) @map("refills_used")
-  daw               Boolean  @default(false) // dispense as written
+  daw               Boolean  @default(false) // dispense as written (no generic substitution)
+  daysSupply        Int?     @map("days_supply") // days one fill should last — gates early refills
+  validUntil        DateTime? @map("valid_until") // Rx expires; dispensing blocked after this
+  allergies         String[] @default([]) // patient allergies — checked against the drug at dispense
   status            String   @default("active") @db.VarChar(20) // active | completed | cancelled
   issuedAt          DateTime @default(now()) @map("issued_at")
   createdById       String?  @map("created_by") @db.Uuid

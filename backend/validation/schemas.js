@@ -671,6 +671,7 @@ const SaleItemSchemaV3 = z.object({
   override_price: money.optional().nullable(),
   notes: optStr(500),
   serial_numbers: z.array(z.string().min(1).max(255)).optional(),
+  prescription_id: uuid.optional().nullable(), // pharmacy: links an Rx-only line to its prescription
 });
 
 const SaleSchemaV3 = z.object({
