@@ -4159,6 +4159,7 @@ model ProjectMilestone {
   status       String    @default("pending") @db.VarChar(20) // pending|in_progress|complete|billed|paid
   completedAt  DateTime? @map("completed_at")
   billedAt     DateTime? @map("billed_at")
+  retentionReleasedAt DateTime? @map("retention_released_at") // held retention collected
   sortOrder    Int       @default(0) @map("sort_order")
 
   project Project @relation("project_milestones", fields: [projectId], references: [id], onDelete: Cascade)
