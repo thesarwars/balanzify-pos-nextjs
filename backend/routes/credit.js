@@ -468,6 +468,100 @@ router.post('/plans/reminders', auth, requireRole('owner', 'manager'), async (re
   } catch (err) { next(err); }
 });
 
+// ── DEYN REMINDERS (running tab, not just installment plans) ──────
+// Chase everyday shop debt over WhatsApp. Unlike /plans/reminders (which only
+// covers formal installment plans), this nudges every customer carrying an
+// outstanding balance — and embeds a pay-link so the reminder is one tap from
+// settlement (the customer forwards it to family abroad, who pays and the
+// merchant confirms). Returns ready-to-send wa.me links; nothing is sent
+// server-side (the merchant taps each, keeping it on their own WhatsApp).
+router.post('/deyn-reminders', auth, requireRole('owner', 'manager'), validate(z.object({
+  min_balance:     money.optional(),       // only customers owing at least this (default 1)
+  older_than_days: z.coerce.number().int().min(0).max(365).default(0), // oldest debt at least this old
+})), async (req, res, next) => {
+  try {
+    const businessId  = req.user.business_id;
+    const minBalance  = req.body.min_balance != null ? parseFloat(req.body.min_balance) : 1;
+    const olderThan   = req.body.older_than_days || 0;
+    const frontendUrl = process.env.FRONTEND_URL || 'https://app.balanzify.com';
+
+    const business = await prisma.business.findUnique({
+      where: { id: businessId }, select: { name: true, currency: true },
+    });
+
+    const debtors = await prisma.customer.findMany({
+      where: { businessId, outstandingBalance: { gte: minBalance } },
+      select: { id: true, name: true, phone: true, whatsapp: true, outstandingBalance: true, diasporaCurrency: true },
+      orderBy: { outstandingBalance: 'desc' }, take: 500,
+    });
+
+    const reminders = [];
+    let skipped_no_phone = 0;
+    for (const c of debtors) {
+      const phone = c.whatsapp || c.phone;
+      if (!phone) { skipped_no_phone++; continue; }
+
+      // Oldest still-open debt — used both for the age filter and the message.
+      const oldestDebit = await prisma.creditLedger.findFirst({
+        where: { businessId, customerId: c.id, direction: 'debit' },
+        orderBy: { createdAt: 'asc' }, select: { createdAt: true },
+      });
+      const owingSince = oldestDebit?.createdAt || null;
+      const ageDays    = owingSince ? Math.floor((Date.now() - new Date(owingSince).getTime()) / 86400000) : 0;
+      if (olderThan > 0 && ageDays < olderThan) continue;
+
+      const balance  = parseFloat(c.outstandingBalance);
+      const currency = c.diasporaCurrency || business?.currency || 'USD';
+
+      // Reuse an open pay-link for this customer, or mint one, so repeated
+      // reminder runs don't pile up tokens.
+      let payment = await prisma.diasporaPayment.findFirst({
+        where: { businessId, customerId: c.id, status: 'pending' },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (!payment) {
+        payment = await prisma.diasporaPayment.create({
+          data: {
+            businessId, customerId: c.id, amount: balance, currency,
+            provider: 'manual', status: 'pending',
+            paymentToken: creditEngine.generatePaymentToken(),
+            notes: `Deyn reminder for ${c.name}`,
+          },
+        });
+      }
+      const paymentUrl = `${frontendUrl}/pay/${payment.paymentToken}`;
+
+      const fmt = (n) => `${currency} ${n.toFixed(2)}`;
+      const sinceLine = owingSince
+        ? `\nOwing since ${new Date(owingSince).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })} (${ageDays} day${ageDays !== 1 ? 's' : ''})`
+        : '';
+      const msg = `📋 *Account reminder — ${business?.name || 'our shop'}*\n\nDear ${c.name},\nYour outstanding balance is *${fmt(balance)}*.${sinceLine}\n\nYou (or family abroad) can pay securely here:\n${paymentUrl}\n\nThank you. — ${business?.name || ''}`;
+
+      const normalizedPhone = phone.replace(/\D/g, '').replace(/^0/, '');
+      await prisma.whatsappLog.create({
+        data: {
+          businessId, recipientPhone: normalizedPhone, messageType: 'deyn_reminder',
+          content: msg, referenceType: 'customer', referenceId: c.id,
+        },
+      });
+
+      reminders.push({
+        customer_id: c.id, customer: c.name, phone: normalizedPhone,
+        balance, currency, owing_since: owingSince, age_days: ageDays,
+        payment_url: paymentUrl,
+        wa_url: `https://wa.me/${normalizedPhone}?text=${encodeURIComponent(msg)}`,
+      });
+    }
+
+    res.json({
+      count: reminders.length,
+      skipped_no_phone,
+      total_outstanding: reminders.reduce((s, r) => s + r.balance, 0),
+      reminders,
+    });
+  } catch (err) { next(err); }
+});
+
 // ── DIASPORA PAYMENT LINKS ────────────────────────────────────────
 
 // POST /api/v1/credit/plans/:id/installments/:iid/diaspora-link
