@@ -1081,9 +1081,9 @@ router.post('/:id/refund', auth, requireRole('owner', 'manager'), validate(Refun
     const sale = await prisma.sale.findUnique({
       where: { id: req.params.id },
       select: {
-        id: true, businessId: true, locationId: true, totalAmount: true,
+        id: true, businessId: true, locationId: true, totalAmount: true, taxAmount: true,
         loyaltyPointsEarned: true, customerId: true,
-        items: { select: { id: true, productId: true, quantity: true, unitPrice: true } },
+        items: { select: { id: true, productId: true, quantity: true, unitPrice: true, costPrice: true } },
       },
     });
     if (!sale || sale.businessId !== req.user.business_id) {
@@ -1119,6 +1119,7 @@ router.post('/:id/refund', auth, requireRole('owner', 'manager'), validate(Refun
         product_id:   si.productId,            // from the sale, not the client
         quantity:     reqItem.quantity,
         unit_price:   parseFloat(si.unitPrice), // original price, not the client's
+        cost_price:   parseFloat(si.costPrice || 0), // FIFO cost captured at sale
         restock:      reqItem.restock !== false,
       });
     }
@@ -1151,7 +1152,10 @@ router.post('/:id/refund', auth, requireRole('owner', 'manager'), validate(Refun
         },
       });
 
-      // Restock + movements
+      // Restock + movements. Returned goods re-enter inventory as a fresh FIFO
+      // cost layer (at the cost they left at), and their COGS is reversed below —
+      // without this the books overstated COGS and understated inventory.
+      let restockCost = 0;
       for (const item of validItems) {
         if (item.restock !== false && sale.locationId) {
           await tx.$executeRaw`
@@ -1172,7 +1176,41 @@ router.post('/:id/refund', auth, requireRole('owner', 'manager'), validate(Refun
               createdById:   req.user.id,
             },
           });
+          if (item.cost_price > 0) {
+            restockCost += item.cost_price * item.quantity;
+            await tx.costLayer.create({
+              data: {
+                businessId: req.user.business_id, productId: item.product_id, locationId: sale.locationId,
+                quantityReceived: item.quantity, quantityRemaining: item.quantity, unitCost: item.cost_price,
+              },
+            });
+          }
         }
+      }
+
+      // GL: a refund is a sale reversal. Money goes back to the customer
+      // (reversing revenue + its tax share), and any restocked goods reverse COGS.
+      const saleTotalAmt = parseFloat(sale.totalAmount) || 0;
+      const taxPortion = saleTotalAmt > 0 ? +(totalRefunded * (parseFloat(sale.taxAmount || 0) / saleTotalAmt)).toFixed(2) : 0;
+      const revenuePortion = +(totalRefunded - taxPortion).toFixed(2);
+      await accounting.postJournal(tx, {
+        businessId: req.user.business_id, description: `Refund — ${refundRecord.refundNumber}`,
+        sourceType: 'sale_refund', sourceId: refundRecord.id, createdById: req.user.id,
+        lines: [
+          { code: '4000', debit: revenuePortion, credit: 0, description: 'Sales return' },
+          { code: '2100', debit: taxPortion,     credit: 0, description: 'Tax reversed' },
+          { code: accounting.tenderAccountCode(refund_method || 'cash'), debit: 0, credit: totalRefunded, description: 'Refund paid out' },
+        ],
+      });
+      if (restockCost > 0) {
+        await accounting.postJournal(tx, {
+          businessId: req.user.business_id, description: `Refund restock — ${refundRecord.refundNumber}`,
+          sourceType: 'sale_refund_cogs', sourceId: refundRecord.id, createdById: req.user.id,
+          lines: [
+            { code: '1200', debit: +restockCost.toFixed(2), credit: 0, description: 'Inventory restocked' },
+            { code: '5000', debit: 0, credit: +restockCost.toFixed(2), description: 'COGS reversed' },
+          ],
+        });
       }
 
       // Reverse loyalty points earned on this sale

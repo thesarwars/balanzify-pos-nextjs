@@ -167,6 +167,13 @@ router.put('/:id/status', auth, requireRole('owner', 'manager'), validate(POStat
         let receivedValue = 0;
         const itemsById = new Map(po.items.map((i) => [i.id, i]));
 
+        // Landed cost: spread freight + customs + other charges across every unit
+        // in proportion to its value, so the cost layers (and therefore COGS and
+        // margins) reflect the true landed cost — not just the supplier price.
+        const totalLanded = parseFloat(po.freightCost || 0) + parseFloat(po.customsDuty || 0) + parseFloat(po.otherCharges || 0);
+        const poSubtotal  = parseFloat(po.subtotal || 0);
+        const landedFactor = poSubtotal > 0 ? totalLanded / poSubtotal : 0;
+
         for (const ri of received_items) {
           if (!ri.qty || ri.qty <= 0) continue;
 
@@ -184,7 +191,9 @@ router.put('/:id/status', auth, requireRole('owner', 'manager'), validate(POStat
             );
           }
 
-          const lineUnitCost = parseFloat(ri.unit_price ?? orderLine.unitPrice ?? 0);
+          const baseUnitCost = parseFloat(ri.unit_price ?? orderLine.unitPrice ?? 0);
+          // Capitalise this unit's share of the landed charges into its cost.
+          const lineUnitCost = +(baseUnitCost * (1 + landedFactor)).toFixed(4);
           receivedValue += lineUnitCost * ri.qty;
 
           await tx.purchaseOrderItem.update({
@@ -215,11 +224,11 @@ router.put('/:id/status', auth, requireRole('owner', 'manager'), validate(POStat
               },
             });
 
-            // Update cost price on product
+            // Update cost price on product to the landed unit cost.
             if (ri.unit_price) {
               await tx.product.update({
                 where: { id: ri.product_id },
-                data: { costPrice: ri.unit_price },
+                data: { costPrice: lineUnitCost },
               });
             }
 
