@@ -4005,6 +4005,9 @@ model HotelSettings {
   autoPostRoomCharges   Boolean  @default(true) @map("auto_post_room_charges")
   requireDepositOnBook  Boolean  @default(false) @map("require_deposit_on_book")
   allowOverbooking      Boolean  @default(false) @map("allow_overbooking")
+  cancellationDeadlineHours Int  @default(24) @map("cancellation_deadline_hours") // free-cancel window before check-in
+  cancellationFeePct    Decimal? @map("cancellation_fee_pct") @db.Decimal(6, 4) // charged on late cancel (fraction of stay)
+  noShowFeePct          Decimal? @map("no_show_fee_pct") @db.Decimal(6, 4) // charged on no-show (fraction of stay)
   wifiPassword          String?  @map("wifi_password") @db.VarChar(100)
   checkInWelcomeMsg     String?  @map("check_in_welcome_msg") @db.Text
   checkOutThankYouMsg   String?  @map("check_out_thank_you_msg") @db.Text
