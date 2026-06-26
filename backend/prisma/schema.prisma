@@ -1119,7 +1119,8 @@ model PriceGroup {
   isDefault  Boolean  @default(false) @map("is_default")
   createdAt  DateTime @default(now()) @map("created_at")
 
-  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  business  Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customers Customer[]
 
   @@unique([businessId, name])
   @@map("price_groups")
@@ -1771,6 +1772,8 @@ model Customer {
   loyaltyPoints      Int      @default(0) @map("loyalty_points")
   segment            String?  @db.VarChar(50)
   customerGroupId    String?  @map("customer_group_id") @db.Uuid
+  priceGroupId       String?  @map("price_group_id") @db.Uuid // wholesale per-customer pricing tier
+  wholesaleTermsDays Int      @default(0) @map("wholesale_terms_days") // 0 = due on delivery (COD)
   whatsappOptedIn    Boolean  @default(true) @map("whatsapp_opted_in")
   diasporaCurrency   String   @default("USD") @map("diaspora_currency") @db.VarChar(3)
   notes              String?
@@ -1780,6 +1783,7 @@ model Customer {
 
   business         Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
   customerGroup    CustomerGroup?    @relation(fields: [customerGroupId], references: [id])
+  priceGroup       PriceGroup?       @relation(fields: [priceGroupId], references: [id])
   sales            Sale[]
   loyaltyLedger    LoyaltyLedger[]
   reservations     Reservation[]
@@ -4037,6 +4041,7 @@ model WholesaleOrder {
   deliveryNotes String?  @map("delivery_notes")
   pickedAt      DateTime? @map("picked_at")
   deliveredAt   DateTime? @map("delivered_at")
+  dueDate       DateTime? @map("due_date") // payment due date (set on delivery from the customer's terms)
   createdById   String?  @map("created_by") @db.Uuid
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @default(now()) @updatedAt @map("updated_at")

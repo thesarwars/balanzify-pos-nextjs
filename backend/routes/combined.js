@@ -1083,7 +1083,7 @@ customersRouter.get('/', auth, async (req, res, next) => {
 
 customersRouter.post('/', auth, validate(CustomerSchema), async (req, res, next) => {
   try {
-    const customer = await prisma.customer.create({ data: { businessId: req.user.business_id, name: req.body.name, phone: req.body.phone, whatsapp: req.body.whatsapp, email: req.body.email, address: req.body.address, creditLimit: req.body.credit_limit || 0, customerGroupId: req.body.customer_group_id || null, notes: req.body.notes } });
+    const customer = await prisma.customer.create({ data: { businessId: req.user.business_id, name: req.body.name, phone: req.body.phone, whatsapp: req.body.whatsapp, email: req.body.email, address: req.body.address, creditLimit: req.body.credit_limit || 0, customerGroupId: req.body.customer_group_id || null, priceGroupId: req.body.price_group_id || null, ...(req.body.wholesale_terms_days !== undefined && { wholesaleTermsDays: req.body.wholesale_terms_days }), notes: req.body.notes } });
     res.status(201).json(customer);
   } catch (err) { next(err); }
 });
@@ -1093,7 +1093,7 @@ customersRouter.put('/:id', auth, validate(CustomerSchema.partial()), async (req
     // Tenant isolation: scope the update to the caller's business.
     const result = await prisma.customer.updateMany({
       where: { id: req.params.id, businessId: req.user.business_id },
-      data: { name: req.body.name, phone: req.body.phone, whatsapp: req.body.whatsapp, email: req.body.email, address: req.body.address, creditLimit: req.body.credit_limit, customerGroupId: req.body.customer_group_id, notes: req.body.notes },
+      data: { name: req.body.name, phone: req.body.phone, whatsapp: req.body.whatsapp, email: req.body.email, address: req.body.address, creditLimit: req.body.credit_limit, customerGroupId: req.body.customer_group_id, ...(req.body.price_group_id !== undefined && { priceGroupId: req.body.price_group_id }), ...(req.body.wholesale_terms_days !== undefined && { wholesaleTermsDays: req.body.wholesale_terms_days }), notes: req.body.notes },
     });
     if (result.count === 0) return res.status(404).json({ title: 'Customer not found', status: 404 });
     const customer = await prisma.customer.findUnique({ where: { id: req.params.id } });
