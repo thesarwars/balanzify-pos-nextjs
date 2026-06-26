@@ -2670,4 +2670,28 @@ describe('AI insights — deployable deterministic fallback (no LLM key)', () =>
   });
 });
 
+describe('risk / anomaly detection (rule-based)', () => {
+  let token, loc, prod;
+  beforeAll(async () => {
+    token = await register();
+    loc = await location(token);
+    prod = await stockedProduct(token, loc, 10, 2000);
+    // Five normal sales (basket 20), one unusually large (300), one heavily discounted.
+    for (let i = 0; i < 5; i++) await makeSale(token, loc, prod, { qty: 2, price: 10 });
+    await makeSale(token, loc, prod, { qty: 1, price: 300 });             // large_sale
+    await makeSale(token, loc, prod, { qty: 2, price: 10, discount: 12 }); // 60% off → high_discount
+  });
+
+  test('flags the outlier sale and the heavy discount against the median baseline', async () => {
+    const r = await request(app).get('/api/v1/risk/anomalies').set(auth(token)).query({ days: 30 });
+    expect(r.status).toBe(200);
+    expect(r.body.baseline.median_ticket).toBeCloseTo(20, 2);
+    const large = r.body.anomalies.find(a => a.type === 'large_sale');
+    const disc = r.body.anomalies.find(a => a.type === 'high_discount');
+    expect(large).toBeTruthy();
+    expect(large.amount).toBeCloseTo(300, 2);
+    expect(disc).toBeTruthy();
+  });
+});
+
 afterAll(async () => { await prisma.$disconnect(); });
