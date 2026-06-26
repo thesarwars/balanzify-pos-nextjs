@@ -699,14 +699,15 @@ router.post('/reservations/:id/checkout', auth, validate(z.object({
     // settling. Service charge applies to the running charges; tax applies to
     // charges + service charge. Both are skipped if already posted (idempotent).
     const settings = await prisma.hotelSettings.findUnique({ where: { businessId: req.user.business_id } });
-    const asFraction = (v) => { const n = parseFloat(v || 0); return n > 1 ? n / 100 : n; }; // accept 5 or 0.05
-    const scPct  = asFraction(settings?.serviceChargePct);
-    const taxPct = asFraction(settings?.taxRate);
+    const scPct   = asFraction(settings?.serviceChargePct);
+    const taxPct  = asFraction(settings?.taxRate);
+    const levyPct = asFraction(settings?.tourismLevyPct);
     const alreadyPosted = (folio.charges || []).some(c => c.type === 'service_charge' || c.type === 'tax');
-    if (!alreadyPosted && (scPct > 0 || taxPct > 0)) {
+    if (!alreadyPosted && (scPct > 0 || taxPct > 0 || levyPct > 0)) {
       const base = (folio.charges || []).reduce((s, c) => s + parseFloat(c.totalAmount), 0);
       const serviceCharge = parseFloat((base * scPct).toFixed(2));
-      const tax = parseFloat(((base + serviceCharge) * taxPct).toFixed(2));
+      const tax  = parseFloat(((base + serviceCharge) * taxPct).toFixed(2));
+      const levy = parseFloat((base * levyPct).toFixed(2)); // tourism levy is on room/services, not on tax
       await prisma.$transaction(async (tx) => {
         if (serviceCharge > 0) {
           await tx.folioCharge.create({ data: {
@@ -724,13 +725,21 @@ router.post('/reservations/:id/checkout', auth, validate(z.object({
           } });
           await accounting.postFolioCharge(tx, { businessId: req.user.business_id, type: 'tax', amount: tax, description: 'Tax', sourceId: folio.id, createdById: req.user.id });
         }
-        const added = serviceCharge + tax;
+        if (levy > 0) {
+          await tx.folioCharge.create({ data: {
+            folioId: folio.id, businessId: req.user.business_id, type: 'tax',
+            description: `Tourism levy (${(levyPct * 100).toFixed(1)}%)`, quantity: 1,
+            unitAmount: levy, totalAmount: levy, currency: folio.currency, chargeDate: new Date(),
+          } });
+          await accounting.postFolioCharge(tx, { businessId: req.user.business_id, type: 'tax', amount: levy, description: 'Tourism levy', sourceId: folio.id, createdById: req.user.id });
+        }
+        const added = serviceCharge + tax + levy;
         if (added > 0) {
           await tx.folio.update({ where: { id: folio.id }, data: { totalCharges: { increment: added }, balance: { increment: added } } });
         }
       });
       // Reflect the newly-posted charges in the balance we evaluate below.
-      folio.balance = parseFloat(folio.balance) + serviceCharge + tax;
+      folio.balance = parseFloat(folio.balance) + serviceCharge + tax + levy;
     }
 
     let balance = parseFloat(folio.balance);
@@ -757,6 +766,19 @@ router.post('/reservations/:id/checkout', auth, validate(z.object({
       });
       cityLedger = { account_id: account.id, company: account.companyName, transferred };
       balance = 0;
+    }
+
+    // Split folios for this reservation must also be settled before checkout.
+    const splitFolios = await prisma.folio.findMany({
+      where: { businessId: req.user.business_id, splitFromReservationId: req.params.id, balance: { gt: 0 } },
+      select: { id: true, folioNumber: true, balance: true },
+    });
+    if (splitFolios.length && !req.body.force_checkout) {
+      return res.status(400).json({
+        error: `${splitFolios.length} split folio(s) still carry a balance; settle them before checkout.`,
+        split_folios: splitFolios.map(f => ({ id: f.id, folio_number: f.folioNumber, balance: parseFloat(f.balance) })),
+        code: 'SPLIT_FOLIO_OUTSTANDING',
+      });
     }
 
     // Check balance — can't check out with unpaid balance unless explicitly overriding
@@ -849,6 +871,66 @@ router.post('/reservations/:id/no-show', auth, requireRole('owner', 'manager'), 
     });
 
     res.json({ message: 'Reservation marked no-show.', ...result });
+  } catch (err) { next(err); }
+});
+
+// ── SPLIT FOLIOS ──────────────────────────────────────────────────
+// A stay can carry more than one bill (e.g. the company pays the room, the
+// guest pays incidentals). The primary folio is created at check-in; extra
+// "split" folios hang off the same reservation and settle independently.
+
+// List every folio for a reservation (primary + splits).
+router.get('/reservations/:id/folios', auth, async (req, res, next) => {
+  try {
+    const reservation = await prisma.reservation.findFirst({ where: { id: req.params.id, businessId: req.user.business_id }, select: { id: true, guestId: true } });
+    if (!reservation) return res.status(404).json({ error: 'Reservation not found.' });
+    const folios = await prisma.folio.findMany({
+      where: { businessId: req.user.business_id, OR: [{ reservationId: req.params.id }, { splitFromReservationId: req.params.id }] },
+      include: { charges: { where: { isVoid: false } }, payments: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    res.json({ folios: folios.map(f => ({ ...f, is_primary: f.reservationId === req.params.id })) });
+  } catch (err) { next(err); }
+});
+
+// Open an additional (split) folio for a reservation.
+router.post('/reservations/:id/folios', auth, async (req, res, next) => {
+  try {
+    const reservation = await prisma.reservation.findFirst({ where: { id: req.params.id, businessId: req.user.business_id }, select: { id: true, guestId: true, currency: true } });
+    if (!reservation) return res.status(404).json({ error: 'Reservation not found.' });
+    const folio = await prisma.folio.create({
+      data: {
+        businessId: req.user.business_id, folioNumber: folioNumber(),
+        splitFromReservationId: reservation.id, guestId: reservation.guestId, currency: reservation.currency,
+        notes: req.body.notes || 'Split folio',
+      },
+    });
+    res.status(201).json(folio);
+  } catch (err) { next(err); }
+});
+
+// Move a charge from one folio to another (splitting the bill). Pure sub-ledger
+// reallocation: both folios post to the same AR, so the GL is unchanged.
+router.post('/folios/:id/charges/:cid/move', auth, requireRole('owner', 'manager'), validate(z.object({
+  to_folio_id: uuid,
+})), async (req, res, next) => {
+  try {
+    const [from, to, charge] = await Promise.all([
+      prisma.folio.findFirst({ where: { id: req.params.id, businessId: req.user.business_id } }),
+      prisma.folio.findFirst({ where: { id: req.body.to_folio_id, businessId: req.user.business_id } }),
+      prisma.folioCharge.findFirst({ where: { id: req.params.cid, folioId: req.params.id, isVoid: false } }),
+    ]);
+    if (!from || !to) return res.status(404).json({ error: 'Folio not found.' });
+    if (!charge) return res.status(404).json({ error: 'Charge not found on this folio.' });
+    if (from.id === to.id) return res.status(400).json({ error: 'Source and destination folios are the same.' });
+
+    const amount = parseFloat(charge.totalAmount);
+    await prisma.$transaction(async (tx) => {
+      await tx.folioCharge.update({ where: { id: charge.id }, data: { folioId: to.id } });
+      await tx.folio.update({ where: { id: from.id }, data: { totalCharges: { decrement: amount }, balance: { decrement: amount } } });
+      await tx.folio.update({ where: { id: to.id },   data: { totalCharges: { increment: amount }, balance: { increment: amount } } });
+    });
+    res.json({ message: 'Charge moved.', charge_id: charge.id, amount, from_folio: from.id, to_folio: to.id });
   } catch (err) { next(err); }
 });
 
@@ -1664,6 +1746,7 @@ router.put('/settings', auth, requireRole('owner'), validate(z.object({
   currency:             z.string().length(3).optional(),
   taxRate:              z.coerce.number().min(0).max(1).optional().nullable(),
   serviceChargePct:     z.coerce.number().min(0).max(1).optional().nullable(),
+  tourismLevyPct:       z.coerce.number().min(0).max(1).optional().nullable(),
   depositPct:           z.coerce.number().min(0).max(1).optional().nullable(),
   nightAuditTime:       z.string().regex(/^\d{2}:\d{2}$/).optional(),
   autoPostRoomCharges:  z.boolean().optional(),
