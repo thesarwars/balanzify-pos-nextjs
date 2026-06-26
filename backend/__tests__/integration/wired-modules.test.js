@@ -3403,4 +3403,51 @@ describe('wholesale completeness — price tiers, credit limit, AR aging', () =>
   });
 });
 
+describe('construction completeness — labour-to-GL & retention release', () => {
+  async function consBiz() {
+    const t = await register(); await enableModule(t, 'construction');
+    const p = (await request(app).post('/api/v1/projects').set(auth(t)).send({ name: 'Site', budget: 5000, status: 'active' })).body;
+    const bizId = (await prisma.project.findUnique({ where: { id: p.id } })).businessId;
+    return { t, pid: p.id, bizId };
+  }
+  const setStatus = (t, msId, body) => request(app).put(`/api/v1/construction/milestones/${msId}/status`).set(auth(t)).send(body);
+
+  test('logging site labour books a wage expense to the GL', async () => {
+    const { t, pid, bizId } = await consBiz();
+    const lab = await request(app).post(`/api/v1/construction/${pid}/labor`).set(auth(t)).send({ work_date: '2026-07-02', workers: 4, daily_rate: 25 }); // 100
+    expect(lab.status).toBe(201);
+
+    const bal = await accounting.accountBalances(bizId);
+    const at = (c) => (bal.find(a => a.code === c) || { balance: 0 }).balance;
+    expect(at('5100')).toBeCloseTo(100, 2);   // Salaries & Wages expense booked
+    const je = await prisma.journalEntry.findFirst({ where: { businessId: bizId, sourceType: 'construction_labor' } });
+    expect(je).toBeTruthy();
+  });
+
+  test('retention is released after billing, clearing the held receivable', async () => {
+    const { t, pid, bizId } = await consBiz();
+    const ms = (await request(app).post(`/api/v1/construction/${pid}/milestones`).set(auth(t)).send({ name: 'Phase 1', amount: 1000, retention_pct: 10 })).body;
+
+    // Can't release before the milestone is billed.
+    expect((await request(app).post(`/api/v1/construction/milestones/${ms.id}/release-retention`).set(auth(t)).send({})).status).toBe(422);
+
+    await setStatus(t, ms.id, { status: 'complete' });
+    await setStatus(t, ms.id, { status: 'billed' });
+    await setStatus(t, ms.id, { status: 'paid', method: 'cash' });
+
+    let bal = await accounting.accountBalances(bizId);
+    const at = (c) => (bal.find(a => a.code === c) || { balance: 0 }).balance;
+    expect(at('1120')).toBeCloseTo(100, 2); // 10% of 1000 held as retention
+
+    const rel = await request(app).post(`/api/v1/construction/milestones/${ms.id}/release-retention`).set(auth(t)).send({ method: 'cash' });
+    expect(rel.status).toBe(200);
+    expect(rel.body.retention).toBeCloseTo(100, 2);
+    bal = await accounting.accountBalances(bizId);
+    expect(at('1120')).toBeCloseTo(0, 2); // retention cleared
+
+    // Idempotent — a second release is rejected.
+    expect((await request(app).post(`/api/v1/construction/milestones/${ms.id}/release-retention`).set(auth(t)).send({})).status).toBe(400);
+  });
+});
+
 afterAll(async () => { await prisma.$disconnect(); });
