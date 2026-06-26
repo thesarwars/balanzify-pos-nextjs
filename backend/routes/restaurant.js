@@ -558,12 +558,28 @@ router.post('/orders/:id/items', auth, validate(z.object({
     // Resolve modifier options and total price adjustment
     let modifierTotal = 0;
     const modifierData = [];
+    const pickedByGroup = {}; // groupId -> count selected
     for (const mod of modifiers) {
-      const option = await prisma.modifierOption.findUnique({ where: { id: mod.optionId }, select: { name: true, priceAdjustment: true } });
+      const option = await prisma.modifierOption.findUnique({ where: { id: mod.optionId }, select: { name: true, priceAdjustment: true, groupId: true } });
       if (option) {
         modifierTotal += parseFloat(option.priceAdjustment);
         modifierData.push({ optionId: mod.optionId, name: option.name, priceAdjustment: option.priceAdjustment });
+        pickedByGroup[option.groupId] = (pickedByGroup[option.groupId] || 0) + 1;
       }
+    }
+
+    // Enforce the product's modifier rules — required groups must be satisfied,
+    // and no group may exceed its max (e.g. "pick a size" can't be skipped).
+    const productGroups = await prisma.productModifierGroup.findMany({
+      where: { productId },
+      include: { group: { select: { id: true, name: true, isRequired: true, minSelect: true, maxSelect: true, isActive: true } } },
+    });
+    for (const { group: g } of productGroups) {
+      if (!g.isActive) continue;
+      const picked = pickedByGroup[g.id] || 0;
+      const min = g.isRequired ? Math.max(1, g.minSelect) : g.minSelect;
+      if (picked < min) return res.status(400).json({ error: `"${g.name}" requires at least ${min} selection(s).`, code: 'MODIFIER_REQUIRED', group: g.name });
+      if (g.maxSelect && picked > g.maxSelect) return res.status(400).json({ error: `"${g.name}" allows at most ${g.maxSelect} selection(s).`, code: 'MODIFIER_MAX', group: g.name });
     }
 
     const lineTotal = (unitPrice + modifierTotal) * quantity;
@@ -1277,6 +1293,29 @@ router.post('/orders/:id/items/:itemId/void', auth, requireRole('owner', 'manage
   } catch (err) { next(err); }
 });
 
+// Comp an item — given away on purpose (not an error), tracked by reason for
+// cost control. Distinct from a void: it still reduces the bill but is reported
+// separately under its reason category.
+router.post('/orders/:id/items/:itemId/comp', auth, requireRole('owner', 'manager'), validate(z.object({
+  reason: z.enum(['waste', 'sample', 'staff_meal', 'service_recovery', 'error', 'promotion', 'other']),
+})), async (req, res, next) => {
+  try {
+    const item = await prisma.orderItem.findFirst({ where: { id: req.params.itemId, orderId: req.params.id } });
+    if (!item) return res.status(404).json({ error: 'Item not found.' });
+    if (['void', 'comp'].includes(item.status)) return res.status(400).json({ error: `Item already ${item.status}.` });
+
+    await prisma.$transaction(async (tx) => {
+      await tx.orderItem.update({ where: { id: item.id }, data: { status: 'comp', compReason: req.body.reason } });
+      await tx.restaurantOrder.update({
+        where: { id: req.params.id },
+        data: { subtotal: { decrement: parseFloat(item.lineTotal) }, totalAmount: { decrement: parseFloat(item.lineTotal) } },
+      });
+    });
+
+    res.json({ message: 'Item comped.', amount_removed: parseFloat(item.lineTotal), reason: req.body.reason });
+  } catch (err) { next(err); }
+});
+
 // ── FIRE COURSE ───────────────────────────────────────────────────
 // Send a specific course to kitchen now (e.g. "fire mains")
 
@@ -1568,6 +1607,118 @@ router.get('/reports/revenue', auth, async (req, res, next) => {
       avg_kitchen_minutes: parseFloat(kitchenTimes[0]?.avg_minutes || 0),
       total_revenue: revenueByType.reduce((s, r) => s + parseFloat(r._sum.totalAmount || 0), 0),
       total_orders:  revenueByType.reduce((s, r) => s + r._count.id, 0),
+    });
+  } catch (err) { next(err); }
+});
+
+// ── COMPS & VOIDS REPORT ──────────────────────────────────────────
+// Cost-control view: every comped/voided line over the period, with comps
+// broken down by reason. The leakage a manager needs to watch.
+router.get('/reports/comps', auth, async (req, res, next) => {
+  try {
+    const bizId = req.user.business_id;
+    const from = req.query.from ? new Date(req.query.from) : new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+    const to   = req.query.to   ? new Date(req.query.to)   : new Date();
+    const toEnd = new Date(to); toEnd.setHours(23, 59, 59, 999);
+
+    const items = await prisma.orderItem.findMany({
+      where: { status: { in: ['void', 'comp'] }, order: { businessId: bizId, createdAt: { gte: from, lte: toEnd } } },
+      include: { product: { select: { name: true } }, order: { select: { orderNumber: true, createdAt: true } } },
+      orderBy: { createdAt: 'desc' }, take: 1000,
+    });
+    const comps = items.filter(i => i.status === 'comp');
+    const voids = items.filter(i => i.status === 'void');
+    const byReason = {};
+    for (const c of comps) {
+      const r = c.compReason || 'other';
+      byReason[r] = byReason[r] || { count: 0, amount: 0 };
+      byReason[r].count += 1; byReason[r].amount = +(byReason[r].amount + parseFloat(c.lineTotal)).toFixed(2);
+    }
+    res.json({
+      period: { from: from.toISOString().slice(0, 10), to: toEnd.toISOString().slice(0, 10) },
+      comps: { count: comps.length, amount: +comps.reduce((s, i) => s + parseFloat(i.lineTotal), 0).toFixed(2), by_reason: byReason },
+      voids: { count: voids.length, amount: +voids.reduce((s, i) => s + parseFloat(i.lineTotal), 0).toFixed(2) },
+      lines: items.map(i => ({ status: i.status, reason: i.compReason || null, item: i.product.name, amount: parseFloat(i.lineTotal), order: i.order.orderNumber, at: i.createdAt })),
+    });
+  } catch (err) { next(err); }
+});
+
+// ── WAITER PERFORMANCE ────────────────────────────────────────────
+router.get('/reports/by-waiter', auth, async (req, res, next) => {
+  try {
+    const bizId = req.user.business_id;
+    const from = req.query.from ? new Date(req.query.from) : new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+    const to   = req.query.to   ? new Date(req.query.to)   : new Date();
+    const toEnd = new Date(to); toEnd.setHours(23, 59, 59, 999);
+
+    const grouped = await prisma.restaurantOrder.groupBy({
+      by: ['staffId'],
+      where: { businessId: bizId, status: 'completed', completedAt: { gte: from, lte: toEnd } },
+      _sum: { totalAmount: true, covers: true }, _count: { id: true }, _avg: { totalAmount: true },
+    });
+    const users = await prisma.user.findMany({ where: { id: { in: grouped.map(g => g.staffId).filter(Boolean) } }, select: { id: true, name: true } });
+    const nameOf = Object.fromEntries(users.map(u => [u.id, u.name]));
+    res.json({
+      period: { from: from.toISOString().slice(0, 10), to: toEnd.toISOString().slice(0, 10) },
+      waiters: grouped.map(g => ({
+        staff_id: g.staffId, name: nameOf[g.staffId] || 'Unknown',
+        orders: g._count.id, covers: g._sum.covers || 0,
+        revenue: parseFloat(g._sum.totalAmount || 0), avg_ticket: +parseFloat(g._avg.totalAmount || 0).toFixed(2),
+      })).sort((a, b) => b.revenue - a.revenue),
+    });
+  } catch (err) { next(err); }
+});
+
+// ── Z-REPORT (end-of-day close) ───────────────────────────────────
+router.get('/reports/z', auth, async (req, res, next) => {
+  try {
+    const bizId = req.user.business_id;
+    const day = req.query.date ? new Date(req.query.date) : new Date();
+    const dayStart = new Date(day); dayStart.setHours(0, 0, 0, 0);
+    const dayEnd   = new Date(dayStart.getTime() + 86400000);
+
+    const [totals, byType, flagged, completedOrders] = await Promise.all([
+      prisma.restaurantOrder.aggregate({
+        where: { businessId: bizId, status: 'completed', completedAt: { gte: dayStart, lt: dayEnd } },
+        _sum: { totalAmount: true, serviceCharge: true, covers: true }, _count: { id: true },
+      }),
+      prisma.restaurantOrder.groupBy({
+        by: ['type'], where: { businessId: bizId, status: 'completed', completedAt: { gte: dayStart, lt: dayEnd } },
+        _sum: { totalAmount: true }, _count: { id: true },
+      }),
+      prisma.orderItem.findMany({
+        where: { status: { in: ['void', 'comp'] }, order: { businessId: bizId, createdAt: { gte: dayStart, lt: dayEnd } } },
+        select: { status: true, compReason: true, lineTotal: true },
+      }),
+      prisma.restaurantOrder.findMany({
+        where: { businessId: bizId, status: 'completed', completedAt: { gte: dayStart, lt: dayEnd }, saleId: { not: null } },
+        select: { saleId: true },
+      }),
+    ]);
+
+    const voids = flagged.filter(i => i.status === 'void');
+    const comps = flagged.filter(i => i.status === 'comp');
+    const compByReason = {};
+    for (const c of comps) { const r = c.compReason || 'other'; compByReason[r] = +( (compByReason[r] || 0) + parseFloat(c.lineTotal)).toFixed(2); }
+
+    // Tenders from the linked sales (reliable, always present).
+    let tenders = [];
+    const saleIds = completedOrders.map(o => o.saleId).filter(Boolean);
+    if (saleIds.length) {
+      const byMethod = await prisma.sale.groupBy({ by: ['paymentMethod'], where: { id: { in: saleIds } }, _sum: { totalAmount: true }, _count: { id: true } });
+      tenders = byMethod.map(t => ({ method: t.paymentMethod, amount: parseFloat(t._sum.totalAmount || 0), count: t._count.id }));
+    }
+
+    res.json({
+      date: dayStart.toISOString().slice(0, 10),
+      orders_completed: totals._count.id,
+      covers: totals._sum.covers || 0,
+      gross_sales: parseFloat(totals._sum.totalAmount || 0),
+      service_charge: parseFloat(totals._sum.serviceCharge || 0),
+      by_type: byType.map(t => ({ type: t.type, orders: t._count.id, revenue: parseFloat(t._sum.totalAmount || 0) })),
+      voids: { count: voids.length, amount: +voids.reduce((s, i) => s + parseFloat(i.lineTotal), 0).toFixed(2) },
+      comps: { count: comps.length, amount: +comps.reduce((s, i) => s + parseFloat(i.lineTotal), 0).toFixed(2), by_reason: compByReason },
+      tenders,
     });
   } catch (err) { next(err); }
 });

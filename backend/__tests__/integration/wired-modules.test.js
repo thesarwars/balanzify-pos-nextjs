@@ -1653,6 +1653,9 @@ describe('restaurant: seat-level ordering + split bill by seat', () => {
     const oat = milkGroup.options.find(o => o.name === 'Oat Milk');
     expect(Number(oat.priceAdjustment)).toBeCloseTo(0.50, 2);
     const large = groups.find(g => g.name === 'Size').options.find(o => o.name === 'Large');
+    // Temperature is a required group — pick a free option so the price still checks out.
+    const tempOpts = groups.find(g => g.name === 'Temperature').options;
+    const temp = tempOpts.find(o => Number(o.priceAdjustment) === 0) || tempOpts[0];
 
     // Find the Latte and confirm its four modifier groups are wired on.
     const latte = (await request(app).get('/api/v1/products').set(auth(t))).body.products.find(p => p.name === 'Latte');
@@ -1660,9 +1663,10 @@ describe('restaurant: seat-level ordering + split bill by seat', () => {
     expect(attached).toHaveLength(4);
 
     // Ring a Large Oat-milk Latte: 3.00 base + 1.00 (large) + 0.50 (oat) = 4.50.
+    // Size/Milk/Temperature are required groups, so all three must be chosen.
     const order = (await request(app).post('/api/v1/restaurant/orders').set(auth(t)).send({ type: 'takeaway' })).body;
     const add = await request(app).post(`/api/v1/restaurant/orders/${order.id}/items`).set(auth(t))
-      .send({ productId: latte.id, quantity: 1, modifiers: [{ optionId: large.id }, { optionId: oat.id }] });
+      .send({ productId: latte.id, quantity: 1, modifiers: [{ optionId: large.id }, { optionId: oat.id }, { optionId: temp.id }] });
     expect(add.status).toBe(201);
     expect(Number(add.body.lineTotal)).toBeCloseTo(4.50, 2);
   });
@@ -3216,6 +3220,71 @@ describe('hotel completeness — tourism levy & split folios', () => {
     // Settle the split too → checkout succeeds.
     await request(app).post(`/api/v1/hotel/folios/${split.id}/payments`).set(auth(token)).send({ provider: 'cash', amount: 20 });
     expect((await request(app).post(`/api/v1/hotel/reservations/${resv.id}/checkout`).set(auth(token)).send({})).status).toBe(200);
+  });
+});
+
+describe('restaurant completeness — control & reporting', () => {
+  let token, loc, prod, prod2;
+  beforeAll(async () => {
+    token = await register(); await enableModule(token, 'restaurant');
+    loc = await location(token);
+    prod  = await stockedProduct(token, loc, 10, 100); // gets a required modifier
+    prod2 = await stockedProduct(token, loc, 10, 100); // plain, for comp/report tests
+  });
+  const newOrder = (type = 'dine_in') => request(app).post('/api/v1/restaurant/orders').set(auth(token)).send({ type });
+  const addItem = (orderId, body) => request(app).post(`/api/v1/restaurant/orders/${orderId}/items`).set(auth(token)).send(body);
+
+  test('a required modifier group is enforced when adding an item', async () => {
+    const grp = (await request(app).post('/api/v1/restaurant/modifiers').set(auth(token)).send({
+      name: 'Size', isRequired: true, minSelect: 1, maxSelect: 1,
+      options: [{ name: 'Small', priceAdjustment: 0 }, { name: 'Large', priceAdjustment: 1 }],
+    })).body;
+    const small = grp.options.find(o => o.name === 'Small').id;
+    const large = grp.options.find(o => o.name === 'Large').id;
+    await request(app).post(`/api/v1/restaurant/products/${prod}/modifiers`).set(auth(token)).send({ group_id: grp.id });
+    const order = (await newOrder('takeaway')).body;
+
+    const missing = await addItem(order.id, { productId: prod, quantity: 1 });
+    expect(missing.status).toBe(400);
+    expect(missing.body.code).toBe('MODIFIER_REQUIRED');
+
+    expect((await addItem(order.id, { productId: prod, quantity: 1, modifiers: [{ optionId: small }] })).status).toBe(201);
+
+    const tooMany = await addItem(order.id, { productId: prod, quantity: 1, modifiers: [{ optionId: small }, { optionId: large }] });
+    expect(tooMany.status).toBe(400);
+    expect(tooMany.body.code).toBe('MODIFIER_MAX');
+  });
+
+  test('comps are tracked by reason and surfaced in the comps report', async () => {
+    const order = (await newOrder('dine_in')).body;
+    const item = (await addItem(order.id, { productId: prod2, quantity: 2 })).body; // 2 × 10
+    const comp = await request(app).post(`/api/v1/restaurant/orders/${order.id}/items/${item.id}/comp`).set(auth(token)).send({ reason: 'service_recovery' });
+    expect(comp.status).toBe(200);
+    expect(comp.body.amount_removed).toBeCloseTo(20, 2);
+    expect(Number((await prisma.restaurantOrder.findUnique({ where: { id: order.id } })).totalAmount)).toBeCloseTo(0, 2);
+
+    const rep = await request(app).get('/api/v1/restaurant/reports/comps').set(auth(token));
+    expect(rep.status).toBe(200);
+    expect(rep.body.comps.count).toBeGreaterThanOrEqual(1);
+    expect(rep.body.comps.by_reason.service_recovery.amount).toBeCloseTo(20, 2);
+  });
+
+  test('Z-report and waiter report summarise the day', async () => {
+    const order = (await newOrder('takeaway')).body;
+    await addItem(order.id, { productId: prod2, quantity: 3 }); // 30
+    expect((await request(app).post(`/api/v1/restaurant/orders/${order.id}/checkout`).set(auth(token)).send({ payment_method: 'cash', cash_tendered: 100 })).status).toBe(200);
+
+    const today = new Date().toISOString().slice(0, 10);
+    const z = await request(app).get('/api/v1/restaurant/reports/z').set(auth(token)).query({ date: today });
+    expect(z.status).toBe(200);
+    expect(z.body.orders_completed).toBeGreaterThanOrEqual(1);
+    expect(z.body.gross_sales).toBeGreaterThanOrEqual(30);
+    expect(z.body.tenders.find(t => t.method === 'cash')).toBeTruthy();
+
+    const w = await request(app).get('/api/v1/restaurant/reports/by-waiter').set(auth(token));
+    expect(w.status).toBe(200);
+    expect(w.body.waiters.length).toBeGreaterThanOrEqual(1);
+    expect(w.body.waiters[0].revenue).toBeGreaterThan(0);
   });
 });
 
