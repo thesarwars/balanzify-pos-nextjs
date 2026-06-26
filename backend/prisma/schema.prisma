@@ -539,6 +539,7 @@ model Business {
   accounts           Account[]
   journalEntries     JournalEntry[]
   prescriptions      Prescription[]
+  prescriptionGroups PrescriptionGroup[]
   dispenseRecords    DispenseRecord[]
   financingAdvances  FinancingAdvance[]
   eightySixes        EightySix[]
@@ -2485,9 +2486,34 @@ model RecipeItem {
 }
 
 // ── Pharmacy: prescriptions + dispensing (regulatory record) ────────────────
+// A multi-drug prescription (a real script: e.g. antibiotic + antacid). Groups
+// several independent drug lines — each a full Prescription with its own
+// quantity, refills, DAW and dispensing — under one patient/prescriber header.
+model PrescriptionGroup {
+  id             String   @id @default(uuid()) @db.Uuid
+  businessId     String   @map("business_id") @db.Uuid
+  groupNumber    String   @map("group_number") @db.VarChar(40)
+  patientId      String?  @map("patient_id") @db.Uuid
+  patientName    String   @map("patient_name") @db.VarChar(255)
+  patientPhone   String?  @map("patient_phone") @db.VarChar(50)
+  prescriberName String   @map("prescriber_name") @db.VarChar(255)
+  prescriberReg  String?  @map("prescriber_reg") @db.VarChar(100)
+  allergies      String[] @default([])
+  notes          String?
+  issuedAt       DateTime @default(now()) @map("issued_at")
+  createdById    String?  @map("created_by") @db.Uuid
+
+  business Business       @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  items    Prescription[]
+
+  @@index([businessId])
+  @@map("prescription_groups")
+}
+
 model Prescription {
   id                String   @id @default(uuid()) @db.Uuid
   businessId        String   @map("business_id") @db.Uuid
+  groupId           String?  @map("group_id") @db.Uuid // set when part of a multi-drug script
   rxNumber          String   @map("rx_number") @db.VarChar(40)
   productId         String   @map("product_id") @db.Uuid
   patientId         String?  @map("patient_id") @db.Uuid
@@ -2507,12 +2533,14 @@ model Prescription {
   issuedAt          DateTime @default(now()) @map("issued_at")
   createdById       String?  @map("created_by") @db.Uuid
 
-  business  Business         @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  product   Product          @relation("prescription_drug", fields: [productId], references: [id])
-  patient   Customer?        @relation(fields: [patientId], references: [id])
+  business  Business           @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  group     PrescriptionGroup? @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  product   Product            @relation("prescription_drug", fields: [productId], references: [id])
+  patient   Customer?          @relation(fields: [patientId], references: [id])
   dispenses DispenseRecord[]
 
   @@index([businessId])
+  @@index([groupId])
   @@map("prescriptions")
 }
 

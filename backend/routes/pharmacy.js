@@ -500,6 +500,85 @@ router.post('/prescriptions', auth, requireRole('owner', 'manager'), validate(z.
   } catch (err) { next(err); }
 });
 
+// Multi-drug prescription (a real script). Creates one group header plus an
+// independent Prescription line per drug — each keeps its own quantity, refills,
+// SIG, DAW and dispensing, and inherits the shared patient/prescriber/allergies/
+// validity. Dispense each line via the existing /prescriptions/:id/dispense.
+router.post('/prescriptions/group', auth, requireRole('owner', 'manager'), validate(z.object({
+  patient_id:      uuid.optional().nullable(),
+  patient_name:    z.string().trim().min(1).max(255),
+  patient_phone:   z.string().max(50).optional().nullable(),
+  prescriber_name: z.string().trim().min(1).max(255),
+  prescriber_reg:  z.string().max(100).optional().nullable(),
+  allergies:       z.array(z.string().trim().min(1).max(100)).max(50).default([]),
+  valid_days:      z.coerce.number().int().positive().max(730).default(180),
+  notes:           z.string().max(1000).optional().nullable(),
+  items: z.array(z.object({
+    product_id:         uuid,
+    quantity:           z.coerce.number().int().positive(),
+    sig:                z.string().max(500).optional().nullable(),
+    daw:                z.boolean().default(false),
+    days_supply:        z.coerce.number().int().positive().max(365).optional().nullable(),
+    refills_authorized: z.coerce.number().int().min(0).max(12).default(0),
+  })).min(1).max(25),
+})), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const b = req.body;
+    const productIds = [...new Set(b.items.map(i => i.product_id))];
+    const found = await prisma.product.findMany({ where: { id: { in: productIds }, businessId }, select: { id: true } });
+    if (found.length !== productIds.length) return res.status(404).json({ error: 'One or more drugs not found.' });
+
+    const validUntil = new Date(Date.now() + b.valid_days * 86400000);
+    const stamp = Date.now();
+    const out = await prisma.$transaction(async (tx) => {
+      const group = await tx.prescriptionGroup.create({
+        data: {
+          businessId, groupNumber: `RXG-${stamp}`,
+          patientId: b.patient_id || null, patientName: b.patient_name, patientPhone: b.patient_phone || null,
+          prescriberName: b.prescriber_name, prescriberReg: b.prescriber_reg || null,
+          allergies: b.allergies, notes: b.notes || null, createdById: req.user.id,
+        },
+      });
+      const items = [];
+      for (let i = 0; i < b.items.length; i++) {
+        const it = b.items[i];
+        const rx = await tx.prescription.create({
+          data: {
+            businessId, groupId: group.id, rxNumber: `RX-${stamp}-${i + 1}`, productId: it.product_id,
+            patientId: b.patient_id || null, patientName: b.patient_name, patientPhone: b.patient_phone || null,
+            prescriberName: b.prescriber_name, prescriberReg: b.prescriber_reg || null, sig: it.sig || null,
+            quantity: it.quantity, refillsAuthorized: it.refills_authorized, daw: it.daw,
+            daysSupply: it.days_supply || null, validUntil, allergies: b.allergies, createdById: req.user.id,
+          },
+        });
+        items.push({ ...rx, refills_remaining: 1 + rx.refillsAuthorized });
+      }
+      return { group, items };
+    });
+    res.status(201).json({ ...out.group, items: out.items });
+  } catch (err) { next(err); }
+});
+
+router.get('/prescriptions/group/:id', auth, async (req, res, next) => {
+  try {
+    const group = await prisma.prescriptionGroup.findFirst({
+      where: { id: req.params.id, businessId: req.user.business_id },
+      include: {
+        items: {
+          include: { product: { select: { name: true, genericName: true, controlledSchedule: true } }, _count: { select: { dispenses: true } } },
+          orderBy: { rxNumber: 'asc' },
+        },
+      },
+    });
+    if (!group) return res.status(404).json({ error: 'Prescription group not found.' });
+    res.json({
+      ...group,
+      items: group.items.map(rx => ({ ...rx, refills_remaining: Math.max(0, 1 + rx.refillsAuthorized - rx.refillsUsed) })),
+    });
+  } catch (err) { next(err); }
+});
+
 router.get('/prescriptions', auth, async (req, res, next) => {
   try {
     const list = await prisma.prescription.findMany({
