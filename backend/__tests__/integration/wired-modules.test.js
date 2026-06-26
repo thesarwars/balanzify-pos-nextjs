@@ -3340,4 +3340,67 @@ describe('inventory completeness — adjustments & stocktake variance post to th
   });
 });
 
+describe('wholesale completeness — price tiers, credit limit, AR aging', () => {
+  const biz = (t) => JSON.parse(Buffer.from(t.split('.')[1], 'base64').toString()).businessId;
+  async function wholeProd(token, loc, wholesalePrice) {
+    const prod = await stockedProduct(token, loc, 10, 1000);
+    await prisma.product.update({ where: { id: prod }, data: { wholesalePrice } });
+    return prod;
+  }
+  async function deliverFlow(token, orderId, itemId) {
+    await request(app).post(`/api/v1/wholesale/orders/${orderId}/pick`).set(auth(token)).send({ item_ids: [itemId] });
+    await request(app).post(`/api/v1/wholesale/orders/${orderId}/dispatch`).set(auth(token)).send({ driver_name: 'Ali' });
+    await request(app).post(`/api/v1/wholesale/orders/${orderId}/deliver`).set(auth(token));
+  }
+
+  test('a customer price tier adjusts the wholesale price', async () => {
+    const token = await register(); await enableModule(token, 'wholesale');
+    const loc = await location(token);
+    const prod = await wholeProd(token, loc, 10);
+    const pg = await prisma.priceGroup.create({ data: { businessId: biz(token), name: 'Gold', percent: -10 } });
+    const cust = (await request(app).post('/api/v1/customers').set(auth(token)).send({ name: 'Gold Shop', price_group_id: pg.id })).body;
+
+    const order = (await request(app).post('/api/v1/wholesale/orders').set(auth(token))
+      .send({ customer_id: cust.id, items: [{ product_id: prod, quantity: 2 }] })).body;
+    expect(Number(order.items[0].unitPrice)).toBeCloseTo(9, 2);  // 10 − 10%
+    expect(Number(order.total)).toBeCloseTo(18, 2);
+  });
+
+  test('the credit limit blocks an order beyond the open balance; override proceeds', async () => {
+    const token = await register(); await enableModule(token, 'wholesale');
+    const loc = await location(token);
+    const prod = await wholeProd(token, loc, 50);
+    const cust = (await request(app).post('/api/v1/customers').set(auth(token)).send({ name: 'Risky Shop', credit_limit: 100 })).body;
+
+    // First order of 50, delivered + unpaid → 50 open.
+    const o1 = (await request(app).post('/api/v1/wholesale/orders').set(auth(token)).send({ customer_id: cust.id, items: [{ product_id: prod, quantity: 1 }] })).body;
+    await deliverFlow(token, o1.id, o1.items[0].id);
+
+    // A second order of 100 would take the open balance to 150 > limit 100.
+    const blocked = await request(app).post('/api/v1/wholesale/orders').set(auth(token)).send({ customer_id: cust.id, items: [{ product_id: prod, quantity: 2 }] });
+    expect(blocked.status).toBe(400);
+    expect(blocked.body.code).toBe('CREDIT_LIMIT_EXCEEDED');
+
+    const ok = await request(app).post('/api/v1/wholesale/orders').set(auth(token)).send({ customer_id: cust.id, items: [{ product_id: prod, quantity: 2 }], override_credit_limit: true });
+    expect(ok.status).toBe(201);
+  });
+
+  test('outstanding shows AR aging buckets by due date', async () => {
+    const token = await register(); await enableModule(token, 'wholesale');
+    const loc = await location(token);
+    const prod = await wholeProd(token, loc, 40);
+    const cust = (await request(app).post('/api/v1/customers').set(auth(token)).send({ name: 'Aging Shop', wholesale_terms_days: 0 })).body;
+
+    const o = (await request(app).post('/api/v1/wholesale/orders').set(auth(token)).send({ customer_id: cust.id, items: [{ product_id: prod, quantity: 1 }] })).body;
+    await deliverFlow(token, o.id, o.items[0].id);
+    await prisma.wholesaleOrder.update({ where: { id: o.id }, data: { dueDate: new Date(Date.now() - 45 * 86400000) } }); // 45 days overdue
+
+    const out = await request(app).get('/api/v1/wholesale/outstanding').set(auth(token));
+    expect(out.status).toBe(200);
+    expect(out.body.aging_totals.d31_60).toBeCloseTo(40, 2);
+    expect(out.body.total_outstanding).toBeCloseTo(40, 2);
+    expect(out.body.outstanding[0].aging.d31_60).toBeCloseTo(40, 2);
+  });
+});
+
 afterAll(async () => { await prisma.$disconnect(); });

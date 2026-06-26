@@ -452,6 +452,8 @@ const CustomerSchema = z.object({
   address: optStr(500),
   credit_limit: money.default(0),
   customer_group_id: uuid.optional().nullable(),
+  price_group_id: uuid.optional().nullable(),
+  wholesale_terms_days: z.coerce.number().int().min(0).max(365).optional(),
   notes: optStr(2000),
 });
 
