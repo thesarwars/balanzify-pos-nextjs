@@ -328,7 +328,7 @@ async function createSale(req) {
               SELECT id, quantity_remaining, unit_cost FROM cost_layers
               WHERE product_id = ${ri.ingredientId}::uuid AND business_id = ${req.user.business_id}::uuid
                 AND (location_id = ${locId}::uuid OR location_id IS NULL) AND quantity_remaining > 0
-              ORDER BY received_at ASC FOR UPDATE`;
+              ORDER BY expiry_date ASC NULLS LAST, received_at ASC FOR UPDATE`;
             for (const layer of ingLayers) {
               if (ingRemaining <= 0) break;
               const consume = Math.min(ingRemaining, parseInt(layer.quantity_remaining));
@@ -417,7 +417,8 @@ async function createSale(req) {
           `;
         }
 
-        // FIFO cost layer consumption — deduct from oldest layers first
+        // Cost-layer consumption — FEFO (nearest expiry first) for perishables,
+        // FIFO (oldest received) otherwise. NULLS LAST keeps non-perishables FIFO.
         let remaining = stockQty;
         const layers = await tx.$queryRaw`
           SELECT id, quantity_remaining, unit_cost
@@ -426,7 +427,7 @@ async function createSale(req) {
             AND business_id = ${req.user.business_id}::uuid
             AND (location_id = ${locId}::uuid OR location_id IS NULL)
             AND quantity_remaining > 0
-          ORDER BY received_at ASC
+          ORDER BY expiry_date ASC NULLS LAST, received_at ASC
           FOR UPDATE
         `;
 

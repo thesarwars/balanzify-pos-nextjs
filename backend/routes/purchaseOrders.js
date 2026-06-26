@@ -232,6 +232,11 @@ router.put('/:id/status', auth, requireRole('owner', 'manager'), validate(POStat
               });
             }
 
+            // Resolve the batch expiry once — shared by the batch and cost layer.
+            const expiryDate = ri.expiry_date ? new Date(ri.expiry_date)
+                             : orderLine.expiryDate ? new Date(orderLine.expiryDate)
+                             : null;
+
             // Stock batch (expiry / FEFO tracking). Fall back to the ordered
             // line's batch/expiry when the receipt doesn't restate them.
             await tx.stockBatch.create({
@@ -241,14 +246,12 @@ router.put('/:id/status', auth, requireRole('owner', 'manager'), validate(POStat
                 batchNumber: ri.batch_number || orderLine.batchNumber || null,
                 quantity: ri.qty,
                 costPrice: lineUnitCost,
-                expiryDate: ri.expiry_date ? new Date(ri.expiry_date)
-                          : orderLine.expiryDate ? new Date(orderLine.expiryDate)
-                          : null,
+                expiryDate,
               },
             });
 
-            // Cost layer (FIFO costing). Without this, sales fall back to the
-            // product's last cost and FIFO never actually runs.
+            // Cost layer (FIFO/FEFO costing). expiryDate drives FEFO consumption
+            // for perishables; without the layer, sales fall back to last cost.
             await tx.costLayer.create({
               data: {
                 businessId:        req.user.business_id,
@@ -259,6 +262,7 @@ router.put('/:id/status', auth, requireRole('owner', 'manager'), validate(POStat
                 quantityReceived:  ri.qty,
                 quantityRemaining: ri.qty,
                 unitCost:          lineUnitCost,
+                expiryDate,
               },
             });
           }

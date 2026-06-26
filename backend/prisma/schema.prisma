@@ -2443,6 +2443,7 @@ model CostLayer {
   quantityReceived  Int      @map("quantity_received")
   quantityRemaining Int      @map("quantity_remaining")
   unitCost          Decimal  @map("unit_cost") @db.Decimal(12, 4)
+  expiryDate        DateTime? @map("expiry_date") // drives FEFO consumption for perishables
   receivedAt        DateTime @default(now()) @map("received_at")
 
   business Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
