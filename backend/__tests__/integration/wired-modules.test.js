@@ -3450,4 +3450,64 @@ describe('construction completeness — labour-to-GL & retention release', () =>
   });
 });
 
+describe('inventory completeness — landed cost & refund reversal', () => {
+  test('landed cost (freight + duty) is capitalised into the cost layer and GL', async () => {
+    const token = await register();
+    const loc = await location(token);
+    const supplier = (await request(app).post('/api/v1/suppliers').set(auth(token)).send({ name: 'Importer', currency: 'USD' })).body;
+    const prod = (await request(app).post('/api/v1/products').set(auth(token)).send({ name: 'Imported Widget', selling_price: 30, cost_price: 10 })).body;
+
+    const po = (await request(app).post('/api/v1/purchase-orders').set(auth(token)).send({
+      supplier_id: supplier.id, location_id: loc,
+      items: [{ product_id: prod.id, ordered_qty: 10, unit_price: 10 }],
+      freight_cost: 15, customs_duty: 5, currency: 'USD',
+    })).body;
+    const poItem = await prisma.purchaseOrderItem.findFirst({ where: { poId: po.id } });
+    expect((await request(app).put(`/api/v1/purchase-orders/${po.id}/status`).set(auth(token))
+      .send({ status: 'received', received_items: [{ id: poItem.id, product_id: prod.id, qty: 10, unit_price: 10 }] })).status).toBe(200);
+
+    // goods 100, landed 20 → factor 0.2 → landed unit cost 12
+    const layer = await prisma.costLayer.findFirst({ where: { productId: prod.id, poId: po.id } });
+    expect(Number(layer.unitCost)).toBeCloseTo(12, 2);
+    expect(Number((await prisma.product.findUnique({ where: { id: prod.id } })).costPrice)).toBeCloseTo(12, 2);
+
+    const je = await prisma.journalEntry.findFirst({ where: { sourceType: 'purchase', sourceId: po.id }, include: { lines: { include: { account: true } } } });
+    const by = Object.fromEntries(je.lines.map(l => [l.account.code, l]));
+    expect(parseFloat(by['1200'].debit)).toBeCloseTo(120, 2); // 10 units × landed 12
+  });
+
+  test('a refund reverses revenue, tax and COGS, and restocks a fresh cost layer', async () => {
+    const token = await register();
+    const loc = await location(token);
+    const prod = await stockedProduct(token, loc, 20, 100); // cost 5, sells for 20
+    const saleRes = await makeSale(token, loc, prod, { qty: 2, price: 20 }); // total 40
+    expect(saleRes.status).toBe(201);
+    const saleId = saleRes.body.id;
+    const si = await prisma.saleItem.findFirst({ where: { saleId } });
+
+    const refund = await request(app).post(`/api/v1/sales/${saleId}/refund`).set(auth(token))
+      .send({ items: [{ sale_item_id: si.id, product_id: prod, quantity: 1, unit_price: 20, restock: true }], reason: 'damaged', refund_method: 'cash' });
+    expect(refund.status).toBe(201);
+
+    // Revenue + tender reversed (no tax on this product → all revenue).
+    const rev = await prisma.journalEntry.findFirst({ where: { sourceType: 'sale_refund', sourceId: refund.body.id }, include: { lines: { include: { account: true } } } });
+    const r = Object.fromEntries(rev.lines.map(l => [l.account.code, l]));
+    expect(parseFloat(r['4000'].debit)).toBeCloseTo(20, 2); // 1 × 20 sales return
+    expect(parseFloat(r['1000'].credit)).toBeCloseTo(20, 2); // cash paid back
+
+    // COGS reversed at the item's captured cost.
+    const cogs = await prisma.journalEntry.findFirst({ where: { sourceType: 'sale_refund_cogs', sourceId: refund.body.id }, include: { lines: { include: { account: true } } } });
+    const c = Object.fromEntries(cogs.lines.map(l => [l.account.code, l]));
+    const cost = parseFloat(si.costPrice);
+    expect(parseFloat(c['1200'].debit)).toBeCloseTo(cost, 2);  // inventory back
+    expect(parseFloat(c['5000'].credit)).toBeCloseTo(cost, 2); // COGS reversed
+
+    // stock: 100 − 2 sold + 1 returned = 99
+    expect((await prisma.stockLevel.findFirst({ where: { productId: prod, locationId: loc } })).quantity).toBe(99);
+
+    const tb = (await request(app).get('/api/v1/accounting/trial-balance').set(auth(token))).body;
+    expect(tb.totals.balanced).toBe(true);
+  });
+});
+
 afterAll(async () => { await prisma.$disconnect(); });
