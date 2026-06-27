@@ -18,11 +18,17 @@ const fiscal = require('../lib/fiscalization');
 const router = express.Router();
 
 // ── Cart fingerprint ──────────────────────────────────────────────────────────
-function cartFingerprint(items, cashierId, tipAmount = 0) {
+// `opNonce` is the offline op's stable identity (its op_id). Including it means a
+// genuine retry of the SAME op fingerprints identically (still dedupes), while two
+// DISTINCT offline sales that happen to share an identical cart can no longer
+// collide — so a client that reuses an idempotency key for a different sale is
+// surfaced as a conflict instead of silently dropping the second sale's revenue.
+// The online till sends no nonce, so its fingerprint is unchanged.
+function cartFingerprint(items, cashierId, tipAmount = 0, opNonce = '') {
   const payload = items
     .map(i => `${i.product_id}:${i.variant_id || ''}:${i.quantity}:${parseFloat(i.override_price ?? 0).toFixed(4)}`)
     .sort()
-    .join('|') + `|cashier:${cashierId}|tip:${tipAmount}`;
+    .join('|') + `|cashier:${cashierId}|tip:${tipAmount}` + (opNonce ? `|op:${opNonce}` : '');
   return crypto.createHash('sha256').update(payload).digest('hex');
 }
 
@@ -179,6 +185,7 @@ async function createSale(req) {
       type,
       shift_id,
       idempotency_key,
+      idempotency_nonce,  // Optional: offline op_id — disambiguates same-cart sales sharing a reused key
       display_currency,   // Optional: customer's preferred display currency
     } = req.body;
 
@@ -218,7 +225,7 @@ async function createSale(req) {
         throw Object.assign(new Error('Transaction token expired.'), { statusCode: 400 });
       }
 
-      const fingerprint = cartFingerprint(allItems, req.user.id, tip_amount);
+      const fingerprint = cartFingerprint(allItems, req.user.id, tip_amount, idempotency_nonce || '');
 
       // Genuine retry — same key, same cart
       if (sk.used) {

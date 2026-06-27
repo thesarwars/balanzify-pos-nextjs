@@ -1795,6 +1795,56 @@ describe('offline-first sync (push outbox + delta pull)', () => {
     expect(byOp.b.status).toBe('applied');
   });
 
+  test('reused key for a DIFFERENT sale with an identical cart no longer drops silently — it conflicts and is dead-lettered', async () => {
+    const device = 'till-dl-' + Date.now();
+    const k = 'offline-dl-' + Date.now();
+    // First real offline sale.
+    const first = await request(app).post('/api/v1/sync/push').set(auth(token))
+      .send({ device_id: device, operations: [saleOp('first-op', k, 2)] });
+    expect(first.body.results[0].status).toBe('applied');
+
+    // A genuinely different second sale (distinct op_id) that happens to have an
+    // IDENTICAL cart, but the buggy client reused the same idempotency key. Before
+    // the op-nonce fix this fingerprinted identically and was silently returned as a
+    // 'duplicate' — the second sale's revenue vanished. Now it surfaces as a conflict.
+    const second = await request(app).post('/api/v1/sync/push').set(auth(token))
+      .send({ device_id: device, operations: [saleOp('second-op', k, 2)] });
+    expect(second.body.results[0].status).toBe('conflict');
+    expect(second.body.results[0].dead_lettered).toBe(true);
+    expect(second.body.applied).toBe(0);
+
+    // The orphaned sale is parked for a human, not lost.
+    const dl = await request(app).get('/api/v1/sync/unsynced').set(auth(token));
+    expect(dl.status).toBe(200);
+    const mine = dl.body.unsynced.find(u => u.op_id === 'second-op' && u.device_id === device);
+    expect(mine).toBeTruthy();
+    expect(mine.reason).toBe('conflict');
+    expect(mine.resolved).toBe(false);
+    expect(mine.payload.items[0].product_id).toBe(prod);
+
+    // Operator reconciles it (re-rang it on the till) → it leaves the backlog.
+    const resolve = await request(app).post(`/api/v1/sync/unsynced/${mine.id}/resolve`).set(auth(token))
+      .send({ resolution: 're_synced' });
+    expect(resolve.status).toBe(200);
+    expect(resolve.body.resolved).toBe(true);
+    const after = await request(app).get('/api/v1/sync/unsynced').set(auth(token));
+    expect(after.body.unsynced.find(u => u.id === mine.id)).toBeFalsy();
+  });
+
+  test('a true retry of the SAME op (same op_id) still dedupes, never dead-letters', async () => {
+    const device = 'till-retry-' + Date.now();
+    const k = 'offline-retry-' + Date.now();
+    const op = saleOp('same-op', k, 1);
+    const a = await request(app).post('/api/v1/sync/push').set(auth(token)).send({ device_id: device, operations: [op] });
+    expect(a.body.results[0].status).toBe('applied');
+    const b = await request(app).post('/api/v1/sync/push').set(auth(token)).send({ device_id: device, operations: [op] });
+    expect(b.body.results[0].status).toBe('duplicate');
+    expect(b.body.results[0].sale_id).toBe(a.body.results[0].sale_id);
+    // Nothing parked for a clean retry.
+    const dl = await request(app).get('/api/v1/sync/unsynced').set(auth(token));
+    expect(dl.body.unsynced.find(u => u.op_id === 'same-op' && u.device_id === device)).toBeFalsy();
+  });
+
   test('pull: full snapshot then delta by `since`', async () => {
     const full = await request(app).get('/api/v1/sync/pull').set(auth(token)).query({ device_id: 'till-pull' });
     expect(full.status).toBe(200);

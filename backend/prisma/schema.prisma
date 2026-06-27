@@ -519,6 +519,7 @@ model Business {
   notifications      Notification[]
   saleKeys           SaleKey[]
   syncDevices        SyncDevice[]
+  unsyncedSales      UnsyncedSale[]
   fiscalConfig       FiscalConfig?
   fiscalReceipts     FiscalReceipt[]
   drivers            Driver[]
@@ -2100,6 +2101,36 @@ model SyncDevice {
 
   @@unique([businessId, deviceId])
   @@map("sync_devices")
+}
+
+// Dead-letter for offline sale ops that could not be replayed (product deleted,
+// stock exhausted, price/cart conflict). An offline sale is a transaction that
+// ALREADY happened at the till — if replay rejects it, the revenue must not just
+// vanish. We capture the raw payload + the rejection so an operator can reconcile
+// it manually (re-key it, adjust stock, or void it) instead of losing the sale.
+model UnsyncedSale {
+  id          String    @id @default(uuid()) @db.Uuid
+  businessId  String    @map("business_id") @db.Uuid
+  deviceId    String    @map("device_id") @db.VarChar(128)
+  opId        String    @map("op_id") @db.VarChar(128)
+  idempotencyKey String @map("idempotency_key") @db.VarChar(128)
+  reason      String    @db.VarChar(40)            // conflict | rejected | error
+  errorMessage String?  @map("error_message")
+  payload     Json                                  // the original offline sale op
+  resolved    Boolean   @default(false)
+  resolvedAt  DateTime? @map("resolved_at")
+  resolvedById String?  @map("resolved_by") @db.Uuid
+  resolution  String?   @db.VarChar(40)            // re_synced | voided | adjusted
+  createdById String?   @map("created_by") @db.Uuid
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  // One row per device op — a re-flush of the same failing op updates, never duplicates.
+  @@unique([businessId, deviceId, opId])
+  @@index([businessId, resolved])
+  @@map("unsynced_sales")
 }
 
 // ═══════════════════════════════════════════════════════════════════
