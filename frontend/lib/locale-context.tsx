@@ -8,6 +8,7 @@
 // ═══════════════════════════════════════════════════════════════════
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { Locale, MessageKey, t as translate, isRtl, LOCALES, DEFAULT_LOCALE } from './i18n';
+import { hydrateCurrency } from './theme';
 
 const STORAGE_KEY = 'bz_locale';
 
@@ -29,6 +30,7 @@ export function LocaleProvider({ children }: { children: React.ReactNode }) {
       const saved = window.localStorage.getItem(STORAGE_KEY) as Locale | null;
       if (saved && LOCALES.some(l => l.code === saved)) setLocaleState(saved);
     } catch { /* localStorage unavailable — keep default */ }
+    hydrateCurrency(); // pick up the business's currency setting for money formatting
   }, []);
 
   // Reflect language + direction onto the document.

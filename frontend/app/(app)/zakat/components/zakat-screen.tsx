@@ -10,8 +10,8 @@ import { API, type ZakatAssessment } from '@/lib/api';
 import { useT } from '@/lib/locale-context';
 import { Topbar } from '@/components/shell';
 import { Panel, StatCard, Btn, Badge } from '@/components/kit';
-
-const money = (n: number) => '$' + Number(n || 0).toFixed(2);
+import { StateView, Skeleton, humanizeError } from '@/components/state-view';
+import { money } from '@/lib/theme';
 
 function Row({ T, label, value }: { T: any; label: string; value: string }) {
   return (
@@ -39,7 +39,7 @@ export function ZakatScreen({ T }: { T: any }) {
       setData(z);
       if (h) setHijri(h.hijri.formatted);
     } catch (e: any) {
-      setErr(e?.message || t('zakat.live_required'));
+      setErr(humanizeError(e));
     } finally {
       setLoading(false);
     }
@@ -60,12 +60,12 @@ export function ZakatScreen({ T }: { T: any }) {
         right={<Btn T={T} kind="ghost" onClick={load} disabled={loading}>{t('common.refresh')}</Btn>}
       />
       <div style={{ padding: 24, maxWidth: 960 }}>
-        {err && !data && (
-          <Panel T={T}><div style={{ color: T.inkSub, fontSize: 13 }}>{err}</div></Panel>
+        {err && !data && !loading && (
+          <StateView T={T} kind="error" message={err} onRetry={load} retryLabel={t('common.refresh')} />
         )}
 
         {loading && !data && (
-          <Panel T={T}><div style={{ color: T.inkSub, fontSize: 13 }}>{t('common.loading')}</div></Panel>
+          <Panel T={T} title={t('zakat.title')}><Skeleton T={T} rows={5} /></Panel>
         )}
 
         {data && (
@@ -73,7 +73,7 @@ export function ZakatScreen({ T }: { T: any }) {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 14, marginBottom: 16 }}>
               <StatCard T={T} label={t('zakat.assets')} value={money(data.assets)} accent={T.accent.base} />
               <StatCard T={T} label={t('zakat.liabilities')} value={money(data.liabilities)} />
-              <StatCard T={T} label={t('zakat.base')} value={money(data.base)} big />
+              <StatCard T={T} label={t('zakat.base')} value={money(data.base)} accent={T.accent.bright} />
               <StatCard
                 T={T}
                 label={t('zakat.payable')}

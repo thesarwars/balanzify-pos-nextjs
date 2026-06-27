@@ -62,15 +62,39 @@ export function StatCard({ T, label, value, sub, trend, accent, big }:
 
 export function Modal({ T, title, subtitle, onClose, onSave, saveLabel = 'Save', width = 580, children, footer }:
   { T: Theme; title: string; subtitle?: string; onClose: () => void; onSave?: () => void; saveLabel?: string; width?: number | string; children: React.ReactNode; footer?: React.ReactNode | null }) {
+  const titleId = React.useId();
+  const dialogRef = React.useRef<HTMLDivElement>(null);
+  // Accessibility: trap focus inside the dialog, close on Escape, and restore
+  // focus to whatever was focused before it opened — the baseline contract a
+  // screen reader / keyboard user expects from a modal.
+  React.useEffect(() => {
+    const prevFocused = (typeof document !== 'undefined' ? document.activeElement : null) as HTMLElement | null;
+    const node = dialogRef.current;
+    const FOCUSABLE = 'a[href],button:not([disabled]),textarea,input,select,[tabindex]:not([tabindex="-1"])';
+    // Move focus into the dialog on open.
+    const first = node?.querySelector<HTMLElement>(FOCUSABLE);
+    (first || node)?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.stopPropagation(); onClose(); return; }
+      if (e.key !== 'Tab' || !node) return;
+      const els = Array.from(node.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(el => el.offsetParent !== null);
+      if (!els.length) return;
+      const firstEl = els[0], lastEl = els[els.length - 1];
+      if (e.shiftKey && document.activeElement === firstEl) { e.preventDefault(); lastEl.focus(); }
+      else if (!e.shiftKey && document.activeElement === lastEl) { e.preventDefault(); firstEl.focus(); }
+    };
+    document.addEventListener('keydown', onKey, true);
+    return () => { document.removeEventListener('keydown', onKey, true); prevFocused?.focus?.(); };
+  }, [onClose]);
   return (
     <div onClick={(e) => { if (e.target === e.currentTarget) onClose(); }} style={{ position: 'fixed', inset: 0, zIndex: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(20,15,5,0.5)', backdropFilter: 'blur(3px)', padding: 20 }}>
-      <div style={{ width: `min(${typeof width === 'number' ? width + 'px' : width}, 96vw)`, maxWidth: '100%', maxHeight: '92vh', display: 'flex', flexDirection: 'column', background: T.paper, borderRadius: T.rXl, boxShadow: T.shModal, overflow: 'hidden', animation: 'sheetUp .22s cubic-bezier(.2,.7,.3,1)' }}>
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} style={{ width: `min(${typeof width === 'number' ? width + 'px' : width}, 96vw)`, maxWidth: '100%', maxHeight: '92vh', display: 'flex', flexDirection: 'column', background: T.paper, borderRadius: T.rXl, boxShadow: T.shModal, overflow: 'hidden', animation: 'sheetUp .22s cubic-bezier(.2,.7,.3,1)', outline: 'none' }}>
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', padding: '18px 24px', borderBottom: `1px solid ${T.line}` }}>
           <div>
-            <div style={{ fontFamily: T.fDisplay, fontSize: 19, fontWeight: T.dispWeight, color: T.ink, letterSpacing: T.dispTrack }}>{title}</div>
+            <div id={titleId} style={{ fontFamily: T.fDisplay, fontSize: 19, fontWeight: T.dispWeight, color: T.ink, letterSpacing: T.dispTrack }}>{title}</div>
             {subtitle && <div style={{ fontSize: 12.5, color: T.inkSub, marginTop: 2 }}>{subtitle}</div>}
           </div>
-          <button onClick={onClose} style={{ width: 30, height: 30, borderRadius: 8, border: `1px solid ${T.line}`, background: T.paper, color: T.inkSub, cursor: 'pointer', fontSize: 14, flexShrink: 0 }}>✕</button>
+          <button onClick={onClose} aria-label="Close dialog" style={{ width: 30, height: 30, borderRadius: 8, border: `1px solid ${T.line}`, background: T.paper, color: T.inkSub, cursor: 'pointer', fontSize: 14, flexShrink: 0 }}>✕</button>
         </div>
         <div style={{ flex: 1, overflowY: 'auto', padding: 24 }}>{children}</div>
         {footer !== undefined ? (footer ? (
@@ -86,19 +110,32 @@ export function Modal({ T, title, subtitle, onClose, onSave, saveLabel = 'Save',
   );
 }
 
-export function TextField({ T, value, onChange, type = 'text', placeholder, style }:
-  { T: Theme; value: string; onChange: (v: string) => void; type?: string; placeholder?: string; style?: React.CSSProperties }) {
-  return <input type={type} value={value} placeholder={placeholder} onChange={(e) => onChange(e.target.value)}
+export function TextField({ T, value, onChange, type = 'text', placeholder, style, ...rest }:
+  { T: Theme; value: string; onChange: (v: string) => void; type?: string; placeholder?: string; style?: React.CSSProperties; [k: string]: any }) {
+  return <input type={type} value={value} placeholder={placeholder} onChange={(e) => onChange(e.target.value)} {...rest}
     style={{ width: '100%', padding: '10px 13px', fontSize: 13.5, fontFamily: T.fBody, color: T.ink, background: T.paper, border: `1.5px solid ${T.line}`, borderRadius: T.r, outline: 'none', boxSizing: 'border-box', ...style }} />;
 }
 
 export function Field({ T, label, hint, full, children }:
   { T: Theme; label: string; hint?: string; full?: boolean; children: React.ReactNode }) {
+  const id = React.useId();
+  const hintId = hint ? id + '-hint' : undefined;
+  // Associate the visible label (and any hint) with the control so screen
+  // readers announce them. Inject id/aria-describedby into a single child input
+  // when the caller didn't set their own.
+  let control = children;
+  if (React.isValidElement(children)) {
+    const childProps: any = children.props || {};
+    control = React.cloneElement(children as React.ReactElement<any>, {
+      id: childProps.id ?? id,
+      'aria-describedby': childProps['aria-describedby'] ?? hintId,
+    });
+  }
   return (
     <div style={{ gridColumn: full ? '1 / -1' : 'auto' }}>
-      <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: T.inkSub, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>{label}</label>
-      {children}
-      {hint && <div style={{ fontSize: 11, color: T.inkMute, marginTop: 5 }}>{hint}</div>}
+      <label htmlFor={id} style={{ display: 'block', fontSize: 11, fontWeight: 700, color: T.inkSub, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>{label}</label>
+      {control}
+      {hint && <div id={hintId} style={{ fontSize: 11, color: T.inkMute, marginTop: 5 }}>{hint}</div>}
     </div>
   );
 }
@@ -113,9 +150,9 @@ export function FormGrid({ children, cols = 2, style }: { children: React.ReactN
   return <div style={{ display: 'grid', gridTemplateColumns: `repeat(auto-fit, minmax(min(100%, ${cols >= 3 ? 150 : 210}px), 1fr))`, gap: 16, ...style }}>{children}</div>;
 }
 
-export function SelectField({ T, value, onChange, options, render }:
-  { T: Theme; value: any; onChange: (v: string) => void; options: any[]; render?: (o: any) => React.ReactNode }) {
-  return <select value={value ?? ''} onChange={e => onChange(e.target.value)} style={{ width: '100%', padding: '10px 13px', fontSize: 14, fontFamily: T.fBody, color: T.ink, background: T.paper, border: `1.5px solid ${T.line}`, borderRadius: T.r, outline: 'none', boxSizing: 'border-box', cursor: 'pointer' }}>
+export function SelectField({ T, value, onChange, options, render, ...rest }:
+  { T: Theme; value: any; onChange: (v: string) => void; options: any[]; render?: (o: any) => React.ReactNode; [k: string]: any }) {
+  return <select value={value ?? ''} onChange={e => onChange(e.target.value)} {...rest} style={{ width: '100%', padding: '10px 13px', fontSize: 14, fontFamily: T.fBody, color: T.ink, background: T.paper, border: `1.5px solid ${T.line}`, borderRadius: T.r, outline: 'none', boxSizing: 'border-box', cursor: 'pointer' }}>
     {options.map(o => <option key={o} value={o}>{render ? render(o) : o}</option>)}
   </select>;
 }
