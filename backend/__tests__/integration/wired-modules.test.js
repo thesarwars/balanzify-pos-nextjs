@@ -3654,4 +3654,51 @@ describe('delivery completeness — driver COD settlement + failed attempts', ()
   });
 });
 
+describe('hrm completeness — pro-rata, statutory remittance, payslip breakdown', () => {
+  async function hrmBiz() {
+    const token = await register(); await enableModule(token, 'hrm');
+    const bizId = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString()).businessId;
+    return { token, bizId };
+  }
+
+  test('a mid-month joiner is paid pro-rata for the days worked', async () => {
+    const { token } = await hrmBiz();
+    const emp = (await request(app).post('/api/v1/hrm/employee').set(auth(token)).send({ name: 'Joiner', salary: 30000, joined: '2026-09-16' })).body;
+    const run = await request(app).post('/api/v1/hrm/payroll').set(auth(token))
+      .send({ employee_id: emp.id, month: '2026-09', basic: 30000, prorate: true });
+    expect(run.status).toBe(201);
+    expect(run.body.proration).toBeTruthy();
+    expect(run.body.proration.prorated_basic).toBeCloseTo(15000, 2); // joined 16th of a 30-day month → 15/30
+    expect(Number(run.body.net)).toBeCloseTo(15000, 2);
+  });
+
+  test('statutory withholding is remitted to the authority, clearing the payable; payslip shows the breakdown', async () => {
+    const { token, bizId } = await hrmBiz();
+    const emp = (await request(app).post('/api/v1/hrm/employee').set(auth(token)).send({ name: 'KE Staff', salary: 50000, joined: '2026-01-01' })).body;
+    const run = (await request(app).post('/api/v1/hrm/payroll').set(auth(token))
+      .send({ employee_id: emp.id, month: '2026-10', basic: 50000, statutory_country: 'KE' })).body;
+
+    // Payslip carries the statutory breakdown (previously omitted).
+    const slip = await request(app).get(`/api/v1/hrm/payslip/${run.id}`).set(auth(token));
+    expect(slip.status).toBe(200);
+    expect(slip.body.statutory.total).toBeCloseTo(10701.60, 1);
+    expect(slip.body.statutory.remitted).toBe(false);
+
+    let bal = await accounting.accountBalances(bizId);
+    const at = (c) => (bal.find(a => a.code === c) || { balance: 0 }).balance;
+    expect(at('2120')).toBeCloseTo(10701.60, 1); // statutory payable accrued
+
+    const remit = await request(app).post('/api/v1/hrm/payroll/remit-statutory').set(auth(token)).send({ month: '2026-10', method: 'bank' });
+    expect(remit.status).toBe(200);
+    expect(remit.body.remitted).toBeCloseTo(10701.60, 1);
+
+    bal = await accounting.accountBalances(bizId);
+    expect(at('2120')).toBeCloseTo(0, 1); // payable cleared
+
+    expect((await request(app).get(`/api/v1/hrm/payslip/${run.id}`).set(auth(token))).body.statutory.remitted).toBe(true);
+    // Nothing left to remit.
+    expect((await request(app).post('/api/v1/hrm/payroll/remit-statutory').set(auth(token)).send({ month: '2026-10' })).status).toBe(400);
+  });
+});
+
 afterAll(async () => { await prisma.$disconnect(); });

@@ -871,6 +871,7 @@ model Payroll {
   shif             Decimal  @default(0) @db.Decimal(12, 2)
   housingLevy      Decimal  @default(0) @map("housing_levy") @db.Decimal(12, 2)
   statutoryTotal   Decimal  @default(0) @map("statutory_total") @db.Decimal(12, 2)
+  statutoryRemittedAt DateTime? @map("statutory_remitted_at") // statutory withholding paid to the authority
   net              Decimal  @default(0) @db.Decimal(12, 2)
   status           String   @default("paid") @db.VarChar(20)
   createdAt        DateTime @default(now()) @map("created_at")
