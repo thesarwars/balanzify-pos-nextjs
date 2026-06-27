@@ -2645,12 +2645,14 @@ model Delivery {
   orderAmount   Decimal   @default(0) @map("order_amount") @db.Decimal(12, 2)
   deliveryFee   Decimal   @default(0) @map("delivery_fee") @db.Decimal(10, 2)
   paymentMode   String    @default("cod") @map("payment_mode") @db.VarChar(20) // cod | prepaid
-  status        String    @default("pending") @db.VarChar(20) // pending|assigned|picked_up|delivered|cancelled
+  status        String    @default("pending") @db.VarChar(20) // pending|assigned|picked_up|delivered|failed|cancelled
   recipientName String?   @map("recipient_name") @db.VarChar(255) // proof of delivery
   podNote       String?   @map("pod_note")
   podPhotoUrl   String?   @map("pod_photo_url")
+  failReason    String?   @map("fail_reason") @db.VarChar(255) // why a delivery attempt failed
   assignedAt    DateTime? @map("assigned_at")
   deliveredAt   DateTime? @map("delivered_at")
+  settledAt     DateTime? @map("settled_at") // COD cash for this delivery remitted by the driver
   createdAt     DateTime  @default(now()) @map("created_at")
 
   business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)

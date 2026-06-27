@@ -3596,4 +3596,62 @@ describe('inventory completeness — 3-way match (PO ↔ GRN ↔ supplier invoic
   });
 });
 
+describe('delivery completeness — driver COD settlement + failed attempts', () => {
+  async function deliveryBiz() {
+    const token = await register(); await enableModule(token, 'delivery'); await location(token);
+    const bizId = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString()).businessId;
+    const drv = (await request(app).post('/api/v1/delivery/drivers').set(auth(token)).send({ name: 'Driver', vehicle_type: 'motorbike' })).body;
+    await request(app).put(`/api/v1/delivery/drivers/${drv.id}/status`).set(auth(token)).send({ status: 'available' });
+    return { token, bizId, driverId: drv.id };
+  }
+
+  test('a COD delivery owes the driver; settling clears the receivable on the GL', async () => {
+    const { token, bizId, driverId } = await deliveryBiz();
+    const del = (await request(app).post('/api/v1/delivery').set(auth(token)).send({
+      customer_name: 'Ayaan', address: 'St 1', order_amount: 40, delivery_fee: 5, payment_mode: 'cod',
+    })).body;
+    await request(app).put(`/api/v1/delivery/${del.id}/status`).set(auth(token)).send({ status: 'picked_up' });
+    await request(app).put(`/api/v1/delivery/${del.id}/status`).set(auth(token)).send({ status: 'delivered' });
+
+    // The driver now owes the COD fee.
+    const acct = await request(app).get(`/api/v1/delivery/drivers/${driverId}/account`).set(auth(token));
+    expect(acct.status).toBe(200);
+    expect(acct.body.cod_owed).toBeCloseTo(5, 2);
+    expect(acct.body.unsettled_deliveries).toBe(1);
+
+    // Settle: driver remits cash → receivable cleared.
+    const settle = await request(app).post(`/api/v1/delivery/drivers/${driverId}/settle`).set(auth(token)).send({ method: 'cash' });
+    expect(settle.status).toBe(200);
+    expect(settle.body.settled_amount).toBeCloseTo(5, 2);
+
+    const bal = await accounting.accountBalances(bizId);
+    const at = (c) => (bal.find(a => a.code === c) || { balance: 0 }).balance;
+    expect(at('1100')).toBeCloseTo(0, 2);  // COD receivable cleared
+    expect(at('1000')).toBeCloseTo(5, 2);  // cash collected
+    expect(at('4100')).toBeCloseTo(5, 2);  // revenue stands
+
+    // Account is now clear; settling again is rejected.
+    expect((await request(app).get(`/api/v1/delivery/drivers/${driverId}/account`).set(auth(token))).body.cod_owed).toBeCloseTo(0, 2);
+    expect((await request(app).post(`/api/v1/delivery/drivers/${driverId}/settle`).set(auth(token)).send({})).status).toBe(400);
+  });
+
+  test('a failed attempt records the reason, frees the driver, and earns no fee', async () => {
+    const { token, bizId, driverId } = await deliveryBiz();
+    const del = (await request(app).post('/api/v1/delivery').set(auth(token)).send({
+      customer_name: 'Out', address: 'St 2', delivery_fee: 5, payment_mode: 'cod',
+    })).body;
+    await request(app).put(`/api/v1/delivery/${del.id}/status`).set(auth(token)).send({ status: 'picked_up' });
+
+    const failed = await request(app).put(`/api/v1/delivery/${del.id}/status`).set(auth(token)).send({ status: 'failed', fail_reason: 'Customer unreachable' });
+    expect(failed.status).toBe(200);
+    expect(failed.body.status).toBe('failed');
+    expect(failed.body.fail_reason).toBe('Customer unreachable');
+
+    // Driver freed, no delivery revenue posted.
+    expect((await request(app).get('/api/v1/delivery/drivers').set(auth(token)).query({ status: 'available' })).body.drivers.length).toBe(1);
+    const bal = await accounting.accountBalances(bizId);
+    expect((bal.find(a => a.code === '4100') || { balance: 0 }).balance).toBeCloseTo(0, 2);
+  });
+});
+
 afterAll(async () => { await prisma.$disconnect(); });

@@ -40,6 +40,7 @@ const serializeDelivery = (d) => ({
   order_amount: parseFloat(d.orderAmount), delivery_fee: parseFloat(d.deliveryFee),
   payment_mode: d.paymentMode, status: d.status, zone_id: d.zoneId,
   recipient_name: d.recipientName, pod_note: d.podNote, pod_photo_url: d.podPhotoUrl,
+  fail_reason: d.failReason, settled_at: d.settledAt,
   assigned_at: d.assignedAt, delivered_at: d.deliveredAt, created_at: d.createdAt,
 });
 
@@ -92,6 +93,60 @@ router.put('/drivers/:id/status', auth, validate(z.object({
     if (!d) return res.status(404).json({ title: 'Driver not found', status: 404 });
     const updated = await prisma.driver.update({ where: { id: d.id }, data: { status: req.body.status } });
     res.json(serializeDriver(updated));
+  } catch (err) { next(err); }
+});
+
+// ── Driver COD settlement ───────────────────────────────────────────
+// On a cash-on-delivery job the fee posts as a receivable (the driver holds the
+// cash). These routes show what each driver owes and clear it when they remit —
+// without this, the COD receivable (1100) accumulates forever.
+router.get('/drivers/:id/account', auth, async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const driver = await prisma.driver.findFirst({ where: { id: req.params.id, businessId }, select: { id: true, name: true } });
+    if (!driver) return res.status(404).json({ title: 'Driver not found', status: 404 });
+    const open = await prisma.delivery.findMany({
+      where: { businessId, driverId: driver.id, status: 'delivered', paymentMode: 'cod', settledAt: null },
+      select: { id: true, deliveryFee: true, deliveredAt: true },
+    });
+    res.json({
+      driver_id: driver.id, driver_name: driver.name,
+      unsettled_deliveries: open.length,
+      cod_owed: +open.reduce((s, d) => s + parseFloat(d.deliveryFee), 0).toFixed(2),
+      deliveries: open.map(d => ({ id: d.id, delivery_fee: parseFloat(d.deliveryFee), delivered_at: d.deliveredAt })),
+    });
+  } catch (err) { next(err); }
+});
+
+router.post('/drivers/:id/settle', auth, requireRole('owner', 'manager'), validate(z.object({
+  method: z.string().max(30).optional(),
+})), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const driver = await prisma.driver.findFirst({ where: { id: req.params.id, businessId }, select: { id: true, name: true } });
+    if (!driver) return res.status(404).json({ title: 'Driver not found', status: 404 });
+
+    const result = await prisma.$transaction(async (tx) => {
+      const open = await tx.delivery.findMany({
+        where: { businessId, driverId: driver.id, status: 'delivered', paymentMode: 'cod', settledAt: null },
+        select: { id: true, deliveryFee: true },
+      });
+      const total = +open.reduce((s, d) => s + parseFloat(d.deliveryFee), 0).toFixed(2);
+      if (total <= 0) return { total: 0, count: 0 };
+      await tx.delivery.updateMany({ where: { id: { in: open.map(d => d.id) } }, data: { settledAt: new Date() } });
+      // GL: driver remits the collected COD cash — clears the receivable.
+      await accounting.postJournal(tx, {
+        businessId, description: `Driver COD settlement — ${driver.name}`,
+        sourceType: 'driver_settlement', sourceId: driver.id, createdById: req.user.id,
+        lines: [
+          { code: accounting.tenderAccountCode(req.body.method || 'cash'), debit: total, credit: 0, description: 'COD cash received' },
+          { code: '1100', debit: 0, credit: total, description: 'Driver receivable cleared' },
+        ],
+      });
+      return { total, count: open.length };
+    });
+    if (result.count === 0) return res.status(400).json({ title: 'Nothing to settle for this driver', status: 400 });
+    res.json({ message: `Settled ${result.count} COD deliveries.`, settled_amount: result.total, deliveries_settled: result.count });
   } catch (err) { next(err); }
 });
 
@@ -188,10 +243,11 @@ router.post('/:id/assign', auth, requireRole('owner', 'manager'), validate(z.obj
 // delivery posts the fee to the ledger, captures proof of delivery, frees the
 // driver, and notifies the customer.
 router.put('/:id/status', auth, validate(z.object({
-  status: z.enum(['picked_up', 'delivered', 'cancelled']),
+  status: z.enum(['picked_up', 'delivered', 'failed', 'cancelled']),
   recipient_name: z.string().max(255).optional().nullable(),
   pod_note: z.string().max(500).optional().nullable(),
   pod_photo_url: z.string().url().optional().nullable(),
+  fail_reason: z.string().max(255).optional().nullable(),
 })), async (req, res, next) => {
   try {
     const businessId = req.user.business_id;
@@ -215,8 +271,10 @@ router.put('/:id/status', auth, validate(z.object({
           });
         }
       }
-      // Free the driver when the job closes.
-      if ((req.body.status === 'delivered' || req.body.status === 'cancelled') && delivery.driverId) {
+      // A failed attempt records why; no fee is earned.
+      if (req.body.status === 'failed') stamps.failReason = req.body.fail_reason || 'Not specified';
+      // Free the driver when the job closes (delivered, failed or cancelled).
+      if (['delivered', 'failed', 'cancelled'].includes(req.body.status) && delivery.driverId) {
         await tx.driver.update({ where: { id: delivery.driverId }, data: { status: 'available' } });
       }
       const updated = await tx.delivery.update({ where: { id: delivery.id }, data: { status: req.body.status, ...stamps }, include: { driver: true } });
