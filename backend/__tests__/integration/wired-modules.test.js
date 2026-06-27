@@ -3552,4 +3552,48 @@ describe('inventory completeness — FEFO consumption + valuation/expiring repor
   });
 });
 
+describe('inventory completeness — 3-way match (PO ↔ GRN ↔ supplier invoice)', () => {
+  let token, loc, prod, poId, poItemId;
+  beforeAll(async () => {
+    token = await register();
+    loc = await location(token);
+    const supplier = (await request(app).post('/api/v1/suppliers').set(auth(token)).send({ name: 'Sup3way', currency: 'USD' })).body;
+    prod = (await request(app).post('/api/v1/products').set(auth(token)).send({ name: 'Matched Item', selling_price: 30, cost_price: 18 })).body;
+    poId = (await request(app).post('/api/v1/purchase-orders').set(auth(token)).send({
+      supplier_id: supplier.id, location_id: loc, items: [{ product_id: prod.id, ordered_qty: 50, unit_price: 18 }], currency: 'USD',
+    })).body.id;
+    poItemId = (await prisma.purchaseOrderItem.findFirst({ where: { poId } })).id;
+    await request(app).put(`/api/v1/purchase-orders/${poId}/status`).set(auth(token))
+      .send({ status: 'received', received_items: [{ id: poItemId, product_id: prod.id, qty: 50, unit_price: 18 }] });
+  });
+
+  test('a matching invoice passes the 3-way match and can be approved', async () => {
+    const inv = await request(app).post(`/api/v1/purchase-orders/${poId}/invoice`).set(auth(token))
+      .send({ invoice_number: 'INV-1', items: [{ po_item_id: poItemId, product_id: prod.id, quantity: 50, unit_price: 18 }] });
+    expect(inv.status).toBe(201);
+    expect(inv.body.match_status).toBe('matched');
+    expect(inv.body.variances).toHaveLength(0);
+
+    const appr = await request(app).post(`/api/v1/purchase-orders/invoices/${inv.body.id}/approve`).set(auth(token)).send({});
+    expect(appr.status).toBe(200);
+    expect(appr.body.invoice.status).toBe('approved');
+  });
+
+  test('a price + over-billing variance is flagged and gated from approval', async () => {
+    const inv = await request(app).post(`/api/v1/purchase-orders/${poId}/invoice`).set(auth(token))
+      .send({ invoice_number: 'INV-2', items: [{ po_item_id: poItemId, product_id: prod.id, quantity: 55, unit_price: 20 }] }); // billed 55 > received 50, at 20 not 18
+    expect(inv.status).toBe(201);
+    expect(inv.body.match_status).toBe('variance');
+    expect(inv.body.variances[0].flags).toEqual(expect.arrayContaining(['price_variance', 'over_billed']));
+
+    const blocked = await request(app).post(`/api/v1/purchase-orders/invoices/${inv.body.id}/approve`).set(auth(token)).send({});
+    expect(blocked.status).toBe(409);
+    expect(blocked.body.code).toBe('INVOICE_VARIANCE');
+
+    const ok = await request(app).post(`/api/v1/purchase-orders/invoices/${inv.body.id}/approve`).set(auth(token)).send({ override: true });
+    expect(ok.status).toBe(200);
+    expect(ok.body.invoice.status).toBe('approved');
+  });
+});
+
 afterAll(async () => { await prisma.$disconnect(); });

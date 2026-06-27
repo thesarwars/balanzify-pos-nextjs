@@ -540,6 +540,7 @@ model Business {
   journalEntries     JournalEntry[]
   prescriptions      Prescription[]
   prescriptionGroups PrescriptionGroup[]
+  supplierInvoices   SupplierInvoice[]
   dispenseRecords    DispenseRecord[]
   financingAdvances  FinancingAdvance[]
   eightySixes        EightySix[]
@@ -1752,6 +1753,46 @@ model POPayment {
   createdBy     User?         @relation(fields: [createdById], references: [id])
 
   @@map("po_payments")
+}
+
+// Supplier invoice — the third leg of the 3-way match (PO ordered ↔ GRN received
+// ↔ invoice billed). A control document: it flags price and over-billing
+// variances and gates approval-for-payment. It does not re-post AP (the GRN
+// already accrued it); it reconciles what the supplier actually billed.
+model SupplierInvoice {
+  id            String   @id @default(uuid()) @db.Uuid
+  businessId    String   @map("business_id") @db.Uuid
+  poId          String   @map("po_id") @db.Uuid
+  supplierId    String?  @map("supplier_id") @db.Uuid
+  invoiceNumber String   @map("invoice_number") @db.VarChar(80)
+  invoiceDate   DateTime? @map("invoice_date")
+  totalAmount   Decimal  @default(0) @map("total_amount") @db.Decimal(12, 2)
+  status        String   @default("pending") @db.VarChar(20) // matched | variance | approved | disputed
+  variances     Json?    // per-line variance flags from the 3-way match
+  notes         String?
+  createdById   String?  @map("created_by") @db.Uuid
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  business Business              @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  items    SupplierInvoiceItem[]
+
+  @@index([businessId, poId])
+  @@map("supplier_invoices")
+}
+
+model SupplierInvoiceItem {
+  id        String  @id @default(uuid()) @db.Uuid
+  invoiceId String  @map("invoice_id") @db.Uuid
+  poItemId  String? @map("po_item_id") @db.Uuid
+  productId String  @map("product_id") @db.Uuid
+  quantity  Int
+  unitPrice Decimal @map("unit_price") @db.Decimal(12, 2)
+  lineTotal Decimal @map("line_total") @db.Decimal(12, 2)
+
+  invoice SupplierInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@map("supplier_invoice_items")
 }
 
 // ═══════════════════════════════════════════════════════════════════

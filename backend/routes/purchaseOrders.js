@@ -357,4 +357,91 @@ router.delete('/:id', auth, requireRole('owner', 'manager'), async (req, res, ne
   } catch (err) { next(err); }
 });
 
+// ── 3-WAY MATCH: SUPPLIER INVOICE vs PO (ordered) vs GRN (received) ──
+const uuid = z.string().uuid();
+
+// Record a supplier invoice against a PO and run the 3-way match. Flags price
+// variances (invoice price ≠ PO price) and over-billing (invoiced > received).
+// A control document — it does not re-post AP (the GRN already accrued it).
+router.post('/:id/invoice', auth, requireRole('owner', 'manager'), validate(z.object({
+  invoice_number: z.string().trim().min(1).max(80),
+  invoice_date:   z.string().optional().nullable(),
+  notes:          z.string().max(500).optional().nullable(),
+  price_tolerance: z.coerce.number().min(0).max(1).default(0), // fractional price wiggle room
+  items: z.array(z.object({
+    po_item_id: uuid.optional().nullable(),
+    product_id: uuid,
+    quantity:   z.coerce.number().int().positive(),
+    unit_price: z.coerce.number().nonnegative(),
+  })).min(1),
+})), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const po = await prisma.purchaseOrder.findFirst({ where: { id: req.params.id, businessId }, include: { items: true } });
+    if (!po) return res.status(404).json({ title: 'Purchase order not found', status: 404 });
+
+    const poByItem = new Map(po.items.map(i => [i.id, i]));
+    const poByProduct = new Map(po.items.map(i => [i.productId, i]));
+    const tol = req.body.price_tolerance;
+
+    const variances = [];
+    const lines = req.body.items.map(li => {
+      const poLine = (li.po_item_id && poByItem.get(li.po_item_id)) || poByProduct.get(li.product_id) || null;
+      const ordered  = poLine ? poLine.orderedQty : 0;
+      const received = poLine ? poLine.receivedQty : 0;
+      const poPrice  = poLine ? parseFloat(poLine.unitPrice) : null;
+      const flags = [];
+      if (!poLine) flags.push('not_on_po');
+      if (poPrice != null && Math.abs(li.unit_price - poPrice) > poPrice * tol + 0.001) flags.push('price_variance');
+      if (li.quantity > received) flags.push('over_billed'); // billed more than was received
+      if (flags.length) variances.push({ product_id: li.product_id, po_item_id: poLine?.id || null, ordered, received, invoiced: li.quantity, po_price: poPrice, invoice_price: li.unit_price, flags });
+      return { poItemId: poLine?.id || null, productId: li.product_id, quantity: li.quantity, unitPrice: li.unit_price, lineTotal: +(li.quantity * li.unit_price).toFixed(2) };
+    });
+
+    const totalAmount = +lines.reduce((s, l) => s + l.lineTotal, 0).toFixed(2);
+    const status = variances.length ? 'variance' : 'matched';
+
+    const invoice = await prisma.supplierInvoice.create({
+      data: {
+        businessId, poId: po.id, supplierId: po.supplierId || null,
+        invoiceNumber: req.body.invoice_number, invoiceDate: req.body.invoice_date ? new Date(req.body.invoice_date) : null,
+        totalAmount, status, variances: variances.length ? variances : undefined,
+        notes: req.body.notes || null, createdById: req.user.id,
+        items: { create: lines },
+      },
+      include: { items: true },
+    });
+
+    res.status(201).json({ ...invoice, match_status: status, variances, matched: status === 'matched' });
+  } catch (err) { next(err); }
+});
+
+// Invoices raised against a PO, with their match status.
+router.get('/:id/invoices', auth, async (req, res, next) => {
+  try {
+    const invoices = await prisma.supplierInvoice.findMany({
+      where: { businessId: req.user.business_id, poId: req.params.id },
+      include: { items: true }, orderBy: { createdAt: 'desc' },
+    });
+    res.json({ invoices });
+  } catch (err) { next(err); }
+});
+
+// Approve a supplier invoice for payment. A variance invoice can't be approved
+// without an explicit override (the 3-way match gate).
+router.post('/invoices/:invId/approve', auth, requireRole('owner', 'manager'), validate(z.object({
+  override: z.boolean().optional().default(false),
+})), async (req, res, next) => {
+  try {
+    const invoice = await prisma.supplierInvoice.findFirst({ where: { id: req.params.invId, businessId: req.user.business_id } });
+    if (!invoice) return res.status(404).json({ title: 'Invoice not found', status: 404 });
+    if (invoice.status === 'approved') return res.status(400).json({ title: 'Invoice already approved', status: 400 });
+    if (invoice.status === 'variance' && !req.body.override) {
+      return res.status(409).json({ title: 'Invoice has match variances — resolve them or pass override=true to approve anyway.', status: 409, code: 'INVOICE_VARIANCE', variances: invoice.variances });
+    }
+    const updated = await prisma.supplierInvoice.update({ where: { id: invoice.id }, data: { status: 'approved' } });
+    res.json({ message: 'Invoice approved for payment.', invoice: updated });
+  } catch (err) { next(err); }
+});
+
 module.exports = router;
