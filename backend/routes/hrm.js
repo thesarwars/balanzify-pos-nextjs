@@ -829,9 +829,23 @@ router.get('/payroll', auth, async (req, res, next) => {
 router.post('/payroll', auth, requireRole('owner', 'manager'), validate(PayrollSchema), async (req, res, next) => {
   try {
     const businessId = req.user.business_id, b = req.body;
-    const emp = await prisma.employee.findFirst({ where: { id: b.employee_id, businessId }, select: { id: true, name: true } });
+    const emp = await prisma.employee.findFirst({ where: { id: b.employee_id, businessId }, select: { id: true, name: true, joinedAt: true } });
     if (!emp) return res.status(404).json({ title: 'Employee not found', status: 404 });
-    const gross = b.basic + b.allowance + b.overtime + b.bonus + b.incentive;
+
+    // Pro-rate the basic for a mid-month joiner: only the days from the join date
+    // to month-end are paid. Opt-in, and only when the join falls in this month.
+    let basic = b.basic, proration = null;
+    if (b.prorate && emp.joinedAt) {
+      const { start, end } = monthRange(b.month);
+      const join = new Date(emp.joinedAt);
+      if (join >= start && join < end) {
+        const daysInMonth = Math.round((end - start) / 86400000);
+        const workedDays = Math.round((end - join) / 86400000);
+        basic = +(b.basic * workedDays / daysInMonth).toFixed(2);
+        proration = { worked_days: workedDays, days_in_month: daysInMonth, full_basic: b.basic, prorated_basic: basic };
+      }
+    }
+    const gross = basic + b.allowance + b.overtime + b.bonus + b.incentive;
     // Statutory deductions (PAYE/NSSF/SHIF/Housing) computed from gross, on top of
     // the freeform deduction (advances etc.). No country → no statutory (launch markets).
     const stat = b.statutory_country && b.statutory_country !== 'none'
@@ -857,7 +871,7 @@ router.post('/payroll', auth, requireRole('owner', 'manager'), validate(PayrollS
       }
       const created = await tx.payroll.create({
         data: {
-          businessId, employeeId: emp.id, month: b.month, basic: b.basic, allowance: b.allowance,
+          businessId, employeeId: emp.id, month: b.month, basic, allowance: b.allowance,
           overtime: b.overtime, bonus: b.bonus, incentive: b.incentive, deduction: b.deduction,
           advanceRecovered: +recovered.toFixed(2),
           statutoryCountry: stat ? stat.country : null,
@@ -871,7 +885,38 @@ router.post('/payroll', auth, requireRole('owner', 'manager'), validate(PayrollS
       await accounting.postPayroll(tx, { businessId, gross, net, deduction: b.deduction, advanceRecovered: +recovered.toFixed(2), statutory: statutoryTotal, sourceId: created.id, createdById: req.user.id });
       return created;
     });
-    res.status(201).json(serializePayroll(payroll));
+    res.status(201).json({ ...serializePayroll(payroll), ...(proration && { proration }) });
+  } catch (err) { next(err); }
+});
+
+// Remit a month's statutory withholding to the authority — clears the Statutory
+// Payable (2120) and pays it out. Idempotent: only un-remitted runs are paid.
+router.post('/payroll/remit-statutory', auth, requireRole('owner', 'manager'), validate(z.object({
+  month:  z.string().regex(/^\d{4}-\d{2}$/, 'Use YYYY-MM'),
+  method: z.string().max(30).optional(),
+})), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const result = await prisma.$transaction(async (tx) => {
+      const rows = await tx.payroll.findMany({
+        where: { businessId, month: req.body.month, statutoryTotal: { gt: 0 }, statutoryRemittedAt: null },
+        select: { id: true, statutoryTotal: true },
+      });
+      const total = +rows.reduce((s, r) => s + parseFloat(r.statutoryTotal), 0).toFixed(2);
+      if (total <= 0) return { total: 0, count: 0 };
+      await tx.payroll.updateMany({ where: { id: { in: rows.map(r => r.id) } }, data: { statutoryRemittedAt: new Date() } });
+      await accounting.postJournal(tx, {
+        businessId, description: `Statutory remittance — ${req.body.month}`,
+        sourceType: 'statutory_remittance', sourceId: null, createdById: req.user.id,
+        lines: [
+          { code: '2120', debit: total, credit: 0, description: 'Statutory payable settled' },
+          { code: accounting.tenderAccountCode(req.body.method || 'bank'), debit: 0, credit: total, description: 'Remitted to authority' },
+        ],
+      });
+      return { total, count: rows.length };
+    });
+    if (result.count === 0) return res.status(400).json({ title: 'No outstanding statutory to remit for this month', status: 400 });
+    res.json({ message: `Remitted statutory for ${result.count} payroll run(s).`, remitted: result.total, runs: result.count });
   } catch (err) { next(err); }
 });
 
@@ -935,6 +980,11 @@ router.get('/payslip/:id', auth, async (req, res, next) => {
       month: p.month,
       earnings: { basic: parseFloat(p.basic), allowance: parseFloat(p.allowance), overtime: parseFloat(p.overtime), bonus: parseFloat(p.bonus), incentive: parseFloat(p.incentive) },
       deductions: { total: parseFloat(p.deduction), late: att.late_deduction, absent: att.absent_deduction, advance_recovered: parseFloat(p.advanceRecovered) },
+      statutory: parseFloat(p.statutoryTotal) > 0 ? {
+        country: p.statutoryCountry, paye: parseFloat(p.paye), nssf: parseFloat(p.nssf),
+        shif: parseFloat(p.shif), housing_levy: parseFloat(p.housingLevy), total: parseFloat(p.statutoryTotal),
+        remitted: !!p.statutoryRemittedAt,
+      } : null,
       attendance: { days_worked: att.days_worked, total_hours: att.total_hours, overtime_hours: att.overtime_hours, present: att.present, late: att.late, absent: att.absent },
       leave: leaves.map(l => ({ type: l.type, days: l.days, from: l.fromDate.toISOString().slice(0, 10), to: l.toDate.toISOString().slice(0, 10) })),
       net: parseFloat(p.net), status: p.status,

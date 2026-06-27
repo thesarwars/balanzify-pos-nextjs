@@ -391,6 +391,8 @@ const PayrollSchema = z.object({
   deduction:   money.default(0),
   // Optional: auto-compute statutory deductions for this country (e.g. 'KE').
   statutory_country: z.enum(['KE', 'SO', 'none']).optional(),
+  // Pro-rate the basic for a mid-month joiner (by days worked in the month).
+  prorate:     z.boolean().optional().default(false),
 });
 const PackageSchema = z.object({
   name:      shortStr(100),
