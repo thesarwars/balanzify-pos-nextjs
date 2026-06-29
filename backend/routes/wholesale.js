@@ -28,24 +28,54 @@ router.get('/orders', auth, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// Create order at wholesale prices
+// Create order at wholesale prices. Applies the customer's price-group tier
+// (a markup/markdown on the wholesale price) and enforces their credit limit
+// against the open wholesale balance.
 router.post('/orders', auth, validate(z.object({
   customer_id: uuid,
   items: z.array(z.object({ product_id: uuid, quantity: z.coerce.number().int().positive() })).min(1),
   delivery_notes: z.string().max(500).optional(),
+  override_credit_limit: z.boolean().optional().default(false),
 })), async (req, res, next) => {
   try {
+    const customer = await prisma.customer.findFirst({
+      where: { id: req.body.customer_id, businessId: req.user.business_id },
+      include: { priceGroup: { select: { percent: true } } },
+    });
+    if (!customer) return res.status(404).json({ title: 'Customer not found', status: 404 });
+
     const prods = await prisma.product.findMany({
       where: { id: { in: req.body.items.map(i => i.product_id) }, businessId: req.user.business_id },
       select: { id: true, wholesalePrice: true, sellingPrice: true },
     });
     if (prods.length !== req.body.items.length) return res.status(400).json({ title: 'Unknown product in order', status: 400 });
+
+    // Per-customer pricing tier: percent is a +markup / -discount on the base.
+    const factor = 1 + (customer.priceGroup ? parseFloat(customer.priceGroup.percent) : 0) / 100;
     const lines = req.body.items.map(i => {
       const p = prods.find(x => x.id === i.product_id);
-      const price = parseFloat(p.wholesalePrice) > 0 ? parseFloat(p.wholesalePrice) : parseFloat(p.sellingPrice);
+      const base = parseFloat(p.wholesalePrice) > 0 ? parseFloat(p.wholesalePrice) : parseFloat(p.sellingPrice);
+      const price = +Math.max(0, base * factor).toFixed(2);
       return { productId: i.product_id, quantity: i.quantity, unitPrice: price, lineTotal: +(price * i.quantity).toFixed(2) };
     });
     const total = +lines.reduce((s, l) => s + l.lineTotal, 0).toFixed(2);
+
+    // Credit-limit guard against the customer's open (delivered, unpaid) balance.
+    const creditLimit = parseFloat(customer.creditLimit || 0);
+    if (creditLimit > 0 && !req.body.override_credit_limit) {
+      const open = await prisma.wholesaleOrder.findMany({
+        where: { businessId: req.user.business_id, customerId: customer.id, status: 'delivered', paymentStatus: { in: ['unpaid', 'partial'] } },
+        select: { total: true, amountPaid: true },
+      });
+      const outstanding = +open.reduce((s, o) => s + parseFloat(o.total) - parseFloat(o.amountPaid), 0).toFixed(2);
+      if (outstanding + total > creditLimit) {
+        return res.status(400).json({
+          title: `Credit limit exceeded. Limit ${creditLimit.toFixed(2)}, open ${outstanding.toFixed(2)}, this order ${total.toFixed(2)}.`,
+          status: 400, code: 'CREDIT_LIMIT_EXCEEDED', outstanding, credit_limit: creditLimit,
+        });
+      }
+    }
+
     const order = await prisma.wholesaleOrder.create({
       data: {
         businessId: req.user.business_id, customerId: req.body.customer_id,
@@ -161,8 +191,11 @@ router.post('/orders/:id/deliver', auth, async (req, res, next) => {
         .reduce((s, i) => s + i.fulfilledQty * parseFloat(i.unitPrice), 0).toFixed(2);
       // Fall back to the order total for legacy orders with no per-line fulfilment.
       const billed = fulfilledValue > 0 ? fulfilledValue : parseFloat(order.total);
+      // Set the payment due date from the customer's terms (0 days = due now / COD).
+      const cust = await tx.customer.findUnique({ where: { id: order.customerId }, select: { wholesaleTermsDays: true } });
+      const dueDate = new Date(Date.now() + (cust?.wholesaleTermsDays || 0) * 86400000);
       // Re-state the order to the billed value so outstanding/payment math matches the GL.
-      await tx.wholesaleOrder.update({ where: { id: order.id }, data: { status: 'delivered', deliveredAt: new Date(), total: billed, subtotal: billed } });
+      await tx.wholesaleOrder.update({ where: { id: order.id }, data: { status: 'delivered', deliveredAt: new Date(), dueDate, total: billed, subtotal: billed } });
       // GL: delivery recognises revenue on credit — the customer now owes us.
       await accounting.postJournal(tx, {
         businessId:  req.user.business_id,
@@ -285,21 +318,35 @@ router.get('/orders/:id/credit-notes', auth, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// Outstanding balances per shop customer
+// Outstanding balances per shop customer, with AR aging buckets by due date
+// (current / 1-30 / 31-60 / 61+ days overdue) — the collections view.
 router.get('/outstanding', auth, async (req, res, next) => {
   try {
     const open = await prisma.wholesaleOrder.findMany({
       where: { businessId: req.user.business_id, paymentStatus: { in: ['unpaid', 'partial'] }, status: 'delivered' },
       include: { customer: { select: { id: true, name: true, phone: true } } },
     });
+    const now = Date.now();
+    const bucketOf = (days) => days <= 0 ? 'current' : days <= 30 ? 'd1_30' : days <= 60 ? 'd31_60' : 'd61_plus';
     const byCustomer = {};
+    const totals = { current: 0, d1_30: 0, d31_60: 0, d61_plus: 0 };
     for (const o of open) {
       const k = o.customer?.id || 'unknown';
-      if (!byCustomer[k]) byCustomer[k] = { customer: o.customer?.name, phone: o.customer?.phone, orders: 0, outstanding: 0 };
+      if (!byCustomer[k]) byCustomer[k] = { customer_id: o.customer?.id, customer: o.customer?.name, phone: o.customer?.phone, orders: 0, outstanding: 0, aging: { current: 0, d1_30: 0, d31_60: 0, d61_plus: 0 } };
+      const bal = +(parseFloat(o.total) - parseFloat(o.amountPaid)).toFixed(2);
+      const ref = o.dueDate ? new Date(o.dueDate).getTime() : (o.deliveredAt ? new Date(o.deliveredAt).getTime() : now);
+      const overdueDays = Math.floor((now - ref) / 86400000);
+      const bucket = bucketOf(overdueDays);
       byCustomer[k].orders += 1;
-      byCustomer[k].outstanding = +(byCustomer[k].outstanding + parseFloat(o.total) - parseFloat(o.amountPaid)).toFixed(2);
+      byCustomer[k].outstanding = +(byCustomer[k].outstanding + bal).toFixed(2);
+      byCustomer[k].aging[bucket] = +(byCustomer[k].aging[bucket] + bal).toFixed(2);
+      totals[bucket] = +(totals[bucket] + bal).toFixed(2);
     }
-    res.json({ outstanding: Object.values(byCustomer).sort((a, b) => b.outstanding - a.outstanding) });
+    res.json({
+      outstanding: Object.values(byCustomer).sort((a, b) => b.outstanding - a.outstanding),
+      aging_totals: totals,
+      total_outstanding: +Object.values(totals).reduce((s, v) => s + v, 0).toFixed(2),
+    });
   } catch (err) { next(err); }
 });
 

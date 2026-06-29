@@ -65,7 +65,7 @@ router.post('/push', auth, validate(PushSchema), async (req, res, next) => {
           },
         });
 
-        const sale = await createSale({ user: req.user, body: { ...op.payload, idempotency_key: op.idempotency_key } });
+        const sale = await createSale({ user: req.user, body: { ...op.payload, idempotency_key: op.idempotency_key, idempotency_nonce: op.op_id } });
         if (!sale._retry) applied += 1;
         results.push({
           op_id: op.op_id,
@@ -75,11 +75,26 @@ router.post('/push', auth, validate(PushSchema), async (req, res, next) => {
         });
       } catch (err) {
         const conflict = err.statusCode === 409;
+        const reason = conflict ? 'conflict' : (err.statusCode ? 'rejected' : 'error');
+        // An offline sale that fails replay already happened at the till — never lose
+        // it silently. Park it in the dead-letter for manual reconciliation. Keyed by
+        // (business, device, op) so a re-flush of the same failing op updates in place.
+        try {
+          await prisma.unsyncedSale.upsert({
+            where: { businessId_deviceId_opId: { businessId, deviceId: device_id, opId: op.op_id } },
+            update: { reason, errorMessage: err.message, payload: op.payload, idempotencyKey: op.idempotency_key, resolved: false },
+            create: {
+              businessId, deviceId: device_id, opId: op.op_id, idempotencyKey: op.idempotency_key,
+              reason, errorMessage: err.message, payload: op.payload, createdById: req.user.id,
+            },
+          });
+        } catch { /* dead-letter is best-effort; never fail the batch over it */ }
         results.push({
           op_id: op.op_id,
           status: conflict ? 'conflict' : 'error',
           code: conflict ? 'CART_CONFLICT' : (err.statusCode ? 'REJECTED' : 'ERROR'),
           error: err.message,
+          dead_lettered: true,
         });
       }
     }
@@ -172,6 +187,46 @@ router.get('/devices', auth, async (req, res, next) => {
       device_id: d.deviceId, label: d.label, user_id: d.userId,
       last_push_at: d.lastPushAt, last_pull_at: d.lastPullAt, pushed_ops: d.pushedOps,
     })) });
+  } catch (err) { next(err); }
+});
+
+// Dead-letter queue — offline sales that couldn't be replayed and need a human.
+// This is the safety net for "a sale happened at the till but the server rejected
+// the replay": it must be visible, not lost. Defaults to the unresolved backlog.
+router.get('/unsynced', auth, async (req, res, next) => {
+  try {
+    const resolved = req.query.resolved === 'true';
+    const rows = await prisma.unsyncedSale.findMany({
+      where: { businessId: req.user.business_id, resolved },
+      orderBy: { createdAt: 'desc' },
+      take: 200,
+    });
+    res.json({ unsynced: rows.map(r => ({
+      id: r.id, device_id: r.deviceId, op_id: r.opId, idempotency_key: r.idempotencyKey,
+      reason: r.reason, error: r.errorMessage, payload: r.payload,
+      resolved: r.resolved, resolution: r.resolution, resolved_at: r.resolvedAt,
+      created_at: r.createdAt,
+    })) });
+  } catch (err) { next(err); }
+});
+
+// Mark a parked sale reconciled — the operator has re-rung it, adjusted stock, or
+// voided it on the till. We only record the disposition; we don't auto-post, because
+// the correct fix (re-key vs adjust vs void) is a human judgement at the counter.
+const ResolveSchema = z.object({
+  resolution: z.enum(['re_synced', 'voided', 'adjusted']),
+});
+router.post('/unsynced/:id/resolve', auth, validate(ResolveSchema), async (req, res, next) => {
+  try {
+    const existing = await prisma.unsyncedSale.findFirst({
+      where: { id: req.params.id, businessId: req.user.business_id },
+    });
+    if (!existing) return res.status(404).json({ title: 'Unsynced sale not found', status: 404 });
+    const row = await prisma.unsyncedSale.update({
+      where: { id: existing.id },
+      data: { resolved: true, resolvedAt: new Date(), resolvedById: req.user.id, resolution: req.body.resolution },
+    });
+    res.json({ id: row.id, resolved: row.resolved, resolution: row.resolution, resolved_at: row.resolvedAt });
   } catch (err) { next(err); }
 });
 

@@ -191,18 +191,13 @@ router.post('/ask', auth, aiLimiter, validate(z.object({
   days:     z.coerce.number().int().min(1).max(365).default(30),
 })), async (req, res, next) => {
   try {
-    if (!process.env.ANTHROPIC_API_KEY) {
-      return res.status(503).json({
-        error: 'AI insights not configured. Add ANTHROPIC_API_KEY to .env',
-        code:  'AI_NOT_CONFIGURED',
-      });
-    }
-
     const { question, days } = req.body;
     logger.info('ai_insight_request', { businessId: req.user.business_id, question: question.slice(0, 100) });
 
     const context = await getCachedContext(req.user.business_id, days);
-    const { answer, suggestedQuestions } = await askInsight(context, question);
+    // Always answers: the live model when configured, else a deterministic
+    // GL-grounded answer (mode: 'rules'). Never 503s for a missing key.
+    const { answer, suggestedQuestions, mode } = await askInsight(context, question);
 
     res.json({
       question,
@@ -210,6 +205,7 @@ router.post('/ask', auth, aiLimiter, validate(z.object({
       suggested_questions: suggestedQuestions,
       data_period_days:    days,
       business:            context.meta.businessName,
+      ai_enabled:          mode === 'ai',
     });
   } catch (err) {
     if (err.code === 'AI_UNAVAILABLE') return res.status(503).json({ error: err.message });
@@ -229,18 +225,15 @@ router.post('/conversation', auth, aiLimiter, validate(z.object({
   days:    z.coerce.number().int().min(1).max(365).default(30),
 })), async (req, res, next) => {
   try {
-    if (!process.env.ANTHROPIC_API_KEY) {
-      return res.status(503).json({ error: 'AI insights not configured.', code: 'AI_NOT_CONFIGURED' });
-    }
-
     const { message, history, days } = req.body;
     const context = await getCachedContext(req.user.business_id, days);
-    const { answer, suggestedQuestions } = await askInsight(context, message, history);
+    const { answer, suggestedQuestions, mode } = await askInsight(context, message, history);
 
     res.json({
       message,
       answer,
       suggested_questions: suggestedQuestions,
+      ai_enabled: mode === 'ai',
       // Return updated history for frontend to store
       history: [
         ...history,
@@ -258,22 +251,10 @@ router.post('/conversation', auth, aiLimiter, validate(z.object({
 // Morning briefing — proactive summary of what needs attention today
 router.get('/briefing', auth, aiLimiter, async (req, res, next) => {
   try {
-    if (!process.env.ANTHROPIC_API_KEY) {
-      // Return a non-AI briefing based on data alone
-      const context = await getCachedContext(req.user.business_id, 7);
-      const urgent  = [];
-      if (context.inventory.out_of_stock > 0) urgent.push(`${context.inventory.out_of_stock} products out of stock`);
-      if (context.inventory.low_stock_count > 0) urgent.push(`${context.inventory.low_stock_count} products running low`);
-      if (context.refunds.rate_pct > 5) urgent.push(`Refund rate ${context.refunds.rate_pct}% — review with team`);
-      return res.json({
-        briefing: `Good morning! You have ${context.revenue.transactions} transactions in the last 7 days, revenue of ${context.meta.currency} ${context.revenue.total.toFixed(2)}.`,
-        urgent,
-        ai_enabled: false,
-      });
-    }
-
-    const { briefing, urgent } = await generateDailyBriefing(req.user.business_id);
-    res.json({ briefing, urgent, ai_enabled: true });
+    // generateDailyBriefing answers either way — live model when configured, else
+    // a deterministic GL-grounded briefing.
+    const { briefing, urgent, mode } = await generateDailyBriefing(req.user.business_id);
+    res.json({ briefing, urgent, ai_enabled: mode === 'ai' });
   } catch (err) {
     if (err.code === 'AI_UNAVAILABLE') return res.status(503).json({ error: err.message });
     next(err);

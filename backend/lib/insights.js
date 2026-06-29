@@ -403,6 +403,13 @@ async function gatherContext(businessId, { days = 30 } = {}) {
  * @returns {Promise<{ answer: string, suggestedQuestions: string[] }>}
  */
 async function askInsight(context, question, history = []) {
+  // Deployable without a key: when no LLM is configured (or the call fails), fall
+  // back to a deterministic, GL-grounded answer instead of erroring. Flips to the
+  // live model automatically once ANTHROPIC_API_KEY is set.
+  if (!process.env.ANTHROPIC_API_KEY) {
+    return { answer: buildDeterministicAnswer(context, question), suggestedQuestions: defaultSuggestions(), mode: 'rules' };
+  }
+
   const systemPrompt = buildSystemPrompt(context);
 
   const messages = [
@@ -410,37 +417,67 @@ async function askInsight(context, question, history = []) {
     { role: 'user', content: question },
   ];
 
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type':      'application/json',
-      'x-api-key':         process.env.ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
-      model:      'claude-sonnet-4-20250514',
-      max_tokens: 1024,
-      system:     systemPrompt,
-      messages,
-    }),
-  });
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type':      'application/json',
+        'x-api-key':         process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model:      'claude-sonnet-4-20250514',
+        max_tokens: 1024,
+        system:     systemPrompt,
+        messages,
+      }),
+    });
 
-  if (!response.ok) {
-    const err = await response.text();
-    logger.error('anthropic_api_error', { status: response.status, body: err });
-    throw Object.assign(
-      new Error('AI insights temporarily unavailable. Please try again.'),
-      { statusCode: 503, code: 'AI_UNAVAILABLE' }
-    );
+    if (!response.ok) {
+      const err = await response.text();
+      logger.error('anthropic_api_error', { status: response.status, body: err });
+      // Degrade gracefully rather than 503 — the merchant still gets a useful answer.
+      return { answer: buildDeterministicAnswer(context, question), suggestedQuestions: defaultSuggestions(), mode: 'rules' };
+    }
+
+    const data   = await response.json();
+    const answer = data.content?.[0]?.text || '';
+    const suggestedQuestions = extractSuggestions(answer, context);
+    return { answer, suggestedQuestions, mode: 'ai' };
+  } catch (err) {
+    logger.warn('ai_fallback_to_rules', { message: err.message });
+    return { answer: buildDeterministicAnswer(context, question), suggestedQuestions: defaultSuggestions(), mode: 'rules' };
   }
+}
 
-  const data   = await response.json();
-  const answer = data.content?.[0]?.text || '';
+// Deterministic business briefing computed straight from the gathered GL context —
+// genuinely useful with zero external dependencies; the no-key/offline fallback.
+function fmt(n, ccy = '') { return `${ccy}${Number(n || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}`; }
 
-  // Extract suggested follow-up questions if Claude included them
-  const suggestedQuestions = extractSuggestions(answer, context);
+function buildDeterministicAnswer(ctx, question = '') {
+  const c = ctx?.meta?.currency ? ctx.meta.currency + ' ' : '';
+  const r = ctx?.revenue || {};
+  const parts = [];
+  const arrow = r.change_pct > 0 ? `up ${r.change_pct}%` : r.change_pct < 0 ? `down ${Math.abs(r.change_pct)}%` : 'flat';
+  parts.push(`Over the last ${ctx?.meta?.periodDays || 30} days you took ${fmt(r.total, c)} across ${r.transactions || 0} sales (${arrow} vs the prior period); average ticket ${fmt(r.avg_ticket, c)}.`);
+  if (ctx?.trends?.best_day?.day) parts.push(`Best day was ${ctx.trends.best_day.day} (${fmt(ctx.trends.best_day.revenue, c)}).`);
+  if (ctx?.products?.top?.length) { const t = ctx.products.top[0]; parts.push(`Top seller: ${t.name} (${t.units} units, ${fmt(t.revenue, c)}).`); }
 
-  return { answer, suggestedQuestions };
+  const todo = [];
+  if (ctx?.inventory?.out_of_stock) todo.push(`Restock ${ctx.inventory.out_of_stock} out-of-stock product(s).`);
+  if (ctx?.inventory?.low_stock_count) todo.push(`${ctx.inventory.low_stock_count} product(s) running low — reorder soon.`);
+  const overdue = (ctx?.customers?.top || []).filter(x => x.balance_owed > 0);
+  if (overdue.length) todo.push(`Follow up ${overdue.length} customer(s) on outstanding credit (${fmt(overdue.reduce((s, x) => s + x.balance_owed, 0), c)}).`);
+  if (ctx?.refunds?.rate_pct > 5) todo.push(`Refund rate is high at ${ctx.refunds.rate_pct}% — check the cause.`);
+  if (ctx?.products?.deadstock?.length) todo.push(`${ctx.products.deadstock.length} slow item(s) tying up ${fmt(ctx.products.deadstock.reduce((s, x) => s + x.tied_capital, 0), c)} — discount or clear.`);
+
+  let out = parts.join(' ');
+  if (todo.length) out += `\n\nToday's actions:\n- ${todo.join('\n- ')}`;
+  return out;
+}
+
+function defaultSuggestions() {
+  return ['How did sales compare to last week?', 'Which products should I reorder?', 'Who owes me money?'];
 }
 
 /**
@@ -590,7 +627,7 @@ function extractSuggestions(answer, context) {
 async function generateDailyBriefing(businessId) {
   const context = await gatherContext(businessId, { days: 7 });
   const question = 'Give me a brief morning summary of my business. What do I need to know and do today?';
-  const { answer } = await askInsight(context, question);
+  const { answer, mode } = await askInsight(context, question);
 
   // Extract urgent items
   const urgent = [];
@@ -608,7 +645,7 @@ async function generateDailyBriefing(businessId) {
     urgent.push(`${overdue.length} customers with outstanding credit balances`);
   }
 
-  return { briefing: answer, urgent };
+  return { briefing: answer, urgent, mode };
 }
 
 module.exports = { gatherContext, askInsight, generateDailyBriefing };

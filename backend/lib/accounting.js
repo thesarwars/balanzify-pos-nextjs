@@ -21,19 +21,24 @@ const CHART = [
   { code: '1010', name: 'Mobile Money',        type: 'asset',     normal: 'debit'  },
   { code: '1015', name: 'Mobile Money (In-Transit)', type: 'asset', normal: 'debit' },
   { code: '1020', name: 'Bank / Card',         type: 'asset',     normal: 'debit'  },
+  { code: '1025', name: 'Merchant Wallet',     type: 'asset',     normal: 'debit'  },
   { code: '1100', name: 'Accounts Receivable', type: 'asset',     normal: 'debit'  },
   { code: '1110', name: 'Employee Advances',   type: 'asset',     normal: 'debit'  },
   { code: '1120', name: 'Retention Receivable', type: 'asset',    normal: 'debit'  },
+  { code: '1130', name: 'Asset Finance Receivable', type: 'asset', normal: 'debit' },
   { code: '1200', name: 'Inventory',           type: 'asset',     normal: 'debit'  },
   { code: '2000', name: 'Accounts Payable',    type: 'liability', normal: 'credit' },
   { code: '2100', name: 'Tax Payable',         type: 'liability', normal: 'credit' },
   { code: '2120', name: 'Statutory Payable',   type: 'liability', normal: 'credit' },
   { code: '2200', name: 'Financing Payable',   type: 'liability', normal: 'credit' },
   { code: '2300', name: 'Charity Payable',     type: 'liability', normal: 'credit' },
+  { code: '2400', name: 'Savings Group Payable', type: 'liability', normal: 'credit' },
+  { code: '2500', name: 'Takaful Pool',         type: 'liability', normal: 'credit' },
   { code: '3000', name: "Owner's Equity",      type: 'equity',    normal: 'credit' },
   { code: '4000', name: 'Sales Revenue',       type: 'revenue',   normal: 'credit' },
   { code: '4100', name: 'Delivery Revenue',    type: 'revenue',   normal: 'credit' },
   { code: '5000', name: 'Cost of Goods Sold',  type: 'expense',   normal: 'debit'  },
+  { code: '5050', name: 'Inventory Shrinkage/Adjustments', type: 'expense', normal: 'debit' },
   { code: '5100', name: 'Salaries & Wages',     type: 'expense',   normal: 'debit'  },
   { code: '5200', name: 'Operating Expenses',   type: 'expense',   normal: 'debit'  },
   { code: '5300', name: 'Financing Cost',       type: 'expense',   normal: 'debit'  },
@@ -175,6 +180,27 @@ async function postFolioPayment(tx, { businessId, method, amount, sourceId, crea
 }
 
 /**
+ * Stock written down (shrinkage, theft, expiry, damage) or written up (found in
+ * a count) at cost. Keeps the GL Inventory balance in step with the physical
+ * stock — without this, write-offs and count variances silently drift the books.
+ *   loss: Dr Inventory Shrinkage (5050) / Cr Inventory (1200)
+ *   gain: Dr Inventory (1200)            / Cr Inventory Shrinkage (5050)
+ */
+async function postInventoryAdjustment(tx, { businessId, amount, gain = false, sourceType = 'stock_adjustment', sourceId, createdById }) {
+  const amt = round2(amount);
+  if (amt <= 0) return null;
+  return postJournal(tx, {
+    businessId, description: gain ? 'Inventory gain' : 'Inventory write-down',
+    sourceType, sourceId, createdById,
+    lines: gain
+      ? [ { code: '1200', debit: amt, credit: 0, description: 'Inventory' },
+          { code: '5050', debit: 0, credit: amt, description: 'Inventory adjustment' } ]
+      : [ { code: '5050', debit: amt, credit: 0, description: 'Inventory adjustment' },
+          { code: '1200', debit: 0, credit: amt, description: 'Inventory' } ],
+  });
+}
+
+/**
  * A salary advance is a loan to the employee: an asset (we expect it back), not
  * an expense. Cash goes out, an Employee Advances receivable goes up. It is
  * cleared later out of payroll (see postPayroll's advanceRecovered).
@@ -305,4 +331,4 @@ async function accountBalances(businessId, { from, to } = {}) {
   });
 }
 
-module.exports = { CHART, ensureChart, postJournal, postSale, postFolioCharge, postFolioPayment, postAdvance, postPayroll, postMilestoneBill, postMilestonePayment, postDeliveryRevenue, postExpense, accountBalances, tenderAccountCode, round2 };
+module.exports = { CHART, ensureChart, postJournal, postSale, postFolioCharge, postFolioPayment, postInventoryAdjustment, postAdvance, postPayroll, postMilestoneBill, postMilestonePayment, postDeliveryRevenue, postExpense, accountBalances, tenderAccountCode, round2 };

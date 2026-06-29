@@ -5,7 +5,7 @@
 // ─────────────────────────────────────────────────────────────────
 import React from 'react';
 import type { Theme } from '@/lib/theme';
-import { money, money0 } from '@/lib/theme';
+import { money, money0, setCurrency, type CurrencyCode } from '@/lib/theme';
 import { Btn, Badge, Panel, Modal, Field, TextField, FormGrid, useToast } from '@/components/kit';
 import { Topbar, useSession } from '@/components/shell';
 import { API } from '@/lib/api';
@@ -607,7 +607,7 @@ function SetSelect({ T, value, onChange, options }: { T: Theme; value: any; onCh
   );
 }
 
-const CCY_MAP: [string, string][] = [['US Dollar ($)', 'USD'], ['Somali Shilling (Sh)', 'SOS'], ['Euro (€)', 'EUR'], ['Kenyan Shilling (KSh)', 'KES'], ['UAE Dirham (AED)', 'AED']];
+const CCY_MAP: [string, string][] = [['US Dollar ($)', 'USD'], ['Somali Shilling (Sh)', 'SOS'], ['Somaliland Shilling (SlSh)', 'SLSH'], ['Kenyan Shilling (KSh)', 'KES'], ['Ethiopian Birr (Br)', 'ETB']];
 const ccyToCode = (disp: string) => (CCY_MAP.find(([d]) => d === disp) || ([] as any))[1] || 'USD';
 const codeToCcy = (code: string) => (CCY_MAP.find(([, c]) => c === code) || CCY_MAP[0])[0];
 
@@ -635,6 +635,8 @@ export function Settings({ T }: { T: Theme }) {
 
   async function save() {
     if (typeof window !== 'undefined') localStorage.setItem('bz_settings', JSON.stringify(s));
+    // Drive the app-wide money formatter from the chosen currency immediately.
+    setCurrency(ccyToCode(s.currency) as CurrencyCode);
     if (API.config?.isReal?.()) {
       try { await API.business.update({ name: s.bizName.trim(), currency: ccyToCode(s.currency) }); }
       catch (e: any) { toast(e.message || 'Could not save business profile.'); return; }
@@ -650,7 +652,7 @@ export function Settings({ T }: { T: Theme }) {
     { title: 'Business', rows: [
       { label: 'Business name', ctrl: <SetInput T={T} value={s.bizName} onChange={(v: any) => set('bizName', v)} width={200} /> },
       { label: 'Branch', ctrl: <SetInput T={T} value={s.branch} onChange={(v: any) => set('branch', v)} width={200} /> },
-      { label: 'Currency', ctrl: <SetSelect T={T} value={s.currency} onChange={(v: any) => set('currency', v)} options={['US Dollar ($)', 'Somali Shilling (Sh)', 'Euro (€)', 'Kenyan Shilling (KSh)', 'UAE Dirham (AED)']} /> },
+      { label: 'Currency', ctrl: <SetSelect T={T} value={s.currency} onChange={(v: any) => set('currency', v)} options={CCY_MAP.map(([d]) => d)} /> },
       { label: 'Time zone', ctrl: <SetSelect T={T} value={s.tz} onChange={(v: any) => set('tz', v)} options={['EAT (UTC+3)', 'GMT (UTC+0)', 'AST (UTC+3)', 'CET (UTC+1)']} /> },
     ] },
     { title: 'Tax & Receipts', rows: [

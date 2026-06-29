@@ -249,6 +249,76 @@ loyaltyRouter.post('/adjust', auth, requireRole('owner', 'manager'), async (req,
   }
 });
 
+// ── Stamp / punch cards ("buy 9, get 1 free") ───────────────────────
+loyaltyRouter.get('/stamp-cards', auth, async (req, res, next) => {
+  try {
+    const cards = await prisma.stampCard.findMany({
+      where: { businessId: req.user.business_id, ...(req.query.active !== 'all' && { isActive: true }) },
+      orderBy: { createdAt: 'desc' },
+    });
+    res.json({ stamp_cards: cards });
+  } catch (err) { next(err); }
+});
+
+loyaltyRouter.post('/stamp-cards', auth, requireRole('owner', 'manager'), validate(z.object({
+  name: z.string().trim().min(1).max(150),
+  stamps_required: z.coerce.number().int().min(2).max(100),
+  reward: z.string().trim().min(1).max(200),
+  product_id: z.string().uuid().optional().nullable(),
+})), async (req, res, next) => {
+  try {
+    const card = await prisma.stampCard.create({
+      data: { businessId: req.user.business_id, name: req.body.name, stampsRequired: req.body.stamps_required, reward: req.body.reward, productId: req.body.product_id || null },
+    });
+    res.status(201).json(card);
+  } catch (err) { next(err); }
+});
+
+// Add stamp(s) for a customer; rolls over and signals a reward when the card fills.
+loyaltyRouter.post('/stamp-cards/:id/stamp', auth, validate(z.object({
+  customer_id: z.string().uuid(),
+  count: z.coerce.number().int().positive().max(50).default(1),
+})), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const card = await prisma.stampCard.findFirst({ where: { id: req.params.id, businessId, isActive: true } });
+    if (!card) return res.status(404).json({ title: 'Stamp card not found', status: 404 });
+    const customer = await prisma.customer.findFirst({ where: { id: req.body.customer_id, businessId }, select: { id: true } });
+    if (!customer) return res.status(404).json({ title: 'Customer not found', status: 404 });
+
+    const cust = await prisma.customerStampCard.upsert({
+      where: { stampCardId_customerId: { stampCardId: card.id, customerId: customer.id } },
+      create: { stampCardId: card.id, customerId: customer.id, stamps: 0, completedCount: 0 },
+      update: {},
+    });
+    const total = cust.stamps + req.body.count;
+    const rewardsEarned = Math.floor(total / card.stampsRequired);
+    const remaining = total % card.stampsRequired;
+    const updated = await prisma.customerStampCard.update({
+      where: { id: cust.id },
+      data: { stamps: remaining, completedCount: cust.completedCount + rewardsEarned },
+    });
+    res.json({
+      stamps: updated.stamps, stamps_required: card.stampsRequired,
+      reward_earned: rewardsEarned > 0, rewards_earned: rewardsEarned,
+      reward: rewardsEarned > 0 ? card.reward : null,
+      completed_count: updated.completedCount,
+    });
+  } catch (err) { next(err); }
+});
+
+loyaltyRouter.get('/stamp-cards/:id/customer/:customerId', auth, async (req, res, next) => {
+  try {
+    const card = await prisma.stampCard.findFirst({ where: { id: req.params.id, businessId: req.user.business_id } });
+    if (!card) return res.status(404).json({ title: 'Stamp card not found', status: 404 });
+    const cust = await prisma.customerStampCard.findUnique({ where: { stampCardId_customerId: { stampCardId: card.id, customerId: req.params.customerId } } });
+    res.json({
+      stamp_card: card.name, stamps: cust?.stamps || 0, stamps_required: card.stampsRequired,
+      completed_count: cust?.completedCount || 0, reward: card.reward,
+    });
+  } catch (err) { next(err); }
+});
+
 // ══════════════════════════════════════════════════════════════════════════════
 // PETTY CASH
 // ══════════════════════════════════════════════════════════════════════════════

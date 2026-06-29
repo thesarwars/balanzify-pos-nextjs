@@ -194,7 +194,16 @@ try {
   app.use('/api/v1/checkout',   apiLimiter, checkoutRoutes);
   app.use('/api/v1/insights',   apiLimiter, gateAuth, requireModule('insights'), insightsRoutes);
   app.use('/api/v1/credit',     apiLimiter, gateAuth, requireModule('credit'), creditRoutes);
-  
+  app.use('/api/v1/savings',    apiLimiter, gateAuth, requireModule('savings'), require('./routes/savings'));
+  app.use('/api/v1/forecast',   apiLimiter, require('./routes/forecast'));
+  app.use('/api/v1/benchmarking', apiLimiter, require('./routes/benchmarking'));
+  app.use('/api/v1/risk',       apiLimiter, require('./routes/risk'));
+  app.use('/api/v1/cockpit',    apiLimiter, require('./routes/cockpit'));
+  app.use('/api/v1/asset-finance', apiLimiter, gateAuth, requireModule('asset_finance'), require('./routes/assetFinance'));
+  app.use('/api/v1/wallet',     apiLimiter, gateAuth, requireModule('wallet'), require('./routes/wallet'));
+  app.use('/api/v1/takaful',    apiLimiter, gateAuth, requireModule('takaful'), require('./routes/takaful'));
+  app.use('/api/v1/trade',      apiLimiter, gateAuth, requireModule('trade'), require('./routes/trade'));
+
   // Public diaspora payment pages — no auth, token is unguessable
   app.use('/pay', creditRoutes);
   

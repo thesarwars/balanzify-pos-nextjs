@@ -569,20 +569,105 @@ router.post('/prescriptions', auth, requireRole('owner', 'manager'), validate(z.
   quantity:           z.coerce.number().int().positive(),
   refills_authorized: z.coerce.number().int().min(0).max(12).default(0),
   daw:                z.boolean().default(false),
+  days_supply:        z.coerce.number().int().positive().max(365).optional().nullable(),
+  valid_days:         z.coerce.number().int().positive().max(730).default(180), // Rx validity window
+  allergies:          z.array(z.string().trim().min(1).max(100)).max(50).default([]),
 })), async (req, res, next) => {
   try {
     const b = req.body;
     const drug = await prisma.product.findFirst({ where: { id: b.product_id, businessId: req.user.business_id }, select: { id: true } });
     if (!drug) return res.status(404).json({ error: 'Drug not found.' });
+    const validUntil = new Date(Date.now() + b.valid_days * 86400000);
     const rx = await prisma.prescription.create({
       data: {
         businessId: req.user.business_id, rxNumber: `RX-${Date.now()}`, productId: b.product_id,
         patientId: b.patient_id || null, patientName: b.patient_name, patientPhone: b.patient_phone || null,
         prescriberName: b.prescriber_name, prescriberReg: b.prescriber_reg || null, sig: b.sig || null,
-        quantity: b.quantity, refillsAuthorized: b.refills_authorized, daw: b.daw, createdById: req.user.id,
+        quantity: b.quantity, refillsAuthorized: b.refills_authorized, daw: b.daw,
+        daysSupply: b.days_supply || null, validUntil, allergies: b.allergies,
+        createdById: req.user.id,
       },
     });
     res.status(201).json({ ...rx, refills_remaining: 1 + rx.refillsAuthorized });
+  } catch (err) { next(err); }
+});
+
+// Multi-drug prescription (a real script). Creates one group header plus an
+// independent Prescription line per drug — each keeps its own quantity, refills,
+// SIG, DAW and dispensing, and inherits the shared patient/prescriber/allergies/
+// validity. Dispense each line via the existing /prescriptions/:id/dispense.
+router.post('/prescriptions/group', auth, requireRole('owner', 'manager'), validate(z.object({
+  patient_id:      uuid.optional().nullable(),
+  patient_name:    z.string().trim().min(1).max(255),
+  patient_phone:   z.string().max(50).optional().nullable(),
+  prescriber_name: z.string().trim().min(1).max(255),
+  prescriber_reg:  z.string().max(100).optional().nullable(),
+  allergies:       z.array(z.string().trim().min(1).max(100)).max(50).default([]),
+  valid_days:      z.coerce.number().int().positive().max(730).default(180),
+  notes:           z.string().max(1000).optional().nullable(),
+  items: z.array(z.object({
+    product_id:         uuid,
+    quantity:           z.coerce.number().int().positive(),
+    sig:                z.string().max(500).optional().nullable(),
+    daw:                z.boolean().default(false),
+    days_supply:        z.coerce.number().int().positive().max(365).optional().nullable(),
+    refills_authorized: z.coerce.number().int().min(0).max(12).default(0),
+  })).min(1).max(25),
+})), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const b = req.body;
+    const productIds = [...new Set(b.items.map(i => i.product_id))];
+    const found = await prisma.product.findMany({ where: { id: { in: productIds }, businessId }, select: { id: true } });
+    if (found.length !== productIds.length) return res.status(404).json({ error: 'One or more drugs not found.' });
+
+    const validUntil = new Date(Date.now() + b.valid_days * 86400000);
+    const stamp = Date.now();
+    const out = await prisma.$transaction(async (tx) => {
+      const group = await tx.prescriptionGroup.create({
+        data: {
+          businessId, groupNumber: `RXG-${stamp}`,
+          patientId: b.patient_id || null, patientName: b.patient_name, patientPhone: b.patient_phone || null,
+          prescriberName: b.prescriber_name, prescriberReg: b.prescriber_reg || null,
+          allergies: b.allergies, notes: b.notes || null, createdById: req.user.id,
+        },
+      });
+      const items = [];
+      for (let i = 0; i < b.items.length; i++) {
+        const it = b.items[i];
+        const rx = await tx.prescription.create({
+          data: {
+            businessId, groupId: group.id, rxNumber: `RX-${stamp}-${i + 1}`, productId: it.product_id,
+            patientId: b.patient_id || null, patientName: b.patient_name, patientPhone: b.patient_phone || null,
+            prescriberName: b.prescriber_name, prescriberReg: b.prescriber_reg || null, sig: it.sig || null,
+            quantity: it.quantity, refillsAuthorized: it.refills_authorized, daw: it.daw,
+            daysSupply: it.days_supply || null, validUntil, allergies: b.allergies, createdById: req.user.id,
+          },
+        });
+        items.push({ ...rx, refills_remaining: 1 + rx.refillsAuthorized });
+      }
+      return { group, items };
+    });
+    res.status(201).json({ ...out.group, items: out.items });
+  } catch (err) { next(err); }
+});
+
+router.get('/prescriptions/group/:id', auth, async (req, res, next) => {
+  try {
+    const group = await prisma.prescriptionGroup.findFirst({
+      where: { id: req.params.id, businessId: req.user.business_id },
+      include: {
+        items: {
+          include: { product: { select: { name: true, genericName: true, controlledSchedule: true } }, _count: { select: { dispenses: true } } },
+          orderBy: { rxNumber: 'asc' },
+        },
+      },
+    });
+    if (!group) return res.status(404).json({ error: 'Prescription group not found.' });
+    res.json({
+      ...group,
+      items: group.items.map(rx => ({ ...rx, refills_remaining: Math.max(0, 1 + rx.refillsAuthorized - rx.refillsUsed) })),
+    });
   } catch (err) { next(err); }
 });
 
@@ -662,7 +747,8 @@ router.post('/prescriptions/:id/dispense', auth, requireRole('owner', 'manager')
   location_id: uuid,
   quantity:    z.coerce.number().int().positive().optional(),
   verified_by: uuid.optional().nullable(),
-  override:    z.boolean().optional(), // override a contraindication (documented decision)
+  override:    z.boolean().optional(), // override a soft clinical block (documented decision)
+  substitute_product_id: uuid.optional().nullable(), // dispense a generic equivalent (blocked if DAW)
 })), async (req, res, next) => {
   try {
     const out = await prisma.$transaction(async (tx) => {
@@ -673,41 +759,81 @@ router.post('/prescriptions/:id/dispense', auth, requireRole('owner', 'manager')
       if (!rx) return { code: 404, error: 'Prescription not found.' };
       if (rx.status !== 'active') return { code: 400, error: 'Prescription is not active.' };
 
+      // Expired prescriptions are invalid — a hard stop, not overridable.
+      if (rx.validUntil && new Date() > new Date(rx.validUntil)) {
+        return { code: 400, error: `Prescription expired on ${new Date(rx.validUntil).toISOString().slice(0, 10)}. A new prescription is required.` };
+      }
+
       const allowed = 1 + rx.refillsAuthorized; // original fill + authorised refills
       if (rx.refillsUsed >= allowed) return { code: 400, error: 'No refills remaining on this prescription.' };
+
+      // Early-refill guard: a fill should last daysSupply; block refilling before
+      // ~80% of that supply has elapsed (a documented override is allowed, e.g.
+      // travel). Skipped when no daysSupply is recorded.
+      if (rx.daysSupply && rx.refillsUsed > 0 && !req.body.override) {
+        const last = await tx.dispenseRecord.findFirst({ where: { prescriptionId: rx.id }, orderBy: { dispensedAt: 'desc' }, select: { dispensedAt: true } });
+        if (last) {
+          const earliest = new Date(new Date(last.dispensedAt).getTime() + Math.floor(rx.daysSupply * 0.8) * 86400000);
+          if (new Date() < earliest) {
+            return { code: 400, error: `Too soon to refill — next fill from ${earliest.toISOString().slice(0, 10)} (${rx.daysSupply}-day supply). Pass override=true for an early refill.` };
+          }
+        }
+      }
+
+      // Generic substitution: dispense a different product than written. Blocked
+      // when the prescriber marked the Rx dispense-as-written (DAW).
+      let dispensedProduct = rx.product;
+      if (req.body.substitute_product_id && req.body.substitute_product_id !== rx.product.id) {
+        if (rx.daw) return { code: 400, error: 'Prescription is marked dispense-as-written (DAW); generic substitution is not permitted.' };
+        const sub = await tx.product.findFirst({ where: { id: req.body.substitute_product_id, businessId: req.user.business_id }, select: { id: true, name: true, genericName: true, controlledSchedule: true } });
+        if (!sub) return { code: 404, error: 'Substitute drug not found.' };
+        dispensedProduct = sub;
+      }
+
+      // Allergy check: block if the dispensed drug matches a recorded patient
+      // allergy (name or generic), unless overridden with a documented decision.
+      const drugTerms = [dispensedProduct.name, dispensedProduct.genericName].filter(Boolean).map(s => s.toLowerCase());
+      const allergyHit = (rx.allergies || []).find(a => {
+        const al = a.toLowerCase();
+        return drugTerms.some(t => t.includes(al) || al.includes(t));
+      });
+      if (allergyHit && !req.body.override) {
+        return { code: 409, error: `Patient has a recorded allergy to "${allergyHit}" — dispensing ${dispensedProduct.name} is blocked. Pass override=true to proceed on a documented clinical decision.`, allergy: allergyHit };
+      }
 
       // Clinical safety: check this drug against the patient's other active meds.
       // A contraindication blocks the dispense unless explicitly overridden.
       const otherMeds = await patientDrugNames(req.user.business_id, { patientId: rx.patientId, patientName: rx.patientName, excludeRxId: rx.id });
-      const interWarnings = await interactions.check(req.user.business_id, [rx.product.genericName || rx.product.name, ...otherMeds]);
+      const interWarnings = await interactions.check(req.user.business_id, [dispensedProduct.genericName || dispensedProduct.name, ...otherMeds]);
       if (interactions.hasContraindication(interWarnings) && !req.body.override) {
         return { code: 409, error: 'Contraindicated drug interaction — dispensing blocked. Resolve, or pass override=true to proceed on a documented clinical decision.', interactions: interWarnings };
       }
 
-      // Controlled substances require a different second user to verify.
-      if (rx.product.controlledSchedule) {
-        if (!req.body.verified_by) return { code: 400, error: `Controlled substance (${rx.product.controlledSchedule}) requires a second-person verification (verified_by).` };
+      // Controlled substances require a different second user to verify (check the
+      // drug actually dispensed, so a controlled substitute is covered too).
+      if (dispensedProduct.controlledSchedule) {
+        if (!req.body.verified_by) return { code: 400, error: `Controlled substance (${dispensedProduct.controlledSchedule}) requires a second-person verification (verified_by).` };
         if (req.body.verified_by === req.user.id) return { code: 400, error: 'The verifier must be a different user than the dispenser.' };
         const verifier = await tx.user.findFirst({ where: { id: req.body.verified_by, businessId: req.user.business_id, isActive: true }, select: { id: true } });
         if (!verifier) return { code: 400, error: 'Verifier not found.' };
       }
 
       const qty = req.body.quantity || rx.quantity;
-      const rows = await tx.$queryRaw`SELECT quantity FROM stock_levels WHERE product_id = ${rx.product.id}::uuid AND location_id = ${req.body.location_id}::uuid FOR UPDATE`;
+      const rows = await tx.$queryRaw`SELECT quantity FROM stock_levels WHERE product_id = ${dispensedProduct.id}::uuid AND location_id = ${req.body.location_id}::uuid FOR UPDATE`;
       const have = rows[0]?.quantity ?? 0;
-      if (have < qty) return { code: 400, error: `Insufficient stock to dispense ${rx.product.name}: need ${qty}, have ${have}.` };
+      if (have < qty) return { code: 400, error: `Insufficient stock to dispense ${dispensedProduct.name}: need ${qty}, have ${have}.` };
       const newQty = have - qty;
-      await tx.$executeRaw`UPDATE stock_levels SET quantity = ${newQty}, updated_at = NOW() WHERE product_id = ${rx.product.id}::uuid AND location_id = ${req.body.location_id}::uuid`;
-      await tx.stockMovement.create({ data: { businessId: req.user.business_id, productId: rx.product.id, locationId: req.body.location_id, type: 'out', quantity: -qty, balanceAfter: newQty, referenceType: 'dispense', referenceId: rx.id, createdById: req.user.id } });
+      await tx.$executeRaw`UPDATE stock_levels SET quantity = ${newQty}, updated_at = NOW() WHERE product_id = ${dispensedProduct.id}::uuid AND location_id = ${req.body.location_id}::uuid`;
+      await tx.stockMovement.create({ data: { businessId: req.user.business_id, productId: dispensedProduct.id, locationId: req.body.location_id, type: 'out', quantity: -qty, balanceAfter: newQty, referenceType: 'dispense', referenceId: rx.id, createdById: req.user.id } });
 
-      const dispense = await tx.dispenseRecord.create({ data: { businessId: req.user.business_id, prescriptionId: rx.id, productId: rx.product.id, quantity: qty, dispensedById: req.user.id, verifiedById: req.body.verified_by || null } });
+      const dispense = await tx.dispenseRecord.create({ data: { businessId: req.user.business_id, prescriptionId: rx.id, productId: dispensedProduct.id, quantity: qty, dispensedById: req.user.id, verifiedById: req.body.verified_by || null } });
       const newUsed = rx.refillsUsed + 1;
       await tx.prescription.update({ where: { id: rx.id }, data: { refillsUsed: newUsed, status: newUsed >= allowed ? 'completed' : 'active' } });
 
-      return { dispense, refills_remaining: Math.max(0, allowed - newUsed), interactions: interWarnings };
+      return { dispense, substituted: dispensedProduct.id !== rx.product.id, refills_remaining: Math.max(0, allowed - newUsed), interactions: interWarnings };
     });
-    if (out.error) return res.status(out.code).json({ error: out.error, ...(out.interactions && { interactions: out.interactions }) });
-    res.status(201).json({ message: 'Dispensed.', dispense: out.dispense, refills_remaining: out.refills_remaining, interactions: out.interactions || [] });
+    if (out.error) return res.status(out.code).json({ error: out.error, ...(out.interactions && { interactions: out.interactions }), ...(out.allergy && { allergy: out.allergy }) });
+    res.status(201).json({ message: 'Dispensed.', dispense: out.dispense, substituted: out.substituted, refills_remaining: out.refills_remaining, interactions: out.interactions || [] });
   } catch (err) { next(err); }
 });
 
@@ -724,6 +850,30 @@ router.get('/controlled-register', auth, requireRole('owner', 'manager'), async 
       quantity: r.quantity, rx_number: r.prescription.rxNumber, patient: r.prescription.patientName,
       prescriber: r.prescription.prescriberName, dispensed_by: r.dispensedById, verified_by: r.verifiedById,
     })) });
+  } catch (err) { next(err); }
+});
+
+// ── PHARMACY SETTINGS ─────────────────────────────────────────────
+// Toggle Rx-only enforcement at the till. Off by default so general retail is
+// unaffected; on, a prescription-only drug can't be sold at POS without a valid
+// prescription (enforced in the sales path).
+router.get('/settings', auth, async (req, res, next) => {
+  try {
+    const b = await prisma.business.findUnique({ where: { id: req.user.business_id }, select: { enforceRxOnSale: true } });
+    res.json({ enforce_rx_on_sale: !!b?.enforceRxOnSale });
+  } catch (err) { next(err); }
+});
+
+router.put('/settings', auth, requireRole('owner', 'manager'), validate(z.object({
+  enforce_rx_on_sale: z.boolean(),
+})), async (req, res, next) => {
+  try {
+    const b = await prisma.business.update({
+      where: { id: req.user.business_id },
+      data:  { enforceRxOnSale: req.body.enforce_rx_on_sale },
+      select: { enforceRxOnSale: true },
+    });
+    res.json({ enforce_rx_on_sale: b.enforceRxOnSale });
   } catch (err) { next(err); }
 });
 

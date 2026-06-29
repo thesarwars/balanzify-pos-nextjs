@@ -471,6 +471,100 @@ router.post('/plans/reminders', auth, requireRole('owner', 'manager'), async (re
   } catch (err) { next(err); }
 });
 
+// ── DEYN REMINDERS (running tab, not just installment plans) ──────
+// Chase everyday shop debt over WhatsApp. Unlike /plans/reminders (which only
+// covers formal installment plans), this nudges every customer carrying an
+// outstanding balance — and embeds a pay-link so the reminder is one tap from
+// settlement (the customer forwards it to family abroad, who pays and the
+// merchant confirms). Returns ready-to-send wa.me links; nothing is sent
+// server-side (the merchant taps each, keeping it on their own WhatsApp).
+router.post('/deyn-reminders', auth, requireRole('owner', 'manager'), validate(z.object({
+  min_balance:     money.optional(),       // only customers owing at least this (default 1)
+  older_than_days: z.coerce.number().int().min(0).max(365).default(0), // oldest debt at least this old
+})), async (req, res, next) => {
+  try {
+    const businessId  = req.user.business_id;
+    const minBalance  = req.body.min_balance != null ? parseFloat(req.body.min_balance) : 1;
+    const olderThan   = req.body.older_than_days || 0;
+    const frontendUrl = process.env.FRONTEND_URL || 'https://app.balanzify.com';
+
+    const business = await prisma.business.findUnique({
+      where: { id: businessId }, select: { name: true, currency: true },
+    });
+
+    const debtors = await prisma.customer.findMany({
+      where: { businessId, outstandingBalance: { gte: minBalance } },
+      select: { id: true, name: true, phone: true, whatsapp: true, outstandingBalance: true, diasporaCurrency: true },
+      orderBy: { outstandingBalance: 'desc' }, take: 500,
+    });
+
+    const reminders = [];
+    let skipped_no_phone = 0;
+    for (const c of debtors) {
+      const phone = c.whatsapp || c.phone;
+      if (!phone) { skipped_no_phone++; continue; }
+
+      // Oldest still-open debt — used both for the age filter and the message.
+      const oldestDebit = await prisma.creditLedger.findFirst({
+        where: { businessId, customerId: c.id, direction: 'debit' },
+        orderBy: { createdAt: 'asc' }, select: { createdAt: true },
+      });
+      const owingSince = oldestDebit?.createdAt || null;
+      const ageDays    = owingSince ? Math.floor((Date.now() - new Date(owingSince).getTime()) / 86400000) : 0;
+      if (olderThan > 0 && ageDays < olderThan) continue;
+
+      const balance  = parseFloat(c.outstandingBalance);
+      const currency = c.diasporaCurrency || business?.currency || 'USD';
+
+      // Reuse an open pay-link for this customer, or mint one, so repeated
+      // reminder runs don't pile up tokens.
+      let payment = await prisma.diasporaPayment.findFirst({
+        where: { businessId, customerId: c.id, status: 'pending' },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (!payment) {
+        payment = await prisma.diasporaPayment.create({
+          data: {
+            businessId, customerId: c.id, amount: balance, currency,
+            provider: 'manual', status: 'pending',
+            paymentToken: creditEngine.generatePaymentToken(),
+            notes: `Deyn reminder for ${c.name}`,
+          },
+        });
+      }
+      const paymentUrl = `${frontendUrl}/pay/${payment.paymentToken}`;
+
+      const fmt = (n) => `${currency} ${n.toFixed(2)}`;
+      const sinceLine = owingSince
+        ? `\nOwing since ${new Date(owingSince).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })} (${ageDays} day${ageDays !== 1 ? 's' : ''})`
+        : '';
+      const msg = `📋 *Account reminder — ${business?.name || 'our shop'}*\n\nDear ${c.name},\nYour outstanding balance is *${fmt(balance)}*.${sinceLine}\n\nYou (or family abroad) can pay securely here:\n${paymentUrl}\n\nThank you. — ${business?.name || ''}`;
+
+      const normalizedPhone = phone.replace(/\D/g, '').replace(/^0/, '');
+      await prisma.whatsappLog.create({
+        data: {
+          businessId, recipientPhone: normalizedPhone, messageType: 'deyn_reminder',
+          content: msg, referenceType: 'customer', referenceId: c.id,
+        },
+      });
+
+      reminders.push({
+        customer_id: c.id, customer: c.name, phone: normalizedPhone,
+        balance, currency, owing_since: owingSince, age_days: ageDays,
+        payment_url: paymentUrl,
+        wa_url: `https://wa.me/${normalizedPhone}?text=${encodeURIComponent(msg)}`,
+      });
+    }
+
+    res.json({
+      count: reminders.length,
+      skipped_no_phone,
+      total_outstanding: reminders.reduce((s, r) => s + r.balance, 0),
+      reminders,
+    });
+  } catch (err) { next(err); }
+});
+
 // ── DIASPORA PAYMENT LINKS ────────────────────────────────────────
 
 // POST /api/v1/credit/plans/:id/installments/:iid/diaspora-link
@@ -676,6 +770,165 @@ router.post('/pay/:token/confirm-manual', async (req, res, next) => {
 
     res.json({ message: 'Transfer noted. Business will confirm when received.' });
   } catch (err) { next(err); }
+});
+
+// ── DIASPORA PAY-DOWN OF A RUNNING DEYN BALANCE ───────────────────
+// The everyday Somali case: a customer has a running shop tab (deyn) and a
+// family member abroad wants to pay it down — no formal installment plan.
+// The merchant generates one pay-link for the customer's outstanding balance
+// (or a specific amount), shares it over WhatsApp, the diaspora payer settles
+// it on existing mobile-money rails, and the merchant confirms receipt — which
+// posts the repayment to the credit ledger AND the GL and clears the deyn.
+
+// POST /api/v1/credit/customers/:id/diaspora-link
+router.post('/customers/:id/diaspora-link', auth, requireRole('owner', 'manager'), validate(z.object({
+  amount: money.refine(v => v > 0).optional(),   // omit ⇒ full outstanding balance
+  note:   z.string().max(255).optional().nullable(),
+})), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const customer = await prisma.customer.findFirst({
+      where: { id: req.params.id, businessId },
+      select: { id: true, name: true, diasporaCurrency: true },
+    });
+    if (!customer) return res.status(404).json({ error: 'Customer not found.' });
+
+    const balance = await creditEngine.getLedgerBalance(customer.id, businessId);
+    if (balance <= 0) return res.status(400).json({ error: 'This customer has no outstanding balance to pay.' });
+
+    // Cap the requested amount at what's actually owed.
+    const amount = req.body.amount ? Math.min(parseFloat(req.body.amount), balance) : balance;
+
+    const business = await prisma.business.findUnique({
+      where: { id: businessId }, select: { name: true, currency: true },
+    });
+    const currency = customer.diasporaCurrency || business?.currency || 'USD';
+    const token    = creditEngine.generatePaymentToken();
+
+    const payment = await prisma.diasporaPayment.create({
+      data: {
+        businessId, customerId: customer.id,
+        amount, currency,
+        provider: 'manual', status: 'pending',
+        paymentToken: token,
+        notes: req.body.note || `Deyn pay-down for ${customer.name}`,
+      },
+    });
+
+    const frontendUrl = process.env.FRONTEND_URL || 'https://app.balanzify.com';
+    const paymentUrl  = `${frontendUrl}/pay/${token}`;
+    const waMsg = `💳 *Pay ${customer.name}'s account at ${business?.name || 'our shop'}*\n\nOutstanding: ${currency} ${balance.toFixed(2)}\nThis payment: ${currency} ${amount.toFixed(2)}\n\nPay securely:\n${paymentUrl}\n\nPowered by Balanzify`;
+
+    res.status(201).json({
+      diaspora_payment_id: payment.id,
+      payment_url: paymentUrl,
+      token,
+      amount,
+      outstanding_balance: balance,
+      currency,
+      wa_message: waMsg,
+      wa_url: `https://wa.me/?text=${encodeURIComponent(waMsg)}`,
+    });
+  } catch (err) { next(err); }
+});
+
+// GET /api/v1/credit/diaspora/pending — incoming diaspora payments awaiting confirmation
+router.get('/diaspora/pending', auth, async (req, res, next) => {
+  try {
+    const payments = await prisma.diasporaPayment.findMany({
+      where: { businessId: req.user.business_id, status: { in: ['pending', 'processing'] } },
+      include: {
+        customer: { select: { name: true, phone: true } },
+        planItem: { select: { installmentNo: true, plan: { select: { planNumber: true } } } },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 200,
+    });
+    res.json({
+      pending: payments.map(p => ({
+        id: p.id,
+        customer: p.customer?.name,
+        amount: parseFloat(p.amount),
+        currency: p.currency,
+        status: p.status,
+        provider: p.provider,
+        plan_number: p.planItem?.plan?.planNumber || null,
+        installment: p.planItem?.installmentNo || null,
+        created_at: p.createdAt,
+      })),
+      total_incoming: payments.reduce((s, p) => s + parseFloat(p.amount), 0),
+    });
+  } catch (err) { next(err); }
+});
+
+// POST /api/v1/credit/diaspora/:id/confirm — merchant confirms the money arrived.
+// Closes the loop: posts the repayment (ledger + GL), settles any linked
+// installment, and marks the diaspora payment completed.
+router.post('/diaspora/:id/confirm', auth, requireRole('owner', 'manager'), validate(z.object({
+  payment_method: z.string().max(50).default('mobile_money'), // diaspora settles via mobile money
+  reference:      z.string().max(255).optional().nullable(),
+})), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const payment = await prisma.diasporaPayment.findFirst({
+      where: { id: req.params.id, businessId },
+    });
+    if (!payment) return res.status(404).json({ error: 'Diaspora payment not found.' });
+    if (payment.status === 'completed') return res.status(400).json({ error: 'This payment is already confirmed.' });
+
+    const result = await prisma.$transaction(async (tx) => {
+      const balance = await creditEngine.getLedgerBalance(payment.customerId, businessId, tx);
+      if (balance <= 0) {
+        throw Object.assign(new Error('The balance is already cleared — nothing to settle.'), { statusCode: 400, code: 'NO_BALANCE' });
+      }
+      const settled = Math.min(parseFloat(payment.amount), balance);
+
+      const newBalance = await creditEngine.postRepayment(tx, {
+        businessId, customerId: payment.customerId,
+        amount: settled, currency: payment.currency || 'USD',
+        paymentMethod: req.body.payment_method, reference: req.body.reference || payment.paymentToken,
+        planItemId: payment.planItemId || null,
+        diasporaPayId: payment.id,
+        description: `Diaspora payment confirmed${payment.planItemId ? ' (installment)' : ''}`,
+        recordedById: req.user.id,
+      });
+
+      // If this diaspora payment was for a plan installment, settle that installment too.
+      if (payment.planItemId) {
+        const item = await tx.paymentPlanItem.findUnique({ where: { id: payment.planItemId } });
+        if (item && item.status !== 'paid') {
+          const newPaid   = parseFloat(item.amountPaid) + settled;
+          const itemStatus = newPaid >= parseFloat(item.amount) ? 'paid' : 'partial';
+          await tx.paymentPlanItem.update({
+            where: { id: item.id },
+            data: { amountPaid: newPaid, status: itemStatus, paidAt: itemStatus === 'paid' ? new Date() : null, paymentMethod: req.body.payment_method, reference: req.body.reference || payment.paymentToken },
+          });
+          if (itemStatus === 'paid') {
+            const siblings = await tx.paymentPlanItem.findMany({ where: { planId: item.planId } });
+            if (siblings.every(s => s.id === item.id ? true : s.status === 'paid')) {
+              await tx.paymentPlan.update({ where: { id: item.planId }, data: { status: 'completed' } });
+            }
+          }
+        }
+      }
+
+      await tx.diasporaPayment.update({
+        where: { id: payment.id },
+        data: { status: 'completed', settledAt: new Date(), settlementRef: req.body.reference || null },
+      });
+
+      return { settled, newBalance };
+    });
+
+    res.json({
+      message: 'Diaspora payment confirmed and applied to the customer account.',
+      settled_amount: result.settled,
+      new_balance: result.newBalance,
+    });
+  } catch (err) {
+    if (err.statusCode) return res.status(err.statusCode).json({ error: err.message });
+    next(err);
+  }
 });
 
 // ── SETTLEMENT PROVIDERS ──────────────────────────────────────────

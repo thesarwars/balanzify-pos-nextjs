@@ -11,6 +11,7 @@ const { auth, requireRole } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const underwriting = require('../lib/underwriting');
 const financing = require('../lib/financing');
+const ekyc = require('../lib/ekyc');
 const router = express.Router();
 
 router.get('/assessment', auth, async (req, res, next) => {
@@ -127,6 +128,35 @@ router.post('/kyc/decision', auth, requireRole('owner'), validate(z.object({
       },
     });
     res.json(updated);
+  } catch (err) { next(err); }
+});
+
+// Automated eKYC: run the captured identity through the verification provider
+// (document + selfie) and set the KYC status from the result — no manual decision.
+// Deployable today via the deterministic stub; flips to a live provider with creds.
+router.post('/kyc/verify-document', auth, requireRole('owner', 'manager'), validate(z.object({
+  document_urls: z.array(z.string().url()).max(5).optional(),
+  selfie_url:    z.string().url().optional(),
+})), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const kyc = await prisma.financingKyc.findUnique({ where: { businessId } });
+    if (!kyc) return res.status(404).json({ title: 'No KYC on file', status: 404 });
+
+    const result = await ekyc.verify({
+      idType: kyc.idType, idNumber: kyc.idNumber,
+      documentUrls: req.body.document_urls || kyc.documentUrls, selfieUrl: req.body.selfie_url, businessId,
+    });
+    const updated = await prisma.financingKyc.update({
+      where: { businessId },
+      data: {
+        status: result.verified ? 'verified' : 'rejected',
+        rejectionReason: result.verified ? null : `eKYC: ${result.reason || 'not verified'}`,
+        verifiedAt: result.verified ? new Date() : null,
+        verifiedById: req.user.id,
+      },
+    });
+    res.json({ ...updated, ekyc: { provider: result.provider, score: result.score, reason: result.reason } });
   } catch (err) { next(err); }
 });
 

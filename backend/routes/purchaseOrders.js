@@ -1,4 +1,5 @@
 const express = require('express');
+const { z } = require('zod');
 const prisma = require('../lib/prisma');
 const { auth, requireRole } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
@@ -88,6 +89,55 @@ router.post('/', auth, requireRole('owner', 'manager'), validate(PurchaseOrderSc
   } catch (err) { next(err); }
 });
 
+// One-tap reorder: draft a PO to a supplier for everything at/below its reorder
+// point (or a given product list), ordering up to the max level (or 2× the point)
+// at standard cost. Turns reorder *suggestions* into an actual purchase order.
+router.post('/quick-reorder', auth, requireRole('owner', 'manager'), validate(z.object({
+  supplier_id: z.string().uuid(),
+  location_id: z.string().uuid().optional().nullable(),
+  product_ids: z.array(z.string().uuid()).optional(),
+})), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const explicit = req.body.product_ids?.length ? req.body.product_ids : null;
+    const products = await prisma.product.findMany({
+      where: { businessId, isActive: true, ...(explicit ? { id: { in: explicit } } : { reorderPoint: { gt: 0 } }) },
+      select: { id: true, name: true, reorderPoint: true, maxStockLevel: true, costPrice: true },
+    });
+    if (!products.length) return res.status(400).json({ title: 'No products to reorder', status: 400 });
+
+    const ids = products.map(p => p.id);
+    const levels = await prisma.stockLevel.findMany({ where: { productId: { in: ids }, ...(req.body.location_id && { locationId: req.body.location_id }) }, select: { productId: true, quantity: true } });
+    const stockBy = {};
+    for (const l of levels) stockBy[l.productId] = (stockBy[l.productId] || 0) + l.quantity;
+
+    const lines = [];
+    for (const p of products) {
+      const stock = stockBy[p.id] || 0;
+      // Auto mode reorders only what's at/below its point; an explicit list always tops up.
+      if (!explicit && stock > p.reorderPoint) continue;
+      const target = p.maxStockLevel > 0 ? p.maxStockLevel : Math.max(p.reorderPoint * 2, 1);
+      const qty = Math.max(0, target - stock);
+      if (qty <= 0) continue;
+      const unitPrice = parseFloat(p.costPrice);
+      lines.push({ productId: p.id, orderedQty: qty, unitPrice, totalPrice: +(unitPrice * qty).toFixed(2) });
+    }
+    if (!lines.length) return res.status(400).json({ title: 'Nothing is below its reorder point', status: 400 });
+
+    const subtotal = +lines.reduce((s, l) => s + l.totalPrice, 0).toFixed(2);
+    const po = await prisma.purchaseOrder.create({
+      data: {
+        businessId, supplierId: req.body.supplier_id, locationId: req.body.location_id || null,
+        poNumber: `PO-${Date.now()}`, subtotal, freightCost: 0, customsDuty: 0, otherCharges: 0,
+        totalAmount: subtotal, currency: 'USD', paymentTerms: 0, createdById: req.user.id,
+        items: { create: lines },
+      },
+      include: { items: true, supplier: { select: { name: true } } },
+    });
+    res.status(201).json({ message: `Reorder PO drafted — ${lines.length} line(s).`, ...po });
+  } catch (err) { next(err); }
+});
+
 router.put('/:id/status', auth, requireRole('owner', 'manager'), validate(POStatusSchema), async (req, res, next) => {
   try {
     const { status, received_items } = req.body;
@@ -117,6 +167,13 @@ router.put('/:id/status', auth, requireRole('owner', 'manager'), validate(POStat
         let receivedValue = 0;
         const itemsById = new Map(po.items.map((i) => [i.id, i]));
 
+        // Landed cost: spread freight + customs + other charges across every unit
+        // in proportion to its value, so the cost layers (and therefore COGS and
+        // margins) reflect the true landed cost — not just the supplier price.
+        const totalLanded = parseFloat(po.freightCost || 0) + parseFloat(po.customsDuty || 0) + parseFloat(po.otherCharges || 0);
+        const poSubtotal  = parseFloat(po.subtotal || 0);
+        const landedFactor = poSubtotal > 0 ? totalLanded / poSubtotal : 0;
+
         for (const ri of received_items) {
           if (!ri.qty || ri.qty <= 0) continue;
 
@@ -134,7 +191,9 @@ router.put('/:id/status', auth, requireRole('owner', 'manager'), validate(POStat
             );
           }
 
-          const lineUnitCost = parseFloat(ri.unit_price ?? orderLine.unitPrice ?? 0);
+          const baseUnitCost = parseFloat(ri.unit_price ?? orderLine.unitPrice ?? 0);
+          // Capitalise this unit's share of the landed charges into its cost.
+          const lineUnitCost = +(baseUnitCost * (1 + landedFactor)).toFixed(4);
           receivedValue += lineUnitCost * ri.qty;
 
           await tx.purchaseOrderItem.update({
@@ -165,13 +224,18 @@ router.put('/:id/status', auth, requireRole('owner', 'manager'), validate(POStat
               },
             });
 
-            // Update cost price on product
+            // Update cost price on product to the landed unit cost.
             if (ri.unit_price) {
               await tx.product.update({
                 where: { id: ri.product_id },
-                data: { costPrice: ri.unit_price },
+                data: { costPrice: lineUnitCost },
               });
             }
+
+            // Resolve the batch expiry once — shared by the batch and cost layer.
+            const expiryDate = ri.expiry_date ? new Date(ri.expiry_date)
+                             : orderLine.expiryDate ? new Date(orderLine.expiryDate)
+                             : null;
 
             // Stock batch (expiry / FEFO tracking). Fall back to the ordered
             // line's batch/expiry when the receipt doesn't restate them.
@@ -182,14 +246,12 @@ router.put('/:id/status', auth, requireRole('owner', 'manager'), validate(POStat
                 batchNumber: ri.batch_number || orderLine.batchNumber || null,
                 quantity: ri.qty,
                 costPrice: lineUnitCost,
-                expiryDate: ri.expiry_date ? new Date(ri.expiry_date)
-                          : orderLine.expiryDate ? new Date(orderLine.expiryDate)
-                          : null,
+                expiryDate,
               },
             });
 
-            // Cost layer (FIFO costing). Without this, sales fall back to the
-            // product's last cost and FIFO never actually runs.
+            // Cost layer (FIFO/FEFO costing). expiryDate drives FEFO consumption
+            // for perishables; without the layer, sales fall back to last cost.
             await tx.costLayer.create({
               data: {
                 businessId:        req.user.business_id,
@@ -200,6 +262,7 @@ router.put('/:id/status', auth, requireRole('owner', 'manager'), validate(POStat
                 quantityReceived:  ri.qty,
                 quantityRemaining: ri.qty,
                 unitCost:          lineUnitCost,
+                expiryDate,
               },
             });
           }
@@ -291,6 +354,93 @@ router.delete('/:id', auth, requireRole('owner', 'manager'), async (req, res, ne
       data: { status: 'cancelled' },
     });
     res.json({ message: 'PO cancelled.' });
+  } catch (err) { next(err); }
+});
+
+// ── 3-WAY MATCH: SUPPLIER INVOICE vs PO (ordered) vs GRN (received) ──
+const uuid = z.string().uuid();
+
+// Record a supplier invoice against a PO and run the 3-way match. Flags price
+// variances (invoice price ≠ PO price) and over-billing (invoiced > received).
+// A control document — it does not re-post AP (the GRN already accrued it).
+router.post('/:id/invoice', auth, requireRole('owner', 'manager'), validate(z.object({
+  invoice_number: z.string().trim().min(1).max(80),
+  invoice_date:   z.string().optional().nullable(),
+  notes:          z.string().max(500).optional().nullable(),
+  price_tolerance: z.coerce.number().min(0).max(1).default(0), // fractional price wiggle room
+  items: z.array(z.object({
+    po_item_id: uuid.optional().nullable(),
+    product_id: uuid,
+    quantity:   z.coerce.number().int().positive(),
+    unit_price: z.coerce.number().nonnegative(),
+  })).min(1),
+})), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const po = await prisma.purchaseOrder.findFirst({ where: { id: req.params.id, businessId }, include: { items: true } });
+    if (!po) return res.status(404).json({ title: 'Purchase order not found', status: 404 });
+
+    const poByItem = new Map(po.items.map(i => [i.id, i]));
+    const poByProduct = new Map(po.items.map(i => [i.productId, i]));
+    const tol = req.body.price_tolerance;
+
+    const variances = [];
+    const lines = req.body.items.map(li => {
+      const poLine = (li.po_item_id && poByItem.get(li.po_item_id)) || poByProduct.get(li.product_id) || null;
+      const ordered  = poLine ? poLine.orderedQty : 0;
+      const received = poLine ? poLine.receivedQty : 0;
+      const poPrice  = poLine ? parseFloat(poLine.unitPrice) : null;
+      const flags = [];
+      if (!poLine) flags.push('not_on_po');
+      if (poPrice != null && Math.abs(li.unit_price - poPrice) > poPrice * tol + 0.001) flags.push('price_variance');
+      if (li.quantity > received) flags.push('over_billed'); // billed more than was received
+      if (flags.length) variances.push({ product_id: li.product_id, po_item_id: poLine?.id || null, ordered, received, invoiced: li.quantity, po_price: poPrice, invoice_price: li.unit_price, flags });
+      return { poItemId: poLine?.id || null, productId: li.product_id, quantity: li.quantity, unitPrice: li.unit_price, lineTotal: +(li.quantity * li.unit_price).toFixed(2) };
+    });
+
+    const totalAmount = +lines.reduce((s, l) => s + l.lineTotal, 0).toFixed(2);
+    const status = variances.length ? 'variance' : 'matched';
+
+    const invoice = await prisma.supplierInvoice.create({
+      data: {
+        businessId, poId: po.id, supplierId: po.supplierId || null,
+        invoiceNumber: req.body.invoice_number, invoiceDate: req.body.invoice_date ? new Date(req.body.invoice_date) : null,
+        totalAmount, status, variances: variances.length ? variances : undefined,
+        notes: req.body.notes || null, createdById: req.user.id,
+        items: { create: lines },
+      },
+      include: { items: true },
+    });
+
+    res.status(201).json({ ...invoice, match_status: status, variances, matched: status === 'matched' });
+  } catch (err) { next(err); }
+});
+
+// Invoices raised against a PO, with their match status.
+router.get('/:id/invoices', auth, async (req, res, next) => {
+  try {
+    const invoices = await prisma.supplierInvoice.findMany({
+      where: { businessId: req.user.business_id, poId: req.params.id },
+      include: { items: true }, orderBy: { createdAt: 'desc' },
+    });
+    res.json({ invoices });
+  } catch (err) { next(err); }
+});
+
+// Approve a supplier invoice for payment. A variance invoice can't be approved
+// without an explicit override (the 3-way match gate).
+router.post('/invoices/:invId/approve', auth, requireRole('owner', 'manager'), validate(z.object({
+  override: z.boolean().optional().default(false),
+})), async (req, res, next) => {
+  try {
+    const invoice = await prisma.supplierInvoice.findFirst({ where: { id: req.params.invId, businessId: req.user.business_id } });
+    if (!invoice) return res.status(404).json({ title: 'Invoice not found', status: 404 });
+    if (invoice.status === 'approved') return res.status(400).json({ title: 'Invoice already approved', status: 400 });
+    if (invoice.status === 'variance' && !req.body.override) {
+      return res.status(409).json({ title: 'Invoice has match variances — resolve them or pass override=true to approve anyway.', status: 409, code: 'INVOICE_VARIANCE', variances: invoice.variances });
+    }
+    const updated = await prisma.supplierInvoice.update({ where: { id: invoice.id }, data: { status: 'approved' } });
+    res.json({ message: 'Invoice approved for payment.', invoice: updated });
   } catch (err) { next(err); }
 });
 

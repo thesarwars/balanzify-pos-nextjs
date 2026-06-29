@@ -86,6 +86,56 @@ const MODULES = {
     routes: ['/api/v1/credit'],
   },
 
+  savings: {
+    key: 'savings',
+    default: false,
+    name: 'Balanzify Savings Circles',
+    description: 'Digitize hagbad / ayuuto / chama rotating savings groups: members, contribution tracking, rotation schedule, payouts, mobile-money collection. Free — the value is the relationship + contribution history.',
+    standalone: false,                      // free add-on
+    requires: ['core'],
+    routes: ['/api/v1/savings'],
+  },
+
+  asset_finance: {
+    key: 'asset_finance',
+    default: false,
+    name: 'Balanzify Asset Finance',
+    description: 'Sharia-compliant asset / vehicle finance (Murabaha cost-plus, Ijara lease-to-own): finance a productive asset and collect against the income it unlocks. Requires a lending licence + capital.',
+    standalone: false,
+    requires: ['core'],
+    routes: ['/api/v1/asset-finance'],
+  },
+
+  wallet: {
+    key: 'wallet',
+    default: false,
+    name: 'Balanzify Wallet',
+    description: 'Merchant settlement / wallet account: top up, hold, and pay out an in-app balance (the Kaspi / Mercado model). Holding real float requires an EMI licence / bank partner.',
+    standalone: false,
+    requires: ['core'],
+    routes: ['/api/v1/wallet'],
+  },
+
+  takaful: {
+    key: 'takaful',
+    default: false,
+    name: 'Balanzify Takaful',
+    description: 'Islamic cooperative micro-insurance (tabarru pool) for inventory / vehicle / health / property. Real underwriting requires a takaful partner + Sharia board.',
+    standalone: false,
+    requires: ['core'],
+    routes: ['/api/v1/takaful'],
+  },
+
+  trade: {
+    key: 'trade',
+    default: false,
+    name: 'Balanzify Trade',
+    description: 'B2B trade rails between on-platform businesses: a distributor and the dukas it supplies order from each other, and accepted orders post to both ledgers at once.',
+    standalone: false,
+    requires: ['core'],
+    routes: ['/api/v1/trade'],
+  },
+
   insights: {
     key: 'insights',
     default: false,
@@ -159,7 +209,7 @@ const MODULES = {
 // Monthly price (USD) for each paid add-on — authoritative source for billing.
 const MODULE_PRICES = {
   pharmacy: 15, hotel: 25, restaurant: 19, credit: 9, insights: 12,
-  wholesale: 14, construction: 22, hrm: 18, superadmin: 39, delivery: 12,
+  wholesale: 14, construction: 22, hrm: 18, superadmin: 39, delivery: 12, savings: 0, asset_finance: 30, wallet: 0, takaful: 8, trade: 10,
 };
 const modulePrice = (key) => MODULE_PRICES[key] || 0;
 

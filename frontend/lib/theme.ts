@@ -71,16 +71,54 @@ export function makeTheme({ accent = 'brass', type = 'ledger', sidebar = 'linen'
 
 export type Theme = ReturnType<typeof makeTheme>;
 
-export const money = (n: number | string, { symbol = '$', dp = 2 } = {}) =>
-  symbol + parseFloat(String(n || 0)).toLocaleString('en-US', { minimumFractionDigits: dp, maximumFractionDigits: dp });
+// ── Currency ────────────────────────────────────────────────────────────────
+// The app used to hard-code '$' everywhere — wrong for a product whose pitch is
+// local-money-native. Currency is now a business setting; the shared money()
+// helpers read the active currency so every screen localizes at once. Default
+// stays USD so nothing breaks before a business sets its own.
+export type CurrencyCode = 'USD' | 'SOS' | 'SLSH' | 'KES' | 'ETB';
+export const CURRENCIES: Record<CurrencyCode, { symbol: string; locale: string; dp: number; name: string }> = {
+  USD:  { symbol: '$',    locale: 'en-US', dp: 2, name: 'US Dollar' },
+  SOS:  { symbol: 'Sh',   locale: 'en-US', dp: 2, name: 'Somali Shilling' },
+  SLSH: { symbol: 'SlSh', locale: 'en-US', dp: 0, name: 'Somaliland Shilling' },
+  KES:  { symbol: 'KSh',  locale: 'en-KE', dp: 2, name: 'Kenyan Shilling' },
+  ETB:  { symbol: 'Br',   locale: 'en-ET', dp: 2, name: 'Ethiopian Birr' },
+};
+const CURRENCY_KEY = 'bz_currency';
+let _activeCurrency: CurrencyCode = 'USD';
+export function activeCurrency() { return CURRENCIES[_activeCurrency]; }
+export function activeCurrencyCode(): CurrencyCode { return _activeCurrency; }
+export function setCurrency(code: CurrencyCode) {
+  if (!CURRENCIES[code]) return;
+  _activeCurrency = code;
+  try { window.localStorage.setItem(CURRENCY_KEY, code); } catch { /* ignore */ }
+}
+/** Hydrate the active currency from storage (client-only). Safe to call repeatedly. */
+export function hydrateCurrency() {
+  try {
+    const s = window.localStorage.getItem(CURRENCY_KEY) as CurrencyCode | null;
+    if (s && CURRENCIES[s]) _activeCurrency = s;
+  } catch { /* keep default */ }
+}
+// Multi-character symbols (KSh, SlSh) read better with a thin gap before digits.
+const gap = (sym: string) => (sym.length > 1 ? ' ' : '');
+
+export const money = (n: number | string, opts: { symbol?: string; dp?: number } = {}) => {
+  const cur = activeCurrency();
+  const sym = opts.symbol ?? cur.symbol;
+  const dp = opts.dp ?? cur.dp;
+  return sym + gap(sym) + parseFloat(String(n || 0)).toLocaleString(cur.locale, { minimumFractionDigits: dp, maximumFractionDigits: dp });
+};
 export const money0 = (n: number | string) => money(n, { dp: 0 });
 
 // Split a money value into [symbol, whole, '.dd'] for typographic emphasis.
-export function moneyParts(n: number | string, symbol = '$') {
+export function moneyParts(n: number | string, symbol?: string) {
+  const cur = activeCurrency();
+  const sym = symbol ?? cur.symbol;
   const num = parseFloat(String(n || 0));
-  const s = num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const [whole, dec] = s.split('.');
-  return { symbol, whole, dec: '.' + dec };
+  const s = num.toLocaleString(cur.locale, { minimumFractionDigits: cur.dp, maximumFractionDigits: cur.dp });
+  const [whole, dec = ''] = s.split('.');
+  return { symbol: sym, whole, dec: dec ? '.' + dec : '' };
 }
 
 export function timeAgo(min: number) {

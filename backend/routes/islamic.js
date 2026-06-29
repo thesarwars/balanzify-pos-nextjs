@@ -8,10 +8,13 @@
  *   GET /api/v1/islamic/localization       — business language + RTL flag
  */
 const express = require('express');
+const { z } = require('zod');
 const prisma = require('../lib/prisma');
 const hijri = require('../lib/hijri');
 const zakat = require('../lib/zakat');
-const { auth } = require('../middleware/auth');
+const accounting = require('../lib/accounting');
+const { auth, requireRole } = require('../middleware/auth');
+const { validate } = require('../middleware/validate');
 
 const router = express.Router();
 
@@ -54,6 +57,46 @@ router.get('/zakat/assessment', auth, async (req, res, next) => {
     const result = await zakat.assess(req.user.business_id, { nisab, from: req.query.from, to: req.query.to });
     const asOf = hijri.toHijri(new Date(), { lang: req.query.lang || 'en', tz: req.query.tz || 'Africa/Nairobi' });
     res.json({ ...result, as_of_hijri: asOf.formatted });
+  } catch (err) { next(err); }
+});
+
+// Record Zakat or Sadaqah given out — a charitable outflow on the books.
+router.post('/zakat/pay', auth, requireRole('owner', 'manager'), validate(z.object({
+  type:      z.enum(['zakat', 'sadaqah']).default('zakat'),
+  amount:    z.coerce.number().positive(),
+  recipient: z.string().max(200).optional(),
+  method:    z.string().max(30).default('cash'),
+  note:      z.string().max(300).optional(),
+})), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const amount = +req.body.amount.toFixed(2);
+    const payment = await prisma.$transaction(async (tx) => {
+      const p = await tx.zakatPayment.create({
+        data: { businessId, type: req.body.type, amount, recipient: req.body.recipient || null, method: req.body.method, note: req.body.note || null, createdById: req.user.id },
+      });
+      // GL: charitable giving is an outflow — booked to Charity, out of the tender.
+      await accounting.postJournal(tx, {
+        businessId, description: `${req.body.type === 'zakat' ? 'Zakat' : 'Sadaqah'}${req.body.recipient ? ' — ' + req.body.recipient : ''}`,
+        sourceType: 'zakat_payment', sourceId: p.id, createdById: req.user.id,
+        lines: [
+          { code: '5400', debit: amount, credit: 0, description: req.body.type === 'zakat' ? 'Zakat given' : 'Sadaqah given' },
+          { code: accounting.tenderAccountCode(req.body.method), debit: 0, credit: amount, description: 'Paid to charity' },
+        ],
+      });
+      return p;
+    });
+    res.status(201).json(payment);
+  } catch (err) { next(err); }
+});
+
+// Giving history + totals (optionally filter by type).
+router.get('/zakat/payments', auth, async (req, res, next) => {
+  try {
+    const where = { businessId: req.user.business_id, ...(req.query.type && { type: String(req.query.type) }) };
+    const payments = await prisma.zakatPayment.findMany({ where, orderBy: { createdAt: 'desc' }, take: 200 });
+    const sum = (t) => +payments.filter(p => !t || p.type === t).reduce((s, p) => s + parseFloat(p.amount), 0).toFixed(2);
+    res.json({ payments, totals: { all: sum(), zakat: sum('zakat'), sadaqah: sum('sadaqah') } });
   } catch (err) { next(err); }
 });
 

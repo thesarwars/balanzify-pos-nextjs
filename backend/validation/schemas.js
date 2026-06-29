@@ -391,6 +391,8 @@ const PayrollSchema = z.object({
   deduction:   money.default(0),
   // Optional: auto-compute statutory deductions for this country (e.g. 'KE').
   statutory_country: z.enum(['KE', 'SO', 'none']).optional(),
+  // Pro-rate the basic for a mid-month joiner (by days worked in the month).
+  prorate:     z.boolean().optional().default(false),
 });
 const PackageSchema = z.object({
   name:      shortStr(100),
@@ -452,6 +454,8 @@ const CustomerSchema = z.object({
   address: optStr(500),
   credit_limit: money.default(0),
   customer_group_id: uuid.optional().nullable(),
+  price_group_id: uuid.optional().nullable(),
+  wholesale_terms_days: z.coerce.number().int().min(0).max(365).optional(),
   notes: optStr(2000),
 });
 
@@ -524,6 +528,7 @@ const ExpenseSchema = z.object({
   expense_for:    optStr(255),
   note:           optStr(1000),
   is_refund:      z.boolean().default(false),
+  receipt_url:    z.string().url().optional().nullable(), // snapped receipt photo
 });
 
 const ExpenseCategorySchema = z.object({ name: shortStr(255) });
@@ -670,6 +675,7 @@ const SaleItemSchemaV3 = z.object({
   override_price: money.optional().nullable(),
   notes: optStr(500),
   serial_numbers: z.array(z.string().min(1).max(255)).optional(),
+  prescription_id: uuid.optional().nullable(), // pharmacy: links an Rx-only line to its prescription
 });
 
 const SaleSchemaV3 = z.object({
