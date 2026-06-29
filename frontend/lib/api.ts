@@ -184,7 +184,50 @@ function setTokens(access?: string | null, refresh?: string | null): void {
 }
 function clearTokens(): void { if (hasWindow()) { window.localStorage.removeItem(ACCESS_KEY); window.localStorage.removeItem(REFRESH_KEY); } }
 
+// Demo fallbacks for the newer platform endpoints (islamic, lending, …) that
+// only have a live backend. When the app runs in demo mode (no REAL backend),
+// these let the flagship verticals render real-looking figures instead of a raw
+// 404 — so a prospect never sees the differentiator error out. Live mode skips
+// this entirely. Keep the numbers consistent with the mock ledger's scale.
+function demoFallback(method: string, path: string): any | undefined {
+  if (method !== 'GET') return undefined;
+  if (path === '/islamic/zakat/assessment') {
+    const assets = 19420, liabilities = 3960, base = assets - liabilities;
+    return {
+      base, assets, liabilities, rate: 0.025, nisab: 4870, meets_nisab: base >= 4870, due: base >= 4870,
+      amount: +(base * 0.025).toFixed(2),
+      assetLines: [
+        { code: '1000', name: 'Cash & cash equivalents', amount: 7240 },
+        { code: '1010', name: 'Mobile money (Zaad / EVC)', amount: 4860 },
+        { code: '1200', name: 'Trading inventory', amount: 7320 },
+      ],
+      liabilityLines: [
+        { code: '2000', name: 'Supplier payables', amount: 2960 },
+        { code: '2100', name: 'Tax payable', amount: 1000 },
+      ],
+      as_of_hijri: '12 Dhul-Hijjah 1447',
+    };
+  }
+  if (path === '/islamic/hijri/today') {
+    return { gregorian: new Date().toISOString().slice(0, 10), hijri: { formatted: '12 Dhul-Hijjah 1447', iso: '1447-12-12', is_ramadan: false }, is_ramadan: false, timezone: 'Africa/Nairobi' };
+  }
+  if (path === '/lending/assessment') {
+    return {
+      eligible: true, score: 712, recommended_limit: 4200, currency: 'USD',
+      signals: { avg_monthly_revenue: 28940, net_margin: 0.34, cash_on_hand: 7240, payables: 2960, months_active: 14, period_revenue: 28940, period_net_profit: 9840 },
+    };
+  }
+  return undefined;
+}
+
 async function realReq(method: string, path: string, { query, body, auth = true, bearer }: any = {}): Promise<any> {
+  if (!REAL_MODE) {
+    const demo = demoFallback(method, path);
+    if (demo !== undefined) {
+      pushLog({ t: Date.now(), mode: 'mock', method, path: '/api/v1' + path, status: 200, ms: 0, ok: true });
+      return demo;
+    }
+  }
   const qs = query ? '?' + Object.entries(query)
     .filter(([, v]) => v !== undefined && v !== null && v !== '')
     .map(([k, v]) => `${k}=${encodeURIComponent(v as any)}`).join('&') : '';

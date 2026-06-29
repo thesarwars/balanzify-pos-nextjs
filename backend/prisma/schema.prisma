@@ -118,6 +118,255 @@ enum SaleStatus {
   cancelled
 }
 
+// Rotating savings group (hagbad / ayuuto / chama). Members contribute a fixed
+// amount each cycle; the whole pot rotates to one member per cycle. The platform
+// holds contributions as a liability (Savings Group Payable) until paid out —
+// auditable money is the whole point of digitizing a trust-based circle. Free.
+model SavingsGroup {
+  id                 String   @id @default(uuid()) @db.Uuid
+  businessId         String   @map("business_id") @db.Uuid
+  name               String   @db.VarChar(150)
+  contributionAmount Decimal  @map("contribution_amount") @db.Decimal(12, 2)
+  frequency          String   @default("monthly") @db.VarChar(20) // weekly | monthly
+  currency           String   @default("USD") @db.VarChar(3)
+  currentCycle       Int      @default(1) @map("current_cycle")
+  status             String   @default("active") @db.VarChar(20) // active | completed
+  createdById        String?  @map("created_by") @db.Uuid
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  members       SavingsGroupMember[]
+  contributions SavingsContribution[]
+  payouts       SavingsPayout[]
+  @@index([businessId])
+  @@map("savings_groups")
+}
+
+model SavingsGroupMember {
+  id             String   @id @default(uuid()) @db.Uuid
+  groupId        String   @map("group_id") @db.Uuid
+  name           String   @db.VarChar(150)
+  phone          String?  @db.VarChar(50)
+  payoutPosition Int      @map("payout_position") // 1-based rotation order
+  paidOut        Boolean  @default(false) @map("paid_out")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  group SavingsGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  @@index([groupId])
+  @@map("savings_group_members")
+}
+
+model SavingsContribution {
+  id        String   @id @default(uuid()) @db.Uuid
+  groupId   String   @map("group_id") @db.Uuid
+  memberId  String   @map("member_id") @db.Uuid
+  cycle     Int
+  amount    Decimal  @db.Decimal(12, 2)
+  method    String   @default("cash") @db.VarChar(30)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  group SavingsGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  @@index([groupId, cycle])
+  @@map("savings_contributions")
+}
+
+model SavingsPayout {
+  id        String   @id @default(uuid()) @db.Uuid
+  groupId   String   @map("group_id") @db.Uuid
+  memberId  String   @map("member_id") @db.Uuid
+  cycle     Int
+  amount    Decimal  @db.Decimal(12, 2)
+  method    String   @default("cash") @db.VarChar(30)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  group SavingsGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  @@index([groupId])
+  @@map("savings_payouts")
+}
+
+// B2B trade rail: an order placed by one on-platform business (buyer / duka) to
+// another (seller / distributor). The network-liquidity play — a distributor and
+// the shops it supplies both transact on the same system, and the accepted order
+// posts to BOTH ledgers at once (seller AR↔revenue, buyer inventory↔payable).
+model TradeOrder {
+  id               String   @id @default(uuid()) @db.Uuid
+  sellerBusinessId String   @map("seller_business_id") @db.Uuid
+  buyerBusinessId  String   @map("buyer_business_id") @db.Uuid
+  orderNumber      String   @map("order_number") @db.VarChar(40)
+  status           String   @default("pending") @db.VarChar(20) // pending | accepted | rejected
+  total            Decimal  @default(0) @db.Decimal(14, 2)
+  note             String?  @db.VarChar(300)
+  createdById      String?  @map("created_by") @db.Uuid
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  items TradeOrderItem[]
+  @@index([sellerBusinessId, status])
+  @@index([buyerBusinessId, status])
+  @@map("trade_orders")
+}
+
+model TradeOrderItem {
+  id           String  @id @default(uuid()) @db.Uuid
+  tradeOrderId String  @map("trade_order_id") @db.Uuid
+  productId    String  @map("product_id") @db.Uuid
+  productName  String  @map("product_name") @db.VarChar(255)
+  quantity     Int
+  unitPrice    Decimal @map("unit_price") @db.Decimal(12, 2)
+  lineTotal    Decimal @map("line_total") @db.Decimal(12, 2)
+
+  order TradeOrder @relation(fields: [tradeOrderId], references: [id], onDelete: Cascade)
+  @@index([tradeOrderId])
+  @@map("trade_order_items")
+}
+
+// Takaful — Islamic cooperative micro-insurance. Contributions (tabarru',
+// donations) pool to cover members' losses; claims are paid from the pool. The
+// pool is a liability held in trust (2500). SCAFFOLDING — real underwriting needs
+// a takaful partner + Sharia board; the cooperative ledger + GL are here.
+model TakafulPolicy {
+  id              String    @id @default(uuid()) @db.Uuid
+  businessId      String    @map("business_id") @db.Uuid
+  reference       String    @db.VarChar(40)
+  policyholder    String    @db.VarChar(200)
+  phone           String?   @db.VarChar(50)
+  coverType       String    @map("cover_type") @db.VarChar(30) // inventory | vehicle | health | property
+  coverageAmount  Decimal   @map("coverage_amount") @db.Decimal(14, 2)
+  contribution    Decimal   @db.Decimal(14, 2) // periodic tabarru'
+  contributedTotal Decimal  @default(0) @map("contributed_total") @db.Decimal(14, 2)
+  termMonths      Int       @map("term_months")
+  status          String    @default("active") @db.VarChar(20) // active | expired | cancelled
+  startDate       DateTime  @default(now()) @map("start_date")
+  createdById     String?   @map("created_by") @db.Uuid
+  createdAt       DateTime  @default(now()) @map("created_at")
+
+  claims TakafulClaim[]
+  @@index([businessId, status])
+  @@map("takaful_policies")
+}
+
+model TakafulClaim {
+  id        String   @id @default(uuid()) @db.Uuid
+  policyId  String   @map("policy_id") @db.Uuid
+  amount    Decimal  @db.Decimal(14, 2)
+  reason    String   @db.VarChar(300)
+  status    String   @default("pending") @db.VarChar(20) // pending | paid | rejected
+  method    String?  @db.VarChar(30)
+  decidedAt DateTime? @map("decided_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  policy TakafulPolicy @relation(fields: [policyId], references: [id], onDelete: Cascade)
+  @@index([policyId])
+  @@map("takaful_claims")
+}
+
+// Merchant settlement / wallet account (the Kaspi / Mercado model): an in-app
+// balance the merchant tops up, holds, and pays out from. SCAFFOLDING — holding
+// real float requires an EMI licence / bank partner; the ledger + GL are here.
+model WalletTransaction {
+  id           String   @id @default(uuid()) @db.Uuid
+  businessId   String   @map("business_id") @db.Uuid
+  type         String   @db.VarChar(20) // deposit | withdraw
+  amount       Decimal  @db.Decimal(14, 2)
+  method       String   @default("cash") @db.VarChar(30)
+  note         String?  @db.VarChar(255)
+  balanceAfter Decimal  @map("balance_after") @db.Decimal(14, 2)
+  createdById  String?  @map("created_by") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([businessId, createdAt])
+  @@map("wallet_transactions")
+}
+
+// Asset / vehicle finance (Murabaha cost-plus or Ijara lease-to-own). The proven
+// durable model for the corridor (M-Kopa / Watu): finance a productive asset and
+// collect against the income it unlocks. SCAFFOLDING — moving real money needs a
+// lending licence + capital; the software + GL + lifecycle are here and tested.
+model AssetFinance {
+  id               String    @id @default(uuid()) @db.Uuid
+  businessId       String    @map("business_id") @db.Uuid
+  reference        String    @db.VarChar(40)
+  borrowerName     String    @map("borrower_name") @db.VarChar(200)
+  borrowerPhone    String?   @map("borrower_phone") @db.VarChar(50)
+  structure        String    @default("murabaha") @db.VarChar(20) // murabaha | ijara
+  assetType        String    @map("asset_type") @db.VarChar(50)   // vehicle | equipment | phone | other
+  assetDescription String?   @map("asset_description") @db.VarChar(255)
+  assetCost        Decimal   @map("asset_cost") @db.Decimal(14, 2) // what we pay for the asset
+  markup           Decimal   @db.Decimal(14, 2)                    // fixed, disclosed profit (not interest)
+  totalPayable     Decimal   @map("total_payable") @db.Decimal(14, 2)
+  termMonths       Int       @map("term_months")
+  amountRepaid     Decimal   @default(0) @map("amount_repaid") @db.Decimal(14, 2)
+  status           String    @default("offered") @db.VarChar(20)   // offered | active | settled | defaulted
+  disbursedAt      DateTime? @map("disbursed_at")
+  settledAt        DateTime? @map("settled_at")
+  defaultedAt      DateTime? @map("defaulted_at")
+  createdById      String?   @map("created_by") @db.Uuid
+  createdAt        DateTime  @default(now()) @map("created_at")
+
+  repayments AssetFinanceRepayment[]
+  @@index([businessId, status])
+  @@map("asset_finance")
+}
+
+model AssetFinanceRepayment {
+  id        String   @id @default(uuid()) @db.Uuid
+  financeId String   @map("finance_id") @db.Uuid
+  amount    Decimal  @db.Decimal(14, 2)
+  method    String   @default("cash") @db.VarChar(30)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  finance AssetFinance @relation(fields: [financeId], references: [id], onDelete: Cascade)
+  @@index([financeId])
+  @@map("asset_finance_repayments")
+}
+
+// Zakat / Sadaqah given by the business — a charitable outflow recorded for the
+// books and for the owner's giving history (Zakat is computed from the ledger by
+// lib/zakat; this records what was actually paid out).
+model ZakatPayment {
+  id          String   @id @default(uuid()) @db.Uuid
+  businessId  String   @map("business_id") @db.Uuid
+  type        String   @db.VarChar(10) // zakat | sadaqah
+  amount      Decimal  @db.Decimal(14, 2)
+  recipient   String?  @db.VarChar(200)
+  method      String   @default("cash") @db.VarChar(30)
+  note        String?  @db.VarChar(300)
+  createdById String?  @map("created_by") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([businessId])
+  @@map("zakat_payments")
+}
+
+// Stamp / punch card loyalty ("buy 9 coffees, get 1 free"). A program defines how
+// many stamps earn a reward; each customer accrues toward it and rolls over.
+model StampCard {
+  id             String   @id @default(uuid()) @db.Uuid
+  businessId     String   @map("business_id") @db.Uuid
+  name           String   @db.VarChar(150)
+  productId      String?  @map("product_id") @db.Uuid // null = any qualifying purchase
+  stampsRequired Int      @map("stamps_required")
+  reward         String   @db.VarChar(200)
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  cards CustomerStampCard[]
+  @@index([businessId])
+  @@map("stamp_cards")
+}
+
+model CustomerStampCard {
+  id             String   @id @default(uuid()) @db.Uuid
+  stampCardId    String   @map("stamp_card_id") @db.Uuid
+  customerId     String   @map("customer_id") @db.Uuid
+  stamps         Int      @default(0)
+  completedCount Int      @default(0) @map("completed_count") // rewards earned over time
+  updatedAt      DateTime @default(now()) @updatedAt @map("updated_at")
+
+  stampCard StampCard @relation(fields: [stampCardId], references: [id], onDelete: Cascade)
+  @@unique([stampCardId, customerId])
+  @@index([stampCardId])
+  @@map("customer_stamp_cards")
+}
+
 enum PaymentMethod {
   cash
   zaad
@@ -243,6 +492,7 @@ model Business {
   receiptFooter String?  @default("Thank you for your business!") @map("receipt_footer")
   taxNumber     String?  @map("tax_number") @db.VarChar(100)
   serviceChargePct Decimal? @map("service_charge_pct") @db.Decimal(6, 4) // accepts 10 or 0.10
+  enforceRxOnSale Boolean @default(false) @map("enforce_rx_on_sale") // pharmacy: block Rx-only drugs at POS without a valid prescription
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @default(now()) @updatedAt @map("updated_at")
 
@@ -269,6 +519,7 @@ model Business {
   notifications      Notification[]
   saleKeys           SaleKey[]
   syncDevices        SyncDevice[]
+  unsyncedSales      UnsyncedSale[]
   fiscalConfig       FiscalConfig?
   fiscalReceipts     FiscalReceipt[]
   drivers            Driver[]
@@ -289,6 +540,8 @@ model Business {
   accounts           Account[]
   journalEntries     JournalEntry[]
   prescriptions      Prescription[]
+  prescriptionGroups PrescriptionGroup[]
+  supplierInvoices   SupplierInvoice[]
   dispenseRecords    DispenseRecord[]
   financingAdvances  FinancingAdvance[]
   eightySixes        EightySix[]
@@ -404,6 +657,7 @@ model Expense {
   paymentStatus String   @default("paid") @map("payment_status") @db.VarChar(20)
   expenseFor    String?  @map("expense_for") @db.VarChar(255)
   note          String?
+  receiptUrl    String?  @map("receipt_url") // snapped receipt photo
   isRefund      Boolean  @default(false) @map("is_refund")
   expenseDate   DateTime @map("expense_date")
   createdById   String?  @map("created_by") @db.Uuid
@@ -618,6 +872,7 @@ model Payroll {
   shif             Decimal  @default(0) @db.Decimal(12, 2)
   housingLevy      Decimal  @default(0) @map("housing_levy") @db.Decimal(12, 2)
   statutoryTotal   Decimal  @default(0) @map("statutory_total") @db.Decimal(12, 2)
+  statutoryRemittedAt DateTime? @map("statutory_remitted_at") // statutory withholding paid to the authority
   net              Decimal  @default(0) @db.Decimal(12, 2)
   status           String   @default("paid") @db.VarChar(20)
   createdAt        DateTime @default(now()) @map("created_at")
@@ -867,7 +1122,8 @@ model PriceGroup {
   isDefault  Boolean  @default(false) @map("is_default")
   createdAt  DateTime @default(now()) @map("created_at")
 
-  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  business  Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customers Customer[]
 
   @@unique([businessId, name])
   @@map("price_groups")
@@ -1501,6 +1757,46 @@ model POPayment {
   @@map("po_payments")
 }
 
+// Supplier invoice — the third leg of the 3-way match (PO ordered ↔ GRN received
+// ↔ invoice billed). A control document: it flags price and over-billing
+// variances and gates approval-for-payment. It does not re-post AP (the GRN
+// already accrued it); it reconciles what the supplier actually billed.
+model SupplierInvoice {
+  id            String   @id @default(uuid()) @db.Uuid
+  businessId    String   @map("business_id") @db.Uuid
+  poId          String   @map("po_id") @db.Uuid
+  supplierId    String?  @map("supplier_id") @db.Uuid
+  invoiceNumber String   @map("invoice_number") @db.VarChar(80)
+  invoiceDate   DateTime? @map("invoice_date")
+  totalAmount   Decimal  @default(0) @map("total_amount") @db.Decimal(12, 2)
+  status        String   @default("pending") @db.VarChar(20) // matched | variance | approved | disputed
+  variances     Json?    // per-line variance flags from the 3-way match
+  notes         String?
+  createdById   String?  @map("created_by") @db.Uuid
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  business Business              @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  items    SupplierInvoiceItem[]
+
+  @@index([businessId, poId])
+  @@map("supplier_invoices")
+}
+
+model SupplierInvoiceItem {
+  id        String  @id @default(uuid()) @db.Uuid
+  invoiceId String  @map("invoice_id") @db.Uuid
+  poItemId  String? @map("po_item_id") @db.Uuid
+  productId String  @map("product_id") @db.Uuid
+  quantity  Int
+  unitPrice Decimal @map("unit_price") @db.Decimal(12, 2)
+  lineTotal Decimal @map("line_total") @db.Decimal(12, 2)
+
+  invoice SupplierInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@map("supplier_invoice_items")
+}
+
 // ═══════════════════════════════════════════════════════════════════
 // CUSTOMERS
 // ═══════════════════════════════════════════════════════════════════
@@ -1519,6 +1815,8 @@ model Customer {
   loyaltyPoints      Int      @default(0) @map("loyalty_points")
   segment            String?  @db.VarChar(50)
   customerGroupId    String?  @map("customer_group_id") @db.Uuid
+  priceGroupId       String?  @map("price_group_id") @db.Uuid // wholesale per-customer pricing tier
+  wholesaleTermsDays Int      @default(0) @map("wholesale_terms_days") // 0 = due on delivery (COD)
   whatsappOptedIn    Boolean  @default(true) @map("whatsapp_opted_in")
   diasporaCurrency   String   @default("USD") @map("diaspora_currency") @db.VarChar(3)
   notes              String?
@@ -1528,6 +1826,7 @@ model Customer {
 
   business         Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
   customerGroup    CustomerGroup?    @relation(fields: [customerGroupId], references: [id])
+  priceGroup       PriceGroup?       @relation(fields: [priceGroupId], references: [id])
   sales            Sale[]
   loyaltyLedger    LoyaltyLedger[]
   reservations     Reservation[]
@@ -1802,6 +2101,36 @@ model SyncDevice {
 
   @@unique([businessId, deviceId])
   @@map("sync_devices")
+}
+
+// Dead-letter for offline sale ops that could not be replayed (product deleted,
+// stock exhausted, price/cart conflict). An offline sale is a transaction that
+// ALREADY happened at the till — if replay rejects it, the revenue must not just
+// vanish. We capture the raw payload + the rejection so an operator can reconcile
+// it manually (re-key it, adjust stock, or void it) instead of losing the sale.
+model UnsyncedSale {
+  id          String    @id @default(uuid()) @db.Uuid
+  businessId  String    @map("business_id") @db.Uuid
+  deviceId    String    @map("device_id") @db.VarChar(128)
+  opId        String    @map("op_id") @db.VarChar(128)
+  idempotencyKey String @map("idempotency_key") @db.VarChar(128)
+  reason      String    @db.VarChar(40)            // conflict | rejected | error
+  errorMessage String?  @map("error_message")
+  payload     Json                                  // the original offline sale op
+  resolved    Boolean   @default(false)
+  resolvedAt  DateTime? @map("resolved_at")
+  resolvedById String?  @map("resolved_by") @db.Uuid
+  resolution  String?   @db.VarChar(40)            // re_synced | voided | adjusted
+  createdById String?   @map("created_by") @db.Uuid
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  // One row per device op — a re-flush of the same failing op updates, never duplicates.
+  @@unique([businessId, deviceId, opId])
+  @@index([businessId, resolved])
+  @@map("unsynced_sales")
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -2187,6 +2516,7 @@ model CostLayer {
   quantityReceived  Int      @map("quantity_received")
   quantityRemaining Int      @map("quantity_remaining")
   unitCost          Decimal  @map("unit_cost") @db.Decimal(12, 4)
+  expiryDate        DateTime? @map("expiry_date") // drives FEFO consumption for perishables
   receivedAt        DateTime @default(now()) @map("received_at")
 
   business Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
@@ -2234,9 +2564,34 @@ model RecipeItem {
 }
 
 // ── Pharmacy: prescriptions + dispensing (regulatory record) ────────────────
+// A multi-drug prescription (a real script: e.g. antibiotic + antacid). Groups
+// several independent drug lines — each a full Prescription with its own
+// quantity, refills, DAW and dispensing — under one patient/prescriber header.
+model PrescriptionGroup {
+  id             String   @id @default(uuid()) @db.Uuid
+  businessId     String   @map("business_id") @db.Uuid
+  groupNumber    String   @map("group_number") @db.VarChar(40)
+  patientId      String?  @map("patient_id") @db.Uuid
+  patientName    String   @map("patient_name") @db.VarChar(255)
+  patientPhone   String?  @map("patient_phone") @db.VarChar(50)
+  prescriberName String   @map("prescriber_name") @db.VarChar(255)
+  prescriberReg  String?  @map("prescriber_reg") @db.VarChar(100)
+  allergies      String[] @default([])
+  notes          String?
+  issuedAt       DateTime @default(now()) @map("issued_at")
+  createdById    String?  @map("created_by") @db.Uuid
+
+  business Business       @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  items    Prescription[]
+
+  @@index([businessId])
+  @@map("prescription_groups")
+}
+
 model Prescription {
   id                String   @id @default(uuid()) @db.Uuid
   businessId        String   @map("business_id") @db.Uuid
+  groupId           String?  @map("group_id") @db.Uuid // set when part of a multi-drug script
   rxNumber          String   @map("rx_number") @db.VarChar(40)
   productId         String   @map("product_id") @db.Uuid
   patientId         String?  @map("patient_id") @db.Uuid
@@ -2248,17 +2603,22 @@ model Prescription {
   quantity          Int      // quantity per fill (base units)
   refillsAuthorized Int      @default(0) @map("refills_authorized")
   refillsUsed       Int      @default(0) @map("refills_used")
-  daw               Boolean  @default(false) // dispense as written
+  daw               Boolean  @default(false) // dispense as written (no generic substitution)
+  daysSupply        Int?     @map("days_supply") // days one fill should last — gates early refills
+  validUntil        DateTime? @map("valid_until") // Rx expires; dispensing blocked after this
+  allergies         String[] @default([]) // patient allergies — checked against the drug at dispense
   status            String   @default("active") @db.VarChar(20) // active | completed | cancelled
   issuedAt          DateTime @default(now()) @map("issued_at")
   createdById       String?  @map("created_by") @db.Uuid
 
-  business  Business         @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  product   Product          @relation("prescription_drug", fields: [productId], references: [id])
-  patient   Customer?        @relation(fields: [patientId], references: [id])
+  business  Business           @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  group     PrescriptionGroup? @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  product   Product            @relation("prescription_drug", fields: [productId], references: [id])
+  patient   Customer?          @relation(fields: [patientId], references: [id])
   dispenses DispenseRecord[]
 
   @@index([businessId])
+  @@index([groupId])
   @@map("prescriptions")
 }
 
@@ -2317,12 +2677,14 @@ model Delivery {
   orderAmount   Decimal   @default(0) @map("order_amount") @db.Decimal(12, 2)
   deliveryFee   Decimal   @default(0) @map("delivery_fee") @db.Decimal(10, 2)
   paymentMode   String    @default("cod") @map("payment_mode") @db.VarChar(20) // cod | prepaid
-  status        String    @default("pending") @db.VarChar(20) // pending|assigned|picked_up|delivered|cancelled
+  status        String    @default("pending") @db.VarChar(20) // pending|assigned|picked_up|delivered|failed|cancelled
   recipientName String?   @map("recipient_name") @db.VarChar(255) // proof of delivery
   podNote       String?   @map("pod_note")
   podPhotoUrl   String?   @map("pod_photo_url")
+  failReason    String?   @map("fail_reason") @db.VarChar(255) // why a delivery attempt failed
   assignedAt    DateTime? @map("assigned_at")
   deliveredAt   DateTime? @map("delivered_at")
+  settledAt     DateTime? @map("settled_at") // COD cash for this delivery remitted by the driver
   createdAt     DateTime  @default(now()) @map("created_at")
 
   business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
@@ -2937,6 +3299,7 @@ model Folio {
   businessId    String      @map("business_id") @db.Uuid
   folioNumber   String      @unique @map("folio_number") @db.VarChar(30) // "FOL-001234"
   reservationId String?     @unique @map("reservation_id") @db.Uuid // null for walk-in restaurant/bar
+  splitFromReservationId String? @map("split_from_reservation_id") @db.Uuid // extra (split) folio for a reservation
   guestId       String      @map("guest_id") @db.Uuid
   status        FolioStatus @default(open)
   currency      String      @default("USD") @db.VarChar(3)
@@ -3292,7 +3655,8 @@ model OrderItem {
   notes         String?  @db.VarChar(500) // "No garlic", "Well done"
   course        Int      @default(1) // 1=starter, 2=main, 3=dessert
   seat          Int?     // seat/cover number, for per-seat ordering & split-by-seat
-  status        String   @default("pending") @db.VarChar(20)
+  status        String   @default("pending") @db.VarChar(20) // pending | void | comp | ...
+  compReason    String?  @map("comp_reason") @db.VarChar(40) // when status=comp: waste|sample|staff_meal|service_recovery|error|promotion|other
   createdAt     DateTime @default(now()) @map("created_at")
 
   order     RestaurantOrder     @relation(fields: [orderId], references: [id], onDelete: Cascade)
@@ -3718,11 +4082,15 @@ model HotelSettings {
   currency              String   @default("USD") @db.VarChar(3)
   taxRate               Decimal? @map("tax_rate") @db.Decimal(6, 4)
   serviceChargePct      Decimal? @map("service_charge_pct") @db.Decimal(6, 4)
+  tourismLevyPct        Decimal? @map("tourism_levy_pct") @db.Decimal(6, 4) // separate from VAT (common in the region)
   depositPct            Decimal? @map("deposit_pct") @db.Decimal(6, 4)
   nightAuditTime        String   @default("23:00") @map("night_audit_time")
   autoPostRoomCharges   Boolean  @default(true) @map("auto_post_room_charges")
   requireDepositOnBook  Boolean  @default(false) @map("require_deposit_on_book")
   allowOverbooking      Boolean  @default(false) @map("allow_overbooking")
+  cancellationDeadlineHours Int  @default(24) @map("cancellation_deadline_hours") // free-cancel window before check-in
+  cancellationFeePct    Decimal? @map("cancellation_fee_pct") @db.Decimal(6, 4) // charged on late cancel (fraction of stay)
+  noShowFeePct          Decimal? @map("no_show_fee_pct") @db.Decimal(6, 4) // charged on no-show (fraction of stay)
   wifiPassword          String?  @map("wifi_password") @db.VarChar(100)
   checkInWelcomeMsg     String?  @map("check_in_welcome_msg") @db.Text
   checkOutThankYouMsg   String?  @map("check_out_thank_you_msg") @db.Text
@@ -3749,6 +4117,7 @@ model WholesaleOrder {
   deliveryNotes String?  @map("delivery_notes")
   pickedAt      DateTime? @map("picked_at")
   deliveredAt   DateTime? @map("delivered_at")
+  dueDate       DateTime? @map("due_date") // payment due date (set on delivery from the customer's terms)
   createdById   String?  @map("created_by") @db.Uuid
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @default(now()) @updatedAt @map("updated_at")
@@ -3866,6 +4235,7 @@ model ProjectMilestone {
   status       String    @default("pending") @db.VarChar(20) // pending|in_progress|complete|billed|paid
   completedAt  DateTime? @map("completed_at")
   billedAt     DateTime? @map("billed_at")
+  retentionReleasedAt DateTime? @map("retention_released_at") // held retention collected
   sortOrder    Int       @default(0) @map("sort_order")
 
   project Project @relation("project_milestones", fields: [projectId], references: [id], onDelete: Cascade)

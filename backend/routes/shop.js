@@ -21,11 +21,31 @@ async function openShop(businessId) {
   if (!/^[0-9a-f-]{36}$/i.test(businessId || '')) return null;
   const biz = await prisma.business.findUnique({
     where: { id: businessId },
-    select: { id: true, name: true, currency: true, enabledModules: true },
+    select: { id: true, name: true, currency: true, phone: true, enabledModules: true },
   });
   if (!biz) return null;
   return resolveEnabled(biz.enabledModules).has('delivery') ? biz : null;
 }
+
+// Build a wa.me deep link (digits only; optional pre-filled text).
+const waLink = (phone, text) => {
+  const num = String(phone || '').replace(/\D/g, '');
+  const q = text ? `?text=${encodeURIComponent(text)}` : '';
+  return num ? `https://wa.me/${num}${q}` : null;
+};
+const shopUrl = (businessId) => `${(process.env.PUBLIC_WEB_URL || process.env.FRONTEND_URL || '').replace(/\/$/, '')}/shop?b=${businessId}`;
+
+// Shareable storefront: the link + a ready-to-post WhatsApp message the merchant
+// broadcasts to customers. The growth loop — every share markets the platform.
+router.get('/:businessId/share', async (req, res, next) => {
+  try {
+    const biz = await openShop(req.params.businessId);
+    if (!biz) return res.status(404).json({ title: 'Shop not found or not accepting orders', status: 404 });
+    const url = shopUrl(biz.id);
+    const message = `🛍️ Shop *${biz.name}* online and get it delivered:\n${url}`;
+    res.json({ shop_url: url, share_message: message, whatsapp_share_url: `https://wa.me/?text=${encodeURIComponent(message)}` });
+  } catch (err) { next(err); }
+});
 
 // Browse the shop's catalog.
 router.get('/:businessId/catalog', async (req, res, next) => {
@@ -86,7 +106,12 @@ router.post('/:businessId/order', validate(z.object({
         orderAmount: +amount.toFixed(2), deliveryFee: fee, paymentMode: 'cod', status: 'pending',
       },
     });
-    res.status(201).json({ order_id: delivery.id, status: delivery.status, order_amount: parseFloat(delivery.orderAmount), delivery_fee: fee, items: lines });
+    // A wa.me link so the customer can confirm the order with the merchant directly.
+    const confirmText = `Hi ${biz.name}, I just ordered: ${lines.join(', ')} (total ${(amount + fee).toFixed(2)} ${biz.currency || 'USD'}) to ${req.body.address}.`;
+    res.status(201).json({
+      order_id: delivery.id, status: delivery.status, order_amount: parseFloat(delivery.orderAmount),
+      delivery_fee: fee, items: lines, whatsapp_url: waLink(biz.phone, confirmText),
+    });
   } catch (err) { next(err); }
 });
 

@@ -12,16 +12,23 @@ const { convert }        = require('../lib/currency');
 const { generateReceiptToken, receiptUrl, generateWhatsAppReceipt } = require('../lib/receipt');
 const creditEngine = require('../lib/credit');
 const accounting = require('../lib/accounting');
+const rxgate = require('../lib/rxgate');
 const financing = require('../lib/financing');
 const fiscal = require('../lib/fiscalization');
 const router = express.Router();
 
 // ── Cart fingerprint ──────────────────────────────────────────────────────────
-function cartFingerprint(items, cashierId, tipAmount = 0) {
+// `opNonce` is the offline op's stable identity (its op_id). Including it means a
+// genuine retry of the SAME op fingerprints identically (still dedupes), while two
+// DISTINCT offline sales that happen to share an identical cart can no longer
+// collide — so a client that reuses an idempotency key for a different sale is
+// surfaced as a conflict instead of silently dropping the second sale's revenue.
+// The online till sends no nonce, so its fingerprint is unchanged.
+function cartFingerprint(items, cashierId, tipAmount = 0, opNonce = '') {
   const payload = items
     .map(i => `${i.product_id}:${i.variant_id || ''}:${i.quantity}:${parseFloat(i.override_price ?? 0).toFixed(4)}`)
     .sort()
-    .join('|') + `|cashier:${cashierId}|tip:${tipAmount}`;
+    .join('|') + `|cashier:${cashierId}|tip:${tipAmount}` + (opNonce ? `|op:${opNonce}` : '');
   return crypto.createHash('sha256').update(payload).digest('hex');
 }
 
@@ -178,6 +185,7 @@ async function createSale(req) {
       type,
       shift_id,
       idempotency_key,
+      idempotency_nonce,  // Optional: offline op_id — disambiguates same-cart sales sharing a reused key
       display_currency,   // Optional: customer's preferred display currency
     } = req.body;
 
@@ -217,7 +225,7 @@ async function createSale(req) {
         throw Object.assign(new Error('Transaction token expired.'), { statusCode: 400 });
       }
 
-      const fingerprint = cartFingerprint(allItems, req.user.id, tip_amount);
+      const fingerprint = cartFingerprint(allItems, req.user.id, tip_amount, idempotency_nonce || '');
 
       // Genuine retry — same key, same cart
       if (sk.used) {
@@ -327,7 +335,7 @@ async function createSale(req) {
               SELECT id, quantity_remaining, unit_cost FROM cost_layers
               WHERE product_id = ${ri.ingredientId}::uuid AND business_id = ${req.user.business_id}::uuid
                 AND (location_id = ${locId}::uuid OR location_id IS NULL) AND quantity_remaining > 0
-              ORDER BY received_at ASC FOR UPDATE`;
+              ORDER BY expiry_date ASC NULLS LAST, received_at ASC FOR UPDATE`;
             for (const layer of ingLayers) {
               if (ingRemaining <= 0) break;
               const consume = Math.min(ingRemaining, parseInt(layer.quantity_remaining));
@@ -416,7 +424,8 @@ async function createSale(req) {
           `;
         }
 
-        // FIFO cost layer consumption — deduct from oldest layers first
+        // Cost-layer consumption — FEFO (nearest expiry first) for perishables,
+        // FIFO (oldest received) otherwise. NULLS LAST keeps non-perishables FIFO.
         let remaining = stockQty;
         const layers = await tx.$queryRaw`
           SELECT id, quantity_remaining, unit_cost
@@ -425,7 +434,7 @@ async function createSale(req) {
             AND business_id = ${req.user.business_id}::uuid
             AND (location_id = ${locId}::uuid OR location_id IS NULL)
             AND quantity_remaining > 0
-          ORDER BY received_at ASC
+          ORDER BY expiry_date ASC NULLS LAST, received_at ASC
           FOR UPDATE
         `;
 
@@ -977,7 +986,16 @@ async function createSale(req) {
 // Thin HTTP wrapper around the in-process sale service.
 router.post('/', auth, validate(SaleSchemaV3), async (req, res, next) => {
   try {
+    // Pharmacy Rx-only gate (no-op unless the business has enforcement on).
+    const gate = await rxgate.check({ businessId: req.user.business_id, items: req.body.items || [] });
+    if (gate.error) return res.status(400).json({ error: gate.error });
+
     const result = await createSale(req);
+
+    // Record the clinical fill against each linked Rx once the sale is committed.
+    if (gate.linked?.length && result?.id) {
+      await rxgate.recordDispenses({ user: req.user, sale: result, linked: gate.linked });
+    }
     res.status(result._retry ? 200 : 201).json(result);
   } catch (err) {
     if (err.statusCode) return res.status(err.statusCode).json({ error: err.message });
@@ -1071,9 +1089,9 @@ router.post('/:id/refund', auth, requireRole('owner', 'manager'), validate(Refun
     const sale = await prisma.sale.findUnique({
       where: { id: req.params.id },
       select: {
-        id: true, businessId: true, locationId: true, totalAmount: true,
+        id: true, businessId: true, locationId: true, totalAmount: true, taxAmount: true,
         loyaltyPointsEarned: true, customerId: true,
-        items: { select: { id: true, productId: true, quantity: true, unitPrice: true } },
+        items: { select: { id: true, productId: true, quantity: true, unitPrice: true, costPrice: true } },
       },
     });
     if (!sale || sale.businessId !== req.user.business_id) {
@@ -1109,6 +1127,7 @@ router.post('/:id/refund', auth, requireRole('owner', 'manager'), validate(Refun
         product_id:   si.productId,            // from the sale, not the client
         quantity:     reqItem.quantity,
         unit_price:   parseFloat(si.unitPrice), // original price, not the client's
+        cost_price:   parseFloat(si.costPrice || 0), // FIFO cost captured at sale
         restock:      reqItem.restock !== false,
       });
     }
@@ -1141,7 +1160,10 @@ router.post('/:id/refund', auth, requireRole('owner', 'manager'), validate(Refun
         },
       });
 
-      // Restock + movements
+      // Restock + movements. Returned goods re-enter inventory as a fresh FIFO
+      // cost layer (at the cost they left at), and their COGS is reversed below —
+      // without this the books overstated COGS and understated inventory.
+      let restockCost = 0;
       for (const item of validItems) {
         if (item.restock !== false && sale.locationId) {
           await tx.$executeRaw`
@@ -1162,7 +1184,41 @@ router.post('/:id/refund', auth, requireRole('owner', 'manager'), validate(Refun
               createdById:   req.user.id,
             },
           });
+          if (item.cost_price > 0) {
+            restockCost += item.cost_price * item.quantity;
+            await tx.costLayer.create({
+              data: {
+                businessId: req.user.business_id, productId: item.product_id, locationId: sale.locationId,
+                quantityReceived: item.quantity, quantityRemaining: item.quantity, unitCost: item.cost_price,
+              },
+            });
+          }
         }
+      }
+
+      // GL: a refund is a sale reversal. Money goes back to the customer
+      // (reversing revenue + its tax share), and any restocked goods reverse COGS.
+      const saleTotalAmt = parseFloat(sale.totalAmount) || 0;
+      const taxPortion = saleTotalAmt > 0 ? +(totalRefunded * (parseFloat(sale.taxAmount || 0) / saleTotalAmt)).toFixed(2) : 0;
+      const revenuePortion = +(totalRefunded - taxPortion).toFixed(2);
+      await accounting.postJournal(tx, {
+        businessId: req.user.business_id, description: `Refund — ${refundRecord.refundNumber}`,
+        sourceType: 'sale_refund', sourceId: refundRecord.id, createdById: req.user.id,
+        lines: [
+          { code: '4000', debit: revenuePortion, credit: 0, description: 'Sales return' },
+          { code: '2100', debit: taxPortion,     credit: 0, description: 'Tax reversed' },
+          { code: accounting.tenderAccountCode(refund_method || 'cash'), debit: 0, credit: totalRefunded, description: 'Refund paid out' },
+        ],
+      });
+      if (restockCost > 0) {
+        await accounting.postJournal(tx, {
+          businessId: req.user.business_id, description: `Refund restock — ${refundRecord.refundNumber}`,
+          sourceType: 'sale_refund_cogs', sourceId: refundRecord.id, createdById: req.user.id,
+          lines: [
+            { code: '1200', debit: +restockCost.toFixed(2), credit: 0, description: 'Inventory restocked' },
+            { code: '5000', debit: 0, credit: +restockCost.toFixed(2), description: 'COGS reversed' },
+          ],
+        });
       }
 
       // Reverse loyalty points earned on this sale

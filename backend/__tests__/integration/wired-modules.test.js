@@ -1653,6 +1653,9 @@ describe('restaurant: seat-level ordering + split bill by seat', () => {
     const oat = milkGroup.options.find(o => o.name === 'Oat Milk');
     expect(Number(oat.priceAdjustment)).toBeCloseTo(0.50, 2);
     const large = groups.find(g => g.name === 'Size').options.find(o => o.name === 'Large');
+    // Temperature is a required group — pick a free option so the price still checks out.
+    const tempOpts = groups.find(g => g.name === 'Temperature').options;
+    const temp = tempOpts.find(o => Number(o.priceAdjustment) === 0) || tempOpts[0];
 
     // Find the Latte and confirm its four modifier groups are wired on.
     const latte = (await request(app).get('/api/v1/products').set(auth(t))).body.products.find(p => p.name === 'Latte');
@@ -1660,9 +1663,10 @@ describe('restaurant: seat-level ordering + split bill by seat', () => {
     expect(attached).toHaveLength(4);
 
     // Ring a Large Oat-milk Latte: 3.00 base + 1.00 (large) + 0.50 (oat) = 4.50.
+    // Size/Milk/Temperature are required groups, so all three must be chosen.
     const order = (await request(app).post('/api/v1/restaurant/orders').set(auth(t)).send({ type: 'takeaway' })).body;
     const add = await request(app).post(`/api/v1/restaurant/orders/${order.id}/items`).set(auth(t))
-      .send({ productId: latte.id, quantity: 1, modifiers: [{ optionId: large.id }, { optionId: oat.id }] });
+      .send({ productId: latte.id, quantity: 1, modifiers: [{ optionId: large.id }, { optionId: oat.id }, { optionId: temp.id }] });
     expect(add.status).toBe(201);
     expect(Number(add.body.lineTotal)).toBeCloseTo(4.50, 2);
   });
@@ -1789,6 +1793,56 @@ describe('offline-first sync (push outbox + delta pull)', () => {
     const byOp = Object.fromEntries(res.body.results.map(r => [r.op_id, r]));
     expect(byOp.a.status).toBe('conflict');
     expect(byOp.b.status).toBe('applied');
+  });
+
+  test('reused key for a DIFFERENT sale with an identical cart no longer drops silently — it conflicts and is dead-lettered', async () => {
+    const device = 'till-dl-' + Date.now();
+    const k = 'offline-dl-' + Date.now();
+    // First real offline sale.
+    const first = await request(app).post('/api/v1/sync/push').set(auth(token))
+      .send({ device_id: device, operations: [saleOp('first-op', k, 2)] });
+    expect(first.body.results[0].status).toBe('applied');
+
+    // A genuinely different second sale (distinct op_id) that happens to have an
+    // IDENTICAL cart, but the buggy client reused the same idempotency key. Before
+    // the op-nonce fix this fingerprinted identically and was silently returned as a
+    // 'duplicate' — the second sale's revenue vanished. Now it surfaces as a conflict.
+    const second = await request(app).post('/api/v1/sync/push').set(auth(token))
+      .send({ device_id: device, operations: [saleOp('second-op', k, 2)] });
+    expect(second.body.results[0].status).toBe('conflict');
+    expect(second.body.results[0].dead_lettered).toBe(true);
+    expect(second.body.applied).toBe(0);
+
+    // The orphaned sale is parked for a human, not lost.
+    const dl = await request(app).get('/api/v1/sync/unsynced').set(auth(token));
+    expect(dl.status).toBe(200);
+    const mine = dl.body.unsynced.find(u => u.op_id === 'second-op' && u.device_id === device);
+    expect(mine).toBeTruthy();
+    expect(mine.reason).toBe('conflict');
+    expect(mine.resolved).toBe(false);
+    expect(mine.payload.items[0].product_id).toBe(prod);
+
+    // Operator reconciles it (re-rang it on the till) → it leaves the backlog.
+    const resolve = await request(app).post(`/api/v1/sync/unsynced/${mine.id}/resolve`).set(auth(token))
+      .send({ resolution: 're_synced' });
+    expect(resolve.status).toBe(200);
+    expect(resolve.body.resolved).toBe(true);
+    const after = await request(app).get('/api/v1/sync/unsynced').set(auth(token));
+    expect(after.body.unsynced.find(u => u.id === mine.id)).toBeFalsy();
+  });
+
+  test('a true retry of the SAME op (same op_id) still dedupes, never dead-letters', async () => {
+    const device = 'till-retry-' + Date.now();
+    const k = 'offline-retry-' + Date.now();
+    const op = saleOp('same-op', k, 1);
+    const a = await request(app).post('/api/v1/sync/push').set(auth(token)).send({ device_id: device, operations: [op] });
+    expect(a.body.results[0].status).toBe('applied');
+    const b = await request(app).post('/api/v1/sync/push').set(auth(token)).send({ device_id: device, operations: [op] });
+    expect(b.body.results[0].status).toBe('duplicate');
+    expect(b.body.results[0].sale_id).toBe(a.body.results[0].sale_id);
+    // Nothing parked for a clean retry.
+    const dl = await request(app).get('/api/v1/sync/unsynced').set(auth(token));
+    expect(dl.body.unsynced.find(u => u.op_id === 'same-op' && u.device_id === device)).toBeFalsy();
   });
 
   test('pull: full snapshot then delta by `since`', async () => {
@@ -2240,6 +2294,1460 @@ describe('mobile-money rails — manual-confirm tenders book to Mobile Money (10
     const methods = (await request(app).get('/api/v1/payments/methods').set(auth(token))).body;
     const keys = (methods.methods || methods).map(m => m.key);
     for (const k of ['edahab', 'evc', 'telebirr', 'cbe_birr', 'mobile_money', 'zaad']) expect(keys).toContain(k);
+  });
+});
+
+describe('savings circles (hagbad/ayuuto) — rotating group held in trust', () => {
+  let token, bizId;
+  const at = (bal, c) => (bal.find(a => a.code === c) || { balance: 0 }).balance;
+
+  beforeAll(async () => {
+    token = await register();
+    await enableModule(token, 'savings');
+    bizId = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString()).businessId;
+  });
+
+  test('gated off by default', async () => {
+    const other = await register();
+    expect((await request(app).get('/api/v1/savings/groups').set(auth(other))).status).toBe(403);
+  });
+
+  test('contributions held in 2400; payout rotates and nets the pot to zero', async () => {
+    const g = await request(app).post('/api/v1/savings/groups').set(auth(token)).send({
+      name: 'Suuqa Hagbad', contribution_amount: 10,
+      members: [{ name: 'Amina' }, { name: 'Bashir' }, { name: 'Cawo' }],
+    });
+    expect(g.status).toBe(201);
+    const id = g.body.id;
+    const members = g.body.member_list;
+    expect(members).toHaveLength(3);
+
+    // Everyone contributes cycle 1 via Zaad → 30 held in the savings-payable liability.
+    for (const m of members) {
+      expect((await request(app).post(`/api/v1/savings/groups/${id}/contribute`).set(auth(token)).send({ member_id: m.id, method: 'zaad' })).status).toBe(201);
+    }
+    // A member can't contribute twice in one cycle.
+    expect((await request(app).post(`/api/v1/savings/groups/${id}/contribute`).set(auth(token)).send({ member_id: members[0].id, method: 'zaad' })).status).toBe(400);
+
+    let bal = await accounting.accountBalances(bizId);
+    expect(at(bal, '2400')).toBeCloseTo(30, 2); // held in trust
+    expect(at(bal, '1010')).toBeCloseTo(30, 2); // collected via Zaad (mobile money)
+
+    const detail = (await request(app).get(`/api/v1/savings/groups/${id}`).set(auth(token))).body;
+    expect(detail.collected_this_cycle).toBeCloseTo(30, 2);
+    expect(detail.next_recipient.name).toBe('Amina');
+
+    // Payout cycle 1 → Amina receives the whole pot; the liability nets to zero.
+    const p = await request(app).post(`/api/v1/savings/groups/${id}/payout`).set(auth(token)).send({ method: 'zaad' });
+    expect(p.status).toBe(201);
+    expect(p.body.recipient).toBe('Amina');
+    expect(p.body.pot).toBeCloseTo(30, 2);
+
+    bal = await accounting.accountBalances(bizId);
+    expect(at(bal, '2400')).toBeCloseTo(0, 2); // released — full cycle nets to zero
+    expect((await request(app).get('/api/v1/accounting/trial-balance').set(auth(token))).body.totals.balanced).toBe(true);
+
+    // Rotation advanced; Amina marked paid out; Bashir is next.
+    const d2 = (await request(app).get(`/api/v1/savings/groups/${id}`).set(auth(token))).body;
+    expect(d2.current_cycle).toBe(2);
+    expect(d2.next_recipient.name).toBe('Bashir');
+    expect(d2.schedule.find(s => s.name === 'Amina').paid_out).toBe(true);
+
+    // Can't pay out before anyone has contributed in the new cycle.
+    expect((await request(app).post(`/api/v1/savings/groups/${id}/payout`).set(auth(token)).send({})).status).toBe(400);
+  });
+});
+
+describe('loyalty stamp cards (buy-N-get-1)', () => {
+  let token, custId, cardId;
+  beforeAll(async () => {
+    token = await register();
+    const c = await request(app).post('/api/v1/customers').set(auth(token)).send({ name: 'Coffee Regular', phone: '0700222' });
+    custId = c.body.id;
+    const card = await request(app).post('/api/v1/loyalty/stamp-cards').set(auth(token)).send({ name: 'Coffee Card', stamps_required: 9, reward: 'Free coffee' });
+    expect(card.status).toBe(201);
+    cardId = card.body.id;
+  });
+
+  test('stamps accrue, the reward fires on completion, and extra stamps roll over', async () => {
+    // 8 stamps → not yet
+    let r = await request(app).post(`/api/v1/loyalty/stamp-cards/${cardId}/stamp`).set(auth(token)).send({ customer_id: custId, count: 8 });
+    expect(r.body.stamps).toBe(8);
+    expect(r.body.reward_earned).toBe(false);
+
+    // 9th stamp → reward earned, card resets
+    r = await request(app).post(`/api/v1/loyalty/stamp-cards/${cardId}/stamp`).set(auth(token)).send({ customer_id: custId, count: 1 });
+    expect(r.body.reward_earned).toBe(true);
+    expect(r.body.reward).toBe('Free coffee');
+    expect(r.body.stamps).toBe(0);
+    expect(r.body.completed_count).toBe(1);
+
+    // 10 at once → one more reward + a single rolled-over stamp
+    r = await request(app).post(`/api/v1/loyalty/stamp-cards/${cardId}/stamp`).set(auth(token)).send({ customer_id: custId, count: 10 });
+    expect(r.body.rewards_earned).toBe(1);
+    expect(r.body.stamps).toBe(1);
+    expect(r.body.completed_count).toBe(2);
+
+    const p = (await request(app).get(`/api/v1/loyalty/stamp-cards/${cardId}/customer/${custId}`).set(auth(token))).body;
+    expect(p.stamps).toBe(1);
+    expect(p.completed_count).toBe(2);
+  });
+});
+
+describe('expense capture with receipt photo → GL', () => {
+  let token, bizId;
+  const at = (b, c) => (b.find(a => a.code === c) || { balance: 0 }).balance;
+  beforeAll(async () => { token = await register(); bizId = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString()).businessId; });
+
+  test('a paid expense with a snapped receipt books to OpEx and stores the photo', async () => {
+    const r = await request(app).post('/api/v1/expenses').set(auth(token)).send({
+      amount: 25, date: '2026-06-01', payment_status: 'paid', expense_for: 'Generator fuel',
+      receipt_url: 'https://example.com/receipt.jpg',
+    });
+    expect(r.status).toBe(201);
+    expect(r.body.receiptUrl).toBe('https://example.com/receipt.jpg');
+    const bal = await accounting.accountBalances(bizId);
+    expect(at(bal, '5200')).toBeCloseTo(25, 2);  // operating expense
+    expect(at(bal, '1000')).toBeCloseTo(-25, 2); // paid out of cash
+  });
+});
+
+describe('Zakat / Sadaqah collection → GL', () => {
+  let token, bizId;
+  const at = (b, c) => (b.find(a => a.code === c) || { balance: 0 }).balance;
+  beforeAll(async () => { token = await register(); bizId = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString()).businessId; });
+
+  test('giving Zakat and Sadaqah books to Charity, tracks totals, and balances', async () => {
+    expect((await request(app).post('/api/v1/islamic/zakat/pay').set(auth(token)).send({ type: 'zakat', amount: 50, recipient: 'Local mosque', method: 'cash' })).status).toBe(201);
+    expect((await request(app).post('/api/v1/islamic/zakat/pay').set(auth(token)).send({ type: 'sadaqah', amount: 10, method: 'zaad' })).status).toBe(201);
+
+    const bal = await accounting.accountBalances(bizId);
+    expect(at(bal, '5400')).toBeCloseTo(60, 2);  // charity given (Zakat + Sadaqah)
+    expect(at(bal, '1000')).toBeCloseTo(-50, 2);  // 50 from cash
+    expect(at(bal, '1010')).toBeCloseTo(-10, 2);  // 10 from mobile money
+    expect((await request(app).get('/api/v1/accounting/trial-balance').set(auth(token))).body.totals.balanced).toBe(true);
+
+    const hist = (await request(app).get('/api/v1/islamic/zakat/payments').set(auth(token))).body;
+    expect(hist.totals.all).toBeCloseTo(60, 2);
+    expect(hist.totals.zakat).toBeCloseTo(50, 2);
+    expect(hist.totals.sadaqah).toBeCloseTo(10, 2);
+  });
+});
+
+describe('demand forecasting / predictive reorder', () => {
+  let token, loc, prod;
+  beforeAll(async () => {
+    token = await register();
+    loc = await location(token);
+    prod = await stockedProduct(token, loc, 10, 100); // 100 in stock
+    await makeSale(token, loc, prod, { qty: 60, price: 10 }); // sell 60 → 40 left
+  });
+
+  test('off-take drives days-left and a suggested reorder qty (cover-days based)', async () => {
+    // 60 sold over a 30-day window = 2/day; 40 left = 20 days; cover 30 days → order 20.
+    const f = (await request(app).get('/api/v1/forecast').set(auth(token)).query({ days: 30, cover_days: 30 })).body;
+    const row = f.items.find(i => i.product_id === prod);
+    expect(row).toBeTruthy();
+    expect(row.units_sold).toBe(60);
+    expect(row.avg_daily).toBeCloseTo(2, 2);
+    expect(row.stock).toBe(40);
+    expect(row.days_left).toBeCloseTo(20, 1);
+    expect(row.suggested_qty).toBe(20); // 2/day × 30 cover − 40 stock
+    expect(row.urgency).toBe('reorder');
+    expect(typeof f.is_ramadan).toBe('boolean');
+  });
+});
+
+describe('asset / vehicle finance (Murabaha) — scaffolding', () => {
+  let token, bizId;
+  const at = (b, c) => (b.find(a => a.code === c) || { balance: 0 }).balance;
+  beforeAll(async () => {
+    token = await register();
+    await enableModule(token, 'asset_finance');
+    bizId = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString()).businessId;
+  });
+
+  test('gated off by default', async () => {
+    const other = await register();
+    expect((await request(app).get('/api/v1/asset-finance').set(auth(other))).status).toBe(403);
+  });
+
+  test('disburse books the receivable + disclosed markup; repayment settles it', async () => {
+    const offer = await request(app).post('/api/v1/asset-finance/offers').set(auth(token)).send({
+      borrower_name: 'Driver Cabdi', structure: 'murabaha', asset_type: 'vehicle',
+      asset_description: 'Bajaj boda', asset_cost: 1000, markup: 200, term_months: 12,
+    });
+    expect(offer.status).toBe(201);
+    expect(Number(offer.body.totalPayable)).toBeCloseTo(1200, 2);
+    const id = offer.body.id;
+
+    expect((await request(app).post(`/api/v1/asset-finance/${id}/disburse`).set(auth(token))).status).toBe(200);
+    let bal = await accounting.accountBalances(bizId);
+    expect(at(bal, '1130')).toBeCloseTo(1200, 2);  // asset finance receivable
+    expect(at(bal, '4000')).toBeCloseTo(200, 2);   // disclosed markup booked as revenue
+    expect(at(bal, '1000')).toBeCloseTo(-1000, 2); // cash paid for the asset
+    expect((await request(app).get('/api/v1/accounting/trial-balance').set(auth(token))).body.totals.balanced).toBe(true);
+
+    // Repay (mobile money), over-paying the last leg → capped, settled.
+    expect((await request(app).post(`/api/v1/asset-finance/${id}/repay`).set(auth(token)).send({ amount: 600, method: 'mpesa' })).status).toBe(200);
+    const done = await request(app).post(`/api/v1/asset-finance/${id}/repay`).set(auth(token)).send({ amount: 9999, method: 'mpesa' });
+    expect(done.body.status).toBe('settled');
+    expect(Number(done.body.outstanding)).toBeCloseTo(0, 2);
+    bal = await accounting.accountBalances(bizId);
+    expect(at(bal, '1130')).toBeCloseTo(0, 2);    // receivable cleared
+    expect(at(bal, '1010')).toBeCloseTo(1200, 2); // collected via mobile money
+  });
+});
+
+describe('merchant wallet / settlement account — scaffolding', () => {
+  let token, bizId;
+  const at = (b, c) => (b.find(a => a.code === c) || { balance: 0 }).balance;
+  beforeAll(async () => {
+    token = await register();
+    await enableModule(token, 'wallet');
+    bizId = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString()).businessId;
+  });
+
+  test('gated off by default', async () => {
+    const other = await register();
+    expect((await request(app).get('/api/v1/wallet').set(auth(other))).status).toBe(403);
+  });
+
+  test('deposit and withdraw move the balance and the GL wallet account together', async () => {
+    expect((await request(app).post('/api/v1/wallet/deposit').set(auth(token)).send({ amount: 100, method: 'zaad' })).status).toBe(201);
+    let w = (await request(app).get('/api/v1/wallet').set(auth(token))).body;
+    expect(w.balance).toBeCloseTo(100, 2);
+
+    const wd = await request(app).post('/api/v1/wallet/withdraw').set(auth(token)).send({ amount: 30, method: 'cash', note: 'Supplier' });
+    expect(wd.status).toBe(201);
+    expect(Number(wd.body.balanceAfter)).toBeCloseTo(70, 2);
+
+    // Can't overdraw.
+    expect((await request(app).post('/api/v1/wallet/withdraw').set(auth(token)).send({ amount: 1000 })).status).toBe(400);
+
+    // GL: wallet asset (1025) holds the running 70; books balanced.
+    const bal = await accounting.accountBalances(bizId);
+    expect(at(bal, '1025')).toBeCloseTo(70, 2);
+    expect((await request(app).get('/api/v1/accounting/trial-balance').set(auth(token))).body.totals.balanced).toBe(true);
+
+    w = (await request(app).get('/api/v1/wallet').set(auth(token))).body;
+    expect(w.balance).toBeCloseTo(70, 2);
+    expect(w.transactions).toHaveLength(2);
+  });
+});
+
+describe('takaful micro-insurance — scaffolding', () => {
+  let token, bizId;
+  const at = (b, c) => (b.find(a => a.code === c) || { balance: 0 }).balance;
+  beforeAll(async () => {
+    token = await register();
+    await enableModule(token, 'takaful');
+    bizId = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString()).businessId;
+  });
+
+  test('gated off by default', async () => {
+    const other = await register();
+    expect((await request(app).get('/api/v1/takaful/policies').set(auth(other))).status).toBe(403);
+  });
+
+  test('contributions build the pool; an approved claim is paid from it', async () => {
+    const pol = await request(app).post('/api/v1/takaful/policies').set(auth(token)).send({
+      policyholder: 'Khadija Stores', cover_type: 'inventory', coverage_amount: 1000,
+      contribution: 20, term_months: 12, method: 'zaad',
+    });
+    expect(pol.status).toBe(201);
+    const id = pol.body.id;
+    // a second contribution → pool = 40
+    expect((await request(app).post(`/api/v1/takaful/policies/${id}/contribute`).set(auth(token)).send({ method: 'zaad' })).status).toBe(201);
+
+    let bal = await accounting.accountBalances(bizId);
+    expect(at(bal, '2500')).toBeCloseTo(40, 2); // takaful pool held in trust
+
+    // a claim over the coverage is rejected at filing
+    expect((await request(app).post(`/api/v1/takaful/policies/${id}/claims`).set(auth(token)).send({ amount: 5000, reason: 'fire' })).status).toBe(400);
+
+    // file a valid claim and pay it out of the pool
+    const claim = await request(app).post(`/api/v1/takaful/policies/${id}/claims`).set(auth(token)).send({ amount: 30, reason: 'Spoiled stock' });
+    expect(claim.status).toBe(201);
+    const decided = await request(app).post(`/api/v1/takaful/claims/${claim.body.id}/decide`).set(auth(token)).send({ decision: 'paid', method: 'cash' });
+    expect(decided.body.status).toBe('paid');
+
+    bal = await accounting.accountBalances(bizId);
+    expect(at(bal, '2500')).toBeCloseTo(10, 2);  // pool down by the 30 paid out
+    expect((await request(app).get('/api/v1/accounting/trial-balance').set(auth(token))).body.totals.balanced).toBe(true);
+  });
+});
+
+describe('peer benchmarking (anonymized aggregates)', () => {
+  let token, loc, prod;
+  beforeAll(async () => {
+    token = await register(); loc = await location(token); prod = await stockedProduct(token, loc, 10, 1000);
+    await makeSale(token, loc, prod, { qty: 2, price: 10 }); // basket 20
+    await makeSale(token, loc, prod, { qty: 2, price: 10 }); // basket 20
+    // At least MIN_PEERS other businesses with their own sales.
+    for (let i = 0; i < 3; i++) {
+      const t = await register(); const l = await location(t); const p = await stockedProduct(t, l, 10, 100);
+      await makeSale(t, l, p, { qty: 1, price: 10 });
+    }
+  });
+
+  test('compares your basket/volume to anonymized peer aggregates (never a single peer)', async () => {
+    const b = (await request(app).get('/api/v1/benchmarking').set(auth(token)).query({ days: 30 })).body;
+    expect(b.you.sales).toBe(2);
+    expect(b.you.avg_basket).toBeCloseTo(20, 2);
+    expect(b.peers.businesses).toBeGreaterThanOrEqual(3); // aggregate only, never one competitor
+    expect(typeof b.peers.avg_basket).toBe('number');
+    expect(b.peers.avg_basket).toBeGreaterThan(0);
+    expect(['above', 'below']).toContain(b.comparison.basket);
+    expect(typeof b.comparison.avg_basket_vs_peers_pct).toBe('number');
+  });
+});
+
+describe('one-tap supplier reorder (quick PO)', () => {
+  let token, loc, prod, supplierId;
+  beforeAll(async () => {
+    token = await register();
+    loc = await location(token);
+    prod = await stockedProduct(token, loc, 10, 2); // cost 5, only 2 in stock
+    await prisma.product.update({ where: { id: prod }, data: { reorderPoint: 10, maxStockLevel: 50 } });
+    const s = await request(app).post('/api/v1/suppliers').set(auth(token)).send({ name: 'Acme Distributors' });
+    supplierId = s.body.id;
+  });
+
+  test('drafts a PO topping up everything at/below its reorder point', async () => {
+    const r = await request(app).post('/api/v1/purchase-orders/quick-reorder').set(auth(token))
+      .send({ supplier_id: supplierId, location_id: loc });
+    expect(r.status).toBe(201);
+    const line = r.body.items.find(i => i.productId === prod);
+    expect(line).toBeTruthy();
+    expect(line.orderedQty).toBe(48);                       // 50 max − 2 on hand
+    expect(Number(r.body.totalAmount)).toBeCloseTo(240, 2); // 48 × 5 cost
+  });
+});
+
+describe('WhatsApp storefront (shareable catalog + order deep link)', () => {
+  let token, bizId, prod, loc;
+  beforeAll(async () => {
+    token = await register();
+    await enableModule(token, 'delivery');
+    loc = await location(token);
+    prod = await stockedProduct(token, loc, 10, 100);
+    bizId = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString()).businessId;
+    await prisma.business.update({ where: { id: bizId }, data: { phone: '252634445566' } });
+  });
+
+  test('share endpoint returns the shop link + a WhatsApp broadcast message', async () => {
+    const s = await request(app).get(`/api/v1/shop/${bizId}/share`);
+    expect(s.status).toBe(200);
+    expect(s.body.shop_url).toContain(`/shop?b=${bizId}`);
+    expect(s.body.whatsapp_share_url).toContain('wa.me');
+    expect(decodeURIComponent(s.body.whatsapp_share_url)).toContain(s.body.shop_url);
+  });
+
+  test('a consumer order returns a wa.me link to confirm with the merchant', async () => {
+    const o = await request(app).post(`/api/v1/shop/${bizId}/order`).send({
+      customer_name: 'Hodan', address: 'Street 5', items: [{ product_id: prod, quantity: 2 }],
+    });
+    expect(o.status).toBe(201);
+    expect(o.body.whatsapp_url).toContain('wa.me/252634445566');
+  });
+});
+
+describe('B2B trade rails (merchant-to-merchant, posts to both ledgers)', () => {
+  let sellerTok, buyerTok, sellerBiz, buyerBiz, prod;
+  const at = (b, c) => (b.find(a => a.code === c) || { balance: 0 }).balance;
+  beforeAll(async () => {
+    sellerTok = await register(); await enableModule(sellerTok, 'trade');
+    const loc = await location(sellerTok); prod = await stockedProduct(sellerTok, loc, 10, 100);
+    buyerTok = await register(); await enableModule(buyerTok, 'trade');
+    sellerBiz = JSON.parse(Buffer.from(sellerTok.split('.')[1], 'base64').toString()).businessId;
+    buyerBiz = JSON.parse(Buffer.from(buyerTok.split('.')[1], 'base64').toString()).businessId;
+  });
+
+  test('gated off by default', async () => {
+    const other = await register();
+    expect((await request(app).get('/api/v1/trade/orders').set(auth(other))).status).toBe(403);
+  });
+
+  test('buyer orders from seller; only the seller can accept; acceptance posts to BOTH ledgers', async () => {
+    const cat = (await request(app).get(`/api/v1/trade/suppliers/${sellerBiz}/catalog`).set(auth(buyerTok))).body;
+    expect(cat.products.find(p => p.id === prod)).toBeTruthy();
+
+    const o = await request(app).post('/api/v1/trade/orders').set(auth(buyerTok)).send({ seller_business_id: sellerBiz, items: [{ product_id: prod, quantity: 5 }] });
+    expect(o.status).toBe(201);
+    expect(Number(o.body.total)).toBeCloseTo(50, 2);
+    const id = o.body.id;
+
+    // The seller sees it as received.
+    const recv = (await request(app).get('/api/v1/trade/orders?role=seller').set(auth(sellerTok))).body;
+    expect(recv.orders.find(x => x.id === id)).toBeTruthy();
+
+    // The buyer cannot accept their own order (only the seller decides).
+    expect((await request(app).post(`/api/v1/trade/orders/${id}/decide`).set(auth(buyerTok)).send({ decision: 'accept' })).status).toBe(404);
+
+    // Seller accepts → posts to both businesses' books at once.
+    const acc = await request(app).post(`/api/v1/trade/orders/${id}/decide`).set(auth(sellerTok)).send({ decision: 'accept' });
+    expect(acc.body.status).toBe('accepted');
+
+    const sBal = await accounting.accountBalances(sellerBiz);
+    expect(at(sBal, '1100')).toBeCloseTo(50, 2); // seller: receivable
+    expect(at(sBal, '4000')).toBeCloseTo(50, 2); // seller: revenue
+    const bBal = await accounting.accountBalances(buyerBiz);
+    expect(at(bBal, '1200')).toBeCloseTo(50, 2); // buyer: inventory received
+    expect(at(bBal, '2000')).toBeCloseTo(50, 2); // buyer: payable owed
+  });
+});
+
+describe('AI insights — deployable deterministic fallback (no LLM key)', () => {
+  let token, loc, prod;
+  beforeAll(async () => {
+    token = await register();
+    await enableModule(token, 'insights');
+    loc = await location(token);
+    prod = await stockedProduct(token, loc, 10, 100);
+    await makeSale(token, loc, prod, { qty: 3, price: 10 });
+  });
+
+  test('briefing answers from the ledger even with no API key', async () => {
+    const b = await request(app).get('/api/v1/insights/briefing').set(auth(token));
+    expect(b.status).toBe(200);
+    expect(b.body.ai_enabled).toBe(false);           // no key → deterministic mode
+    expect(typeof b.body.briefing).toBe('string');
+    expect(b.body.briefing.length).toBeGreaterThan(20);
+  });
+
+  test('ask answers (rules mode) grounded in the real numbers', async () => {
+    const r = await request(app).post('/api/v1/insights/ask').set(auth(token)).send({ question: 'How are my sales?' });
+    expect(r.status).toBe(200);
+    expect(r.body.ai_enabled).toBe(false);
+    expect(r.body.answer).toMatch(/sales/i);
+  });
+});
+
+describe('risk / anomaly detection (rule-based)', () => {
+  let token, loc, prod;
+  beforeAll(async () => {
+    token = await register();
+    loc = await location(token);
+    prod = await stockedProduct(token, loc, 10, 2000);
+    // Five normal sales (basket 20), one unusually large (300), one heavily discounted.
+    for (let i = 0; i < 5; i++) await makeSale(token, loc, prod, { qty: 2, price: 10 });
+    await makeSale(token, loc, prod, { qty: 1, price: 300 });             // large_sale
+    await makeSale(token, loc, prod, { qty: 2, price: 10, discount: 12 }); // 60% off → high_discount
+  });
+
+  test('flags the outlier sale and the heavy discount against the median baseline', async () => {
+    const r = await request(app).get('/api/v1/risk/anomalies').set(auth(token)).query({ days: 30 });
+    expect(r.status).toBe(200);
+    expect(r.body.baseline.median_ticket).toBeCloseTo(20, 2);
+    const large = r.body.anomalies.find(a => a.type === 'large_sale');
+    const disc = r.body.anomalies.find(a => a.type === 'high_discount');
+    expect(large).toBeTruthy();
+    expect(large.amount).toBeCloseTo(300, 2);
+    expect(disc).toBeTruthy();
+  });
+});
+
+describe('automated eKYC → lending KYC gate', () => {
+  test('a clean identity auto-verifies and unlocks disbursement', async () => {
+    const token = await register();
+    const loc = await location(token); const prod = await stockedProduct(token, loc, 20, 1000);
+    await makeSale(token, loc, prod, { qty: 300, price: 20 }); // qualify for financing
+    await request(app).put('/api/v1/lending/kyc').set(auth(token)).send({ legal_name: 'Ayaan', id_type: 'national_id', id_number: 'SL-12345678' });
+
+    const v = await request(app).post('/api/v1/lending/kyc/verify-document').set(auth(token)).send({ document_urls: ['https://example.com/id.jpg'] });
+    expect(v.status).toBe(200);
+    expect(v.body.status).toBe('verified');     // stub auto-verified a clean id
+    expect(v.body.ekyc.provider).toBe('stub');
+
+    // The automated verification satisfies the disbursement KYC gate.
+    const offer = (await request(app).post('/api/v1/lending/offer').set(auth(token)).send({ principal: 500 })).body;
+    expect((await request(app).post(`/api/v1/lending/advances/${offer.id}/disburse`).set(auth(token))).status).toBe(200);
+  });
+
+  test('a flagged identity is auto-rejected', async () => {
+    const token = await register();
+    await request(app).put('/api/v1/lending/kyc').set(auth(token)).send({ legal_name: 'X', id_type: 'national_id', id_number: 'TEST-REJECT-1' });
+    const v = await request(app).post('/api/v1/lending/kyc/verify-document').set(auth(token)).send({});
+    expect(v.body.status).toBe('rejected');
+  });
+});
+
+// Open a shift (once per business) and make a sale billed to a customer's
+// account — leaves the customer with an outstanding deyn balance.
+async function creditSale(token, loc, prod, customerId, { qty = 5, price = 20 } = {}) {
+  await request(app).post('/api/v1/sales/shifts/open').set(auth(token)).send({ location_id: loc, opening_float: 100 });
+  const ik = (await request(app).post('/api/v1/sales/initiate').set(auth(token))).body.idempotency_key;
+  return request(app).post('/api/v1/sales').set(auth(token)).send({
+    idempotency_key: ik, items: [{ product_id: prod, quantity: qty, override_price: price }],
+    location_id: loc, payment_method: 'credit', customer_id: customerId,
+  });
+}
+const bizOf = (t) => JSON.parse(Buffer.from(t.split('.')[1], 'base64').toString()).businessId;
+
+describe('diaspora pays the shop — deyn pay-down + closed reconciliation loop', () => {
+  test('merchant links a deyn balance, payer is queued, merchant confirms → ledger + GL settle the debt', async () => {
+    const token = await register();
+    await enableModule(token, 'credit');
+    const loc = await location(token);
+    const prod = await stockedProduct(token, loc, 20, 1000);
+    const customerId = (await request(app).post('/api/v1/customers').set(auth(token))
+      .send({ name: 'Hooyo', phone: '0634000111', credit_limit: 1000 })).body.id;
+
+    // A credit sale of 5 × 20 = 100 leaves a 100 deyn balance.
+    expect((await creditSale(token, loc, prod, customerId)).status).toBe(201);
+
+    // Merchant generates one pay-link for the full outstanding balance.
+    const link = await request(app).post(`/api/v1/credit/customers/${customerId}/diaspora-link`)
+      .set(auth(token)).send({});
+    expect(link.status).toBe(201);
+    expect(link.body.amount).toBeCloseTo(100, 2);
+    expect(link.body.outstanding_balance).toBeCloseTo(100, 2);
+    expect(link.body.payment_url).toContain(link.body.token);
+    expect(link.body.wa_url).toContain('wa.me');
+    const payId = link.body.diaspora_payment_id;
+
+    // It shows up as money coming in, awaiting confirmation.
+    const pending = await request(app).get('/api/v1/credit/diaspora/pending').set(auth(token));
+    expect(pending.status).toBe(200);
+    expect(pending.body.total_incoming).toBeCloseTo(100, 2);
+    expect(pending.body.pending.find(p => p.id === payId)).toBeTruthy();
+
+    // Merchant confirms receipt → repayment posts and the deyn clears.
+    const confirm = await request(app).post(`/api/v1/credit/diaspora/${payId}/confirm`)
+      .set(auth(token)).send({ reference: 'ZAAD-REF-9' });
+    expect(confirm.status).toBe(200);
+    expect(confirm.body.settled_amount).toBeCloseTo(100, 2);
+    expect(confirm.body.new_balance).toBeCloseTo(0, 2);
+
+    // The repayment is on the GL (cash/mobile-money in, AR down).
+    const repay = await prisma.journalEntry.findFirst({
+      where: { businessId: bizOf(token), sourceType: 'credit_repayment', sourceId: customerId },
+      include: { lines: { include: { account: true } } }, orderBy: { createdAt: 'desc' },
+    });
+    expect(repay).toBeTruthy();
+    const byCode = Object.fromEntries(repay.lines.map(l => [l.account.code, l]));
+    expect(parseFloat(byCode['1010'].debit)).toBeCloseTo(100, 2); // mobile money received
+    expect(parseFloat(byCode['1100'].credit)).toBeCloseTo(100, 2); // accounts receivable reduced
+
+    // Confirming again is rejected — no double-credit.
+    expect((await request(app).post(`/api/v1/credit/diaspora/${payId}/confirm`).set(auth(token)).send({})).status).toBe(400);
+  });
+
+  test('a customer with no balance cannot be linked', async () => {
+    const token = await register();
+    await enableModule(token, 'credit');
+    const customerId = (await request(app).post('/api/v1/customers').set(auth(token)).send({ name: 'Paid Up' })).body.id;
+    const link = await request(app).post(`/api/v1/credit/customers/${customerId}/diaspora-link`).set(auth(token)).send({});
+    expect(link.status).toBe(400);
+  });
+});
+
+describe('overdue-deyn WhatsApp reminders with embedded pay-links', () => {
+  test('nudges every debtor with a balance and an actionable pay-link', async () => {
+    const token = await register();
+    await enableModule(token, 'credit');
+    const loc = await location(token);
+    const prod = await stockedProduct(token, loc, 20, 1000);
+
+    // A debtor with a phone (gets a reminder) ...
+    const owing = (await request(app).post('/api/v1/customers').set(auth(token))
+      .send({ name: 'Maryan', phone: '0634777888', credit_limit: 1000 })).body.id;
+    await creditSale(token, loc, prod, owing, { qty: 4, price: 20 }); // 80 owed
+    // ... and one owing but with no phone on file (skipped).
+    const noPhone = (await request(app).post('/api/v1/customers').set(auth(token))
+      .send({ name: 'No Phone', credit_limit: 1000 })).body.id;
+    await creditSale(token, loc, prod, noPhone, { qty: 1, price: 20 }); // 20 owed
+
+    const r = await request(app).post('/api/v1/credit/deyn-reminders').set(auth(token)).send({});
+    expect(r.status).toBe(200);
+    expect(r.body.count).toBe(1);
+    expect(r.body.skipped_no_phone).toBe(1);
+    const rem = r.body.reminders[0];
+    expect(rem.customer_id).toBe(owing);
+    expect(rem.balance).toBeCloseTo(80, 2);
+    expect(rem.wa_url).toContain('wa.me/634777888');
+    expect(rem.payment_url).toContain('/pay/');
+
+    // The embedded link is a real, confirmable diaspora payment.
+    const token2 = rem.payment_url.split('/pay/')[1];
+    const pay = await prisma.diasporaPayment.findFirst({ where: { paymentToken: token2 } });
+    expect(pay).toBeTruthy();
+    expect(parseFloat(pay.amount)).toBeCloseTo(80, 2);
+
+    // Re-running reuses the same open link rather than minting a new one.
+    const r2 = await request(app).post('/api/v1/credit/deyn-reminders').set(auth(token)).send({});
+    expect(r2.body.reminders[0].payment_url).toBe(rem.payment_url);
+
+    // The age filter excludes debt younger than the threshold.
+    const r3 = await request(app).post('/api/v1/credit/deyn-reminders').set(auth(token)).send({ older_than_days: 30 });
+    expect(r3.body.count).toBe(0);
+  });
+});
+
+describe('merchant daily cockpit', () => {
+  test('assembles money-in, receivables, diaspora incoming, reorder-due and the briefing', async () => {
+    const token = await register();
+    const loc = await location(token);
+    const prod = await stockedProduct(token, loc, 20, 1000);
+
+    // Money in today: a cash sale.
+    await makeSale(token, loc, prod, { qty: 2, price: 20 });
+
+    // Receivables: a customer carrying a deyn balance.
+    const customerId = (await request(app).post('/api/v1/customers').set(auth(token))
+      .send({ name: 'Aabo', phone: '0634222333', credit_limit: 1000 })).body.id;
+    await creditSale(token, loc, prod, customerId, { qty: 3, price: 20 }); // 60 owed
+
+    // Money coming in: a queued diaspora payment (insert directly — cockpit needs no credit add-on).
+    await prisma.diasporaPayment.create({
+      data: { businessId: bizOf(token), customerId, amount: 25, currency: 'USD', provider: 'manual', status: 'pending', paymentToken: crypto.randomBytes(8).toString('hex') },
+    });
+
+    // Reorder due: push the product to/below its reorder point.
+    await prisma.product.update({ where: { id: prod }, data: { reorderPoint: 100000 } });
+
+    const c = await request(app).get('/api/v1/cockpit').set(auth(token));
+    expect(c.status).toBe(200);
+    expect(c.body.money_in_today.total).toBeGreaterThan(0);
+    expect(c.body.money_in_today.sales_count).toBeGreaterThanOrEqual(1);
+    expect(c.body.receivables.total_owed).toBeCloseTo(60, 2);
+    expect(c.body.receivables.top_debtors.find(d => d.id === customerId)).toBeTruthy();
+    expect(c.body.diaspora_incoming.count).toBe(1);
+    expect(c.body.diaspora_incoming.total).toBeCloseTo(25, 2);
+    expect(c.body.reorder_due).toBeGreaterThanOrEqual(1);
+    expect(c.body.briefing).toBeTruthy();
+    expect(c.body.briefing.mode).toBe('rules'); // deterministic fallback, no LLM key
+  });
+});
+
+describe('pharmacy completeness — Rx clinical safety', () => {
+  let token, loc;
+  beforeAll(async () => {
+    token = await register();
+    await enableModule(token, 'pharmacy');
+    loc = await location(token);
+  });
+  async function rxDrug(generic, stock = 100) {
+    const id = await stockedProduct(token, loc, 5, stock);
+    await prisma.product.update({ where: { id }, data: { genericName: generic, isPrescriptionDrug: true } });
+    return id;
+  }
+  const dispense = (rxId, body) => request(app).post(`/api/v1/pharmacy/prescriptions/${rxId}/dispense`).set(auth(token)).send({ location_id: loc, ...body });
+
+  test('an expired prescription cannot be dispensed', async () => {
+    const d = await rxDrug('metformin');
+    const rx = (await request(app).post('/api/v1/pharmacy/prescriptions').set(auth(token))
+      .send({ product_id: d, patient_name: 'Sahra', prescriber_name: 'Dr A', quantity: 10, valid_days: 30 })).body;
+    await prisma.prescription.update({ where: { id: rx.id }, data: { validUntil: new Date(Date.now() - 86400000) } });
+    const r = await dispense(rx.id);
+    expect(r.status).toBe(400);
+    expect(r.body.error).toMatch(/expired/i);
+  });
+
+  test('an early refill is blocked until the supply runs down, override proceeds', async () => {
+    const d = await rxDrug('lisinopril');
+    const rx = (await request(app).post('/api/v1/pharmacy/prescriptions').set(auth(token))
+      .send({ product_id: d, patient_name: 'Omar', prescriber_name: 'Dr B', quantity: 30, refills_authorized: 2, days_supply: 30 })).body;
+    expect((await dispense(rx.id)).status).toBe(201);              // first fill
+    const tooSoon = await dispense(rx.id);                          // immediate refill
+    expect(tooSoon.status).toBe(400);
+    expect(tooSoon.body.error).toMatch(/too soon/i);
+    expect((await dispense(rx.id, { override: true })).status).toBe(201); // documented early refill
+  });
+
+  test('a recorded allergy blocks the drug unless overridden', async () => {
+    const d = await rxDrug('amoxicillin');
+    const rx = (await request(app).post('/api/v1/pharmacy/prescriptions').set(auth(token))
+      .send({ product_id: d, patient_name: 'Hodan', prescriber_name: 'Dr C', quantity: 21, allergies: ['amoxicillin'] })).body;
+    const blocked = await dispense(rx.id);
+    expect(blocked.status).toBe(409);
+    expect(blocked.body.allergy).toBe('amoxicillin');
+    expect((await dispense(rx.id, { override: true })).status).toBe(201);
+  });
+
+  test('generic substitution is allowed normally but blocked when marked DAW', async () => {
+    const brand = await rxDrug('atorvastatin-brand');
+    const generic = await rxDrug('atorvastatin', 100);
+
+    // DAW prescription — substitution refused.
+    const dawRx = (await request(app).post('/api/v1/pharmacy/prescriptions').set(auth(token))
+      .send({ product_id: brand, patient_name: 'Ayan', prescriber_name: 'Dr D', quantity: 10, daw: true })).body;
+    const refused = await dispense(dawRx.id, { substitute_product_id: generic });
+    expect(refused.status).toBe(400);
+    expect(refused.body.error).toMatch(/dispense-as-written|DAW/i);
+
+    // Non-DAW prescription — substitute dispensed, the generic's stock moves.
+    const okRx = (await request(app).post('/api/v1/pharmacy/prescriptions').set(auth(token))
+      .send({ product_id: brand, patient_name: 'Ayan2', prescriber_name: 'Dr D', quantity: 10, daw: false })).body;
+    const sub = await dispense(okRx.id, { substitute_product_id: generic });
+    expect(sub.status).toBe(201);
+    expect(sub.body.substituted).toBe(true);
+    expect((await prisma.stockLevel.findFirst({ where: { productId: generic, locationId: loc } })).quantity).toBe(90);
+  });
+});
+
+describe('pharmacy completeness — Rx-only enforcement at checkout', () => {
+  let token, loc, drug;
+  beforeAll(async () => {
+    token = await register();
+    await enableModule(token, 'pharmacy');
+    loc = await location(token);
+    drug = await stockedProduct(token, loc, 20, 100);
+    await prisma.product.update({ where: { id: drug }, data: { isPrescriptionDrug: true } });
+    await request(app).post('/api/v1/sales/shifts/open').set(auth(token)).send({ location_id: loc, opening_float: 100 });
+  });
+  async function sellLine(item) {
+    const ik = (await request(app).post('/api/v1/sales/initiate').set(auth(token))).body.idempotency_key;
+    return request(app).post('/api/v1/sales').set(auth(token)).send({
+      idempotency_key: ik, items: [item], location_id: loc, payment_method: 'cash', cash_tendered: 1000,
+    });
+  }
+
+  test('off by default: an Rx drug rings up without a prescription', async () => {
+    const r = await sellLine({ product_id: drug, quantity: 1, override_price: 20 });
+    expect(r.status).toBe(201);
+  });
+
+  test('once enforced, the Rx line needs a valid prescription', async () => {
+    expect((await request(app).put('/api/v1/pharmacy/settings').set(auth(token)).send({ enforce_rx_on_sale: true })).body.enforce_rx_on_sale).toBe(true);
+
+    // No prescription on the line → blocked.
+    const blocked = await sellLine({ product_id: drug, quantity: 1, override_price: 20 });
+    expect(blocked.status).toBe(400);
+    expect(blocked.body.error).toMatch(/prescription-only/i);
+
+    // With a valid prescription → allowed, and the fill is recorded against it.
+    const rx = (await request(app).post('/api/v1/pharmacy/prescriptions').set(auth(token))
+      .send({ product_id: drug, patient_name: 'Nasra', prescriber_name: 'Dr E', quantity: 1 })).body;
+    const ok = await sellLine({ product_id: drug, quantity: 1, override_price: 20, prescription_id: rx.id });
+    expect(ok.status).toBe(201);
+
+    const dispense = await prisma.dispenseRecord.findFirst({ where: { prescriptionId: rx.id } });
+    expect(dispense).toBeTruthy();
+    expect(dispense.saleId).toBe(ok.body.id);
+    expect((await prisma.prescription.findUnique({ where: { id: rx.id } })).refillsUsed).toBe(1);
+  });
+});
+
+describe('pharmacy completeness — multi-drug prescriptions (groups)', () => {
+  let token, loc;
+  beforeAll(async () => {
+    token = await register();
+    await enableModule(token, 'pharmacy');
+    loc = await location(token);
+  });
+  async function rxDrug(generic) {
+    const id = await stockedProduct(token, loc, 5, 100);
+    await prisma.product.update({ where: { id }, data: { genericName: generic, isPrescriptionDrug: true } });
+    return id;
+  }
+
+  test('a script of multiple drugs creates independent, dispensable lines that share allergies', async () => {
+    const para = await rxDrug('paracetamol');
+    const amox = await rxDrug('amoxicillin');
+
+    const group = (await request(app).post('/api/v1/pharmacy/prescriptions/group').set(auth(token)).send({
+      patient_name: 'Faadumo', prescriber_name: 'Dr Group', allergies: ['amoxicillin'],
+      items: [
+        { product_id: para, quantity: 10, sig: '1 tablet twice daily' },
+        { product_id: amox, quantity: 21, sig: '1 capsule three times daily', refills_authorized: 1 },
+      ],
+    })).body;
+    expect(group.groupNumber).toMatch(/^RXG-/);
+    expect(group.items).toHaveLength(2);
+    expect(group.items.every(i => i.rxNumber)).toBe(true);
+
+    // The group reads back with both lines.
+    const got = await request(app).get(`/api/v1/pharmacy/prescriptions/group/${group.id}`).set(auth(token));
+    expect(got.status).toBe(200);
+    expect(got.body.items).toHaveLength(2);
+
+    const paraRx = group.items.find(i => i.productId === para);
+    const amoxRx = group.items.find(i => i.productId === amox);
+
+    // The non-allergic line dispenses through the normal engine.
+    const ok = await request(app).post(`/api/v1/pharmacy/prescriptions/${paraRx.id}/dispense`).set(auth(token)).send({ location_id: loc });
+    expect(ok.status).toBe(201);
+
+    // The allergic line is blocked — group allergies propagated to each line.
+    const blocked = await request(app).post(`/api/v1/pharmacy/prescriptions/${amoxRx.id}/dispense`).set(auth(token)).send({ location_id: loc });
+    expect(blocked.status).toBe(409);
+    expect(blocked.body.allergy).toBe('amoxicillin');
+  });
+});
+
+describe('hotel completeness — policies & booking rules', () => {
+  let token;
+  beforeAll(async () => { token = await register(); await enableModule(token, 'hotel'); });
+  const setSettings = (body) => request(app).put('/api/v1/hotel/settings').set(auth(token)).send(body);
+  async function room(rate = 100, number) {
+    const rt = (await request(app).post('/api/v1/hotel/room-types').set(auth(token)).send({ name: `T${number}`, baseRate: rate, maxOccupancy: 2 })).body;
+    return (await request(app).post('/api/v1/hotel/rooms').set(auth(token)).send({ roomTypeId: rt.body?.id || rt.id, number: String(number) })).body.id;
+  }
+  const book = (body) => request(app).post('/api/v1/hotel/reservations').set(auth(token)).send(body);
+
+  test('a late cancellation charges the policy fee against the deposit', async () => {
+    await setSettings({ cancellationDeadlineHours: 720, cancellationFeePct: 0.5 });
+    const roomId = await room(100, 1101);
+    const resv = (await book({ roomId, guestName: 'Late Cancel', checkInDate: '2026-07-10', checkOutDate: '2026-07-12', ratePerNight: 100, depositPaid: 120 })).body;
+    const c = await request(app).delete(`/api/v1/hotel/reservations/${resv.id}`).set(auth(token)).send({ reason: 'changed plans' });
+    expect(c.status).toBe(200);
+    expect(c.body.late_cancel).toBe(true);
+    expect(c.body.penalty).toBeCloseTo(100, 2);   // 200 stay × 50%
+    expect(c.body.refund_due).toBeCloseTo(20, 2);  // 120 deposit − 100 fee
+  });
+
+  test('an early cancellation outside the window is free (deposit fully refundable)', async () => {
+    await setSettings({ cancellationDeadlineHours: 24, cancellationFeePct: 0.5 });
+    const roomId = await room(100, 1102);
+    const resv = (await book({ roomId, guestName: 'Early Cancel', checkInDate: '2026-12-01', checkOutDate: '2026-12-03', ratePerNight: 100, depositPaid: 30 })).body;
+    const c = await request(app).delete(`/api/v1/hotel/reservations/${resv.id}`).set(auth(token)).send({});
+    expect(c.body.late_cancel).toBe(false);
+    expect(c.body.penalty).toBeCloseTo(0, 2);
+    expect(c.body.refund_due).toBeCloseTo(30, 2);
+  });
+
+  test('a no-show applies the no-show fee', async () => {
+    await setSettings({ noShowFeePct: 0.4 });
+    const roomId = await room(100, 1103);
+    const resv = (await book({ roomId, guestName: 'Ghost', checkInDate: '2026-07-15', checkOutDate: '2026-07-17', ratePerNight: 100 })).body;
+    const ns = await request(app).post(`/api/v1/hotel/reservations/${resv.id}/no-show`).set(auth(token));
+    expect(ns.status).toBe(200);
+    expect(ns.body.penalty).toBeCloseTo(80, 2);     // 200 × 40%
+    expect(ns.body.amount_owed).toBeCloseTo(80, 2);  // no deposit on file
+    const after = (await request(app).get('/api/v1/hotel/reservations').set(auth(token)).query({ status: 'no_show' })).body.reservations;
+    expect(after.find(r => r.id === resv.id)).toBeTruthy();
+  });
+
+  test('overbooking is rejected by default and allowed once enabled', async () => {
+    await setSettings({ allowOverbooking: false });
+    const roomId = await room(100, 1104);
+    expect((await book({ roomId, guestName: 'A', checkInDate: '2026-07-20', checkOutDate: '2026-07-23', ratePerNight: 100 })).status).toBe(201);
+    expect((await book({ roomId, guestName: 'B', checkInDate: '2026-07-21', checkOutDate: '2026-07-24', ratePerNight: 100 })).status).toBe(409);
+    await setSettings({ allowOverbooking: true });
+    expect((await book({ roomId, guestName: 'C', checkInDate: '2026-07-21', checkOutDate: '2026-07-24', ratePerNight: 100 })).status).toBe(201);
+  });
+
+  test('a rate plan enforces its length-of-stay window', async () => {
+    const rt = (await request(app).post('/api/v1/hotel/room-types').set(auth(token)).send({ name: 'LOS', baseRate: 100, maxOccupancy: 2 })).body;
+    const roomId = (await request(app).post('/api/v1/hotel/rooms').set(auth(token)).send({ roomTypeId: rt.id, number: '1105' })).body.id;
+    const plan = (await request(app).post('/api/v1/hotel/rate-plans').set(auth(token)).send({ roomTypeId: rt.id, name: 'Weekly', ratePerNight: 80, minNights: 3 })).body;
+    const r = await book({ roomId, guestName: 'Short', checkInDate: '2026-07-25', checkOutDate: '2026-07-26', ratePlanId: plan.id });
+    expect(r.status).toBe(400);
+    expect(r.body.code).toBe('LOS_VIOLATION');
+  });
+
+  test('a corporate negotiated rate is applied when no rate is given', async () => {
+    const corp = (await request(app).post('/api/v1/hotel/corporate').set(auth(token)).send({ companyName: 'NegoCorp', negotiatedRate: 45 })).body;
+    const roomId = await room(100, 1106);
+    const resv = (await book({ roomId, guestName: 'Corp Guest', checkInDate: '2026-08-10', checkOutDate: '2026-08-12', corporateAccountId: corp.id })).body;
+    expect(Number(resv.ratePerNight)).toBeCloseTo(45, 2);
+    expect(Number(resv.totalRoomCharge)).toBeCloseTo(90, 2);
+  });
+});
+
+describe('hotel completeness — night audit & revenue analytics', () => {
+  async function hotelBiz() { const t = await register(); await enableModule(t, 'hotel'); return t; }
+  async function roomOf(token, number, rate = 100) {
+    const rt = (await request(app).post('/api/v1/hotel/room-types').set(auth(token)).send({ name: `RT${number}`, baseRate: rate, maxOccupancy: 2 })).body;
+    return (await request(app).post('/api/v1/hotel/rooms').set(auth(token)).send({ roomTypeId: rt.id, number: String(number) })).body.id;
+  }
+
+  test('night audit sweeps un-arrived bookings to no-show and returns the close report', async () => {
+    const token = await hotelBiz();
+    await request(app).put('/api/v1/hotel/settings').set(auth(token)).send({ noShowFeePct: 0.5 });
+    const roomId = await roomOf(token, 401);
+    // An arrival dated in the past that never checked in.
+    const resv = (await request(app).post('/api/v1/hotel/reservations').set(auth(token))
+      .send({ roomId, guestName: 'NoArrival', checkInDate: '2026-06-01', checkOutDate: '2026-06-03', ratePerNight: 100 })).body;
+
+    const audit = await request(app).post('/api/v1/hotel/night-audit/run').set(auth(token)).send({});
+    expect(audit.status).toBe(200);
+    expect(audit.body.no_shows_processed).toBe(1);
+    expect(audit.body.no_shows[0].penalty).toBeCloseTo(100, 2); // 200 stay × 50%
+    const r = await request(app).get(`/api/v1/hotel/reservations/${resv.id}`).set(auth(token));
+    expect(r.body.status).toBe('no_show');
+  });
+
+  test('revenue report computes occupancy, ADR and RevPAR', async () => {
+    const token = await hotelBiz();
+    const roomId = await roomOf(token, 501, 100);
+    const resv = (await request(app).post('/api/v1/hotel/reservations').set(auth(token))
+      .send({ roomId, guestName: 'Analytics', checkInDate: '2026-09-01', checkOutDate: '2026-09-03', ratePerNight: 100 })).body;
+    expect((await request(app).post(`/api/v1/hotel/reservations/${resv.id}/checkin`).set(auth(token))).status).toBe(200);
+
+    const rep = await request(app).get('/api/v1/hotel/reports/revenue').set(auth(token)).query({ from: '2026-09-01', to: '2026-09-05' });
+    expect(rep.status).toBe(200);
+    expect(rep.body.room_revenue).toBeCloseTo(200, 2);   // 2 nights × 100
+    expect(rep.body.room_nights_sold).toBeCloseTo(2, 2);
+    expect(rep.body.adr).toBeCloseTo(100, 2);            // 200 / 2 nights
+    expect(rep.body.occupancy_pct).toBeCloseTo(40, 1);   // 2 sold / (1 room × 5 days)
+    expect(rep.body.revpar).toBeCloseTo(40, 2);          // 200 / 5 available room-nights
+  });
+});
+
+describe('hotel completeness — corporate AR / city ledger', () => {
+  test('checkout bills the balance to the corporate account; a corporate payment clears it', async () => {
+    const token = await register(); await enableModule(token, 'hotel');
+    const corp = (await request(app).post('/api/v1/hotel/corporate').set(auth(token)).send({ companyName: 'LedgerCo' })).body;
+    const rt = (await request(app).post('/api/v1/hotel/room-types').set(auth(token)).send({ name: 'CL', baseRate: 100, maxOccupancy: 2 })).body;
+    const roomId = (await request(app).post('/api/v1/hotel/rooms').set(auth(token)).send({ roomTypeId: rt.id, number: '601' })).body.id;
+    const resv = (await request(app).post('/api/v1/hotel/reservations').set(auth(token))
+      .send({ roomId, guestName: 'Biz Traveller', checkInDate: '2026-10-01', checkOutDate: '2026-10-03', ratePerNight: 100, corporateAccountId: corp.id })).body;
+    expect((await request(app).post(`/api/v1/hotel/reservations/${resv.id}/checkin`).set(auth(token))).status).toBe(200);
+
+    // Check out billing the 200 balance to the company's city ledger.
+    const co = await request(app).post(`/api/v1/hotel/reservations/${resv.id}/checkout`).set(auth(token)).send({ bill_to_corporate: true });
+    expect(co.status).toBe(200);
+    expect(co.body.city_ledger.transferred).toBeCloseTo(200, 2);
+
+    // The corporate account now carries the outstanding balance.
+    const acct = (await request(app).get('/api/v1/hotel/corporate').set(auth(token))).body.accounts.find(a => a.id === corp.id);
+    expect(Number(acct.outstandingBalance)).toBeCloseTo(200, 2);
+
+    // A corporate payment clears the city ledger and brings cash in.
+    const pay = await request(app).post(`/api/v1/hotel/corporate/${corp.id}/payment`).set(auth(token)).send({ amount: 200, provider: 'bank' });
+    expect(pay.status).toBe(200);
+    expect(pay.body.outstanding_balance).toBeCloseTo(0, 2);
+
+    // GL balances and the receivable is fully cleared.
+    const tb = (await request(app).get('/api/v1/accounting/trial-balance').set(auth(token))).body;
+    expect(tb.totals.balanced).toBe(true);
+    expect(tb.accounts.find(a => a.code === '1100').balance).toBeCloseTo(0, 2);
+  });
+});
+
+describe('hotel completeness — tourism levy & split folios', () => {
+  async function hotelBiz() { const t = await register(); await enableModule(t, 'hotel'); return t; }
+  async function roomOf(token, number, rate = 100) {
+    const rt = (await request(app).post('/api/v1/hotel/room-types').set(auth(token)).send({ name: `RT${number}`, baseRate: rate, maxOccupancy: 2 })).body;
+    return (await request(app).post('/api/v1/hotel/rooms').set(auth(token)).send({ roomTypeId: rt.id, number: String(number) })).body.id;
+  }
+  const book = (token, body) => request(app).post('/api/v1/hotel/reservations').set(auth(token)).send(body);
+
+  test('tourism levy is posted as a separate line, distinct from VAT', async () => {
+    const token = await hotelBiz();
+    await request(app).put('/api/v1/hotel/settings').set(auth(token)).send({ taxRate: 0.05, tourismLevyPct: 0.02 });
+    const roomId = await roomOf(token, 701, 100);
+    const resv = (await book(token, { roomId, guestName: 'Levy Guest', checkInDate: '2026-11-01', checkOutDate: '2026-11-02', ratePerNight: 100 })).body;
+    expect((await request(app).post(`/api/v1/hotel/reservations/${resv.id}/checkin`).set(auth(token))).status).toBe(200);
+    expect((await request(app).post(`/api/v1/hotel/reservations/${resv.id}/checkout`).set(auth(token)).send({ force_checkout: true })).status).toBe(200);
+
+    const folioId = (await request(app).get(`/api/v1/hotel/reservations/${resv.id}`).set(auth(token))).body.folio.id;
+    const folio = (await request(app).get(`/api/v1/hotel/folios/${folioId}`).set(auth(token))).body;
+    const levy = folio.charges.find(c => c.description.includes('Tourism levy'));
+    const tax  = folio.charges.find(c => c.description.startsWith('Tax ('));
+    expect(Number(levy.totalAmount)).toBeCloseTo(2, 2);  // 100 × 2%
+    expect(Number(tax.totalAmount)).toBeCloseTo(5, 2);   // 100 × 5%
+    expect(Number(folio.totalCharges)).toBeCloseTo(107, 2);
+  });
+
+  test('split folio: a charge can move to a second bill, and checkout waits for both', async () => {
+    const token = await hotelBiz();
+    const roomId = await roomOf(token, 801, 100);
+    const resv = (await book(token, { roomId, guestName: 'Split Guest', checkInDate: '2026-11-10', checkOutDate: '2026-11-11', ratePerNight: 100 })).body;
+    expect((await request(app).post(`/api/v1/hotel/reservations/${resv.id}/checkin`).set(auth(token))).status).toBe(200);
+    const primary = (await request(app).get(`/api/v1/hotel/reservations/${resv.id}`).set(auth(token))).body.folio.id;
+
+    // Incidental on the primary bill, then a second folio to carry it.
+    const ch = await request(app).post(`/api/v1/hotel/folios/${primary}/charges`).set(auth(token)).send({ type: 'minibar', description: 'Minibar', quantity: 1, unitAmount: 20, chargeDate: '2026-11-10' });
+    const split = (await request(app).post(`/api/v1/hotel/reservations/${resv.id}/folios`).set(auth(token)).send({})).body;
+    const mv = await request(app).post(`/api/v1/hotel/folios/${primary}/charges/${ch.body.id}/move`).set(auth(token)).send({ to_folio_id: split.id });
+    expect(mv.status).toBe(200);
+    expect(mv.body.amount).toBeCloseTo(20, 2);
+
+    const folios = (await request(app).get(`/api/v1/hotel/reservations/${resv.id}/folios`).set(auth(token))).body.folios;
+    expect(Number(folios.find(f => f.is_primary).balance)).toBeCloseTo(100, 2); // room only
+    expect(Number(folios.find(f => !f.is_primary).balance)).toBeCloseTo(20, 2);  // minibar moved here
+
+    // Pay the primary; checkout is still blocked by the unsettled split.
+    await request(app).post(`/api/v1/hotel/folios/${primary}/payments`).set(auth(token)).send({ provider: 'cash', amount: 100 });
+    const blocked = await request(app).post(`/api/v1/hotel/reservations/${resv.id}/checkout`).set(auth(token)).send({});
+    expect(blocked.status).toBe(400);
+    expect(blocked.body.code).toBe('SPLIT_FOLIO_OUTSTANDING');
+
+    // Settle the split too → checkout succeeds.
+    await request(app).post(`/api/v1/hotel/folios/${split.id}/payments`).set(auth(token)).send({ provider: 'cash', amount: 20 });
+    expect((await request(app).post(`/api/v1/hotel/reservations/${resv.id}/checkout`).set(auth(token)).send({})).status).toBe(200);
+  });
+});
+
+describe('restaurant completeness — control & reporting', () => {
+  let token, loc, prod, prod2;
+  beforeAll(async () => {
+    token = await register(); await enableModule(token, 'restaurant');
+    loc = await location(token);
+    prod  = await stockedProduct(token, loc, 10, 100); // gets a required modifier
+    prod2 = await stockedProduct(token, loc, 10, 100); // plain, for comp/report tests
+  });
+  const newOrder = (type = 'dine_in') => request(app).post('/api/v1/restaurant/orders').set(auth(token)).send({ type });
+  const addItem = (orderId, body) => request(app).post(`/api/v1/restaurant/orders/${orderId}/items`).set(auth(token)).send(body);
+
+  test('a required modifier group is enforced when adding an item', async () => {
+    const grp = (await request(app).post('/api/v1/restaurant/modifiers').set(auth(token)).send({
+      name: 'Size', isRequired: true, minSelect: 1, maxSelect: 1,
+      options: [{ name: 'Small', priceAdjustment: 0 }, { name: 'Large', priceAdjustment: 1 }],
+    })).body;
+    const small = grp.options.find(o => o.name === 'Small').id;
+    const large = grp.options.find(o => o.name === 'Large').id;
+    await request(app).post(`/api/v1/restaurant/products/${prod}/modifiers`).set(auth(token)).send({ group_id: grp.id });
+    const order = (await newOrder('takeaway')).body;
+
+    const missing = await addItem(order.id, { productId: prod, quantity: 1 });
+    expect(missing.status).toBe(400);
+    expect(missing.body.code).toBe('MODIFIER_REQUIRED');
+
+    expect((await addItem(order.id, { productId: prod, quantity: 1, modifiers: [{ optionId: small }] })).status).toBe(201);
+
+    const tooMany = await addItem(order.id, { productId: prod, quantity: 1, modifiers: [{ optionId: small }, { optionId: large }] });
+    expect(tooMany.status).toBe(400);
+    expect(tooMany.body.code).toBe('MODIFIER_MAX');
+  });
+
+  test('comps are tracked by reason and surfaced in the comps report', async () => {
+    const order = (await newOrder('dine_in')).body;
+    const item = (await addItem(order.id, { productId: prod2, quantity: 2 })).body; // 2 × 10
+    const comp = await request(app).post(`/api/v1/restaurant/orders/${order.id}/items/${item.id}/comp`).set(auth(token)).send({ reason: 'service_recovery' });
+    expect(comp.status).toBe(200);
+    expect(comp.body.amount_removed).toBeCloseTo(20, 2);
+    expect(Number((await prisma.restaurantOrder.findUnique({ where: { id: order.id } })).totalAmount)).toBeCloseTo(0, 2);
+
+    const rep = await request(app).get('/api/v1/restaurant/reports/comps').set(auth(token));
+    expect(rep.status).toBe(200);
+    expect(rep.body.comps.count).toBeGreaterThanOrEqual(1);
+    expect(rep.body.comps.by_reason.service_recovery.amount).toBeCloseTo(20, 2);
+  });
+
+  test('Z-report and waiter report summarise the day', async () => {
+    const order = (await newOrder('takeaway')).body;
+    await addItem(order.id, { productId: prod2, quantity: 3 }); // 30
+    expect((await request(app).post(`/api/v1/restaurant/orders/${order.id}/checkout`).set(auth(token)).send({ payment_method: 'cash', cash_tendered: 100 })).status).toBe(200);
+
+    const today = new Date().toISOString().slice(0, 10);
+    const z = await request(app).get('/api/v1/restaurant/reports/z').set(auth(token)).query({ date: today });
+    expect(z.status).toBe(200);
+    expect(z.body.orders_completed).toBeGreaterThanOrEqual(1);
+    expect(z.body.gross_sales).toBeGreaterThanOrEqual(30);
+    expect(z.body.tenders.find(t => t.method === 'cash')).toBeTruthy();
+
+    const w = await request(app).get('/api/v1/restaurant/reports/by-waiter').set(auth(token));
+    expect(w.status).toBe(200);
+    expect(w.body.waiters.length).toBeGreaterThanOrEqual(1);
+    expect(w.body.waiters[0].revenue).toBeGreaterThan(0);
+  });
+});
+
+describe('inventory completeness — adjustments & stocktake variance post to the GL', () => {
+  const biz = (t) => JSON.parse(Buffer.from(t.split('.')[1], 'base64').toString()).businessId;
+
+  test('an approved write-off books a loss against inventory (5050 / 1200)', async () => {
+    const token = await register();
+    const loc = await location(token);
+    const prod = await stockedProduct(token, loc, 20, 100); // cost 5, 100 in stock
+
+    const adj = (await request(app).post('/api/v1/stock/adjustments').set(auth(token))
+      .send({ product_id: prod, location_id: loc, type: 'write_off', quantity: -10, reason: 'Damaged crate' })).body;
+    expect((await request(app).post(`/api/v1/stock/adjustments/${adj.id}/approve`).set(auth(token))).status).toBe(200);
+
+    expect((await prisma.stockLevel.findFirst({ where: { productId: prod, locationId: loc } })).quantity).toBe(90);
+
+    const je = await prisma.journalEntry.findFirst({
+      where: { businessId: biz(token), sourceType: 'stock_adjustment', sourceId: adj.id },
+      include: { lines: { include: { account: true } } },
+    });
+    expect(je).toBeTruthy();
+    const by = Object.fromEntries(je.lines.map(l => [l.account.code, l]));
+    expect(parseFloat(by['5050'].debit)).toBeCloseTo(50, 2);   // 10 × cost 5
+    expect(parseFloat(by['1200'].credit)).toBeCloseTo(50, 2);
+
+    const tb = (await request(app).get('/api/v1/accounting/trial-balance').set(auth(token))).body;
+    expect(tb.totals.balanced).toBe(true);
+  });
+
+  test('an approved stocktake books the net count variance', async () => {
+    const token = await register();
+    const loc = await location(token);
+    const prod = await stockedProduct(token, loc, 20, 50); // cost 5, 50 in stock
+
+    const st = (await request(app).post('/api/v1/stocktake').set(auth(token)).send({ type: 'full', location_id: loc, name: 'Q1 count' })).body;
+    const detail = (await request(app).get(`/api/v1/stocktake/${st.id}`).set(auth(token))).body;
+    const item = detail.items.find(i => i.productId === prod);
+    await request(app).put(`/api/v1/stocktake/${st.id}/items/${item.id}`).set(auth(token)).send({ counted_qty: 44 }); // short 6
+    await request(app).post(`/api/v1/stocktake/${st.id}/complete`).set(auth(token));
+    expect((await request(app).post(`/api/v1/stocktake/${st.id}/approve`).set(auth(token))).status).toBe(200);
+
+    expect((await prisma.stockLevel.findFirst({ where: { productId: prod, locationId: loc } })).quantity).toBe(44);
+
+    const je = await prisma.journalEntry.findFirst({
+      where: { businessId: biz(token), sourceType: 'stocktake_variance', sourceId: st.id },
+      include: { lines: { include: { account: true } } },
+    });
+    expect(je).toBeTruthy();
+    const by = Object.fromEntries(je.lines.map(l => [l.account.code, l]));
+    expect(parseFloat(by['5050'].debit)).toBeCloseTo(30, 2);   // 6 short × cost 5
+    expect(parseFloat(by['1200'].credit)).toBeCloseTo(30, 2);
+  });
+});
+
+describe('wholesale completeness — price tiers, credit limit, AR aging', () => {
+  const biz = (t) => JSON.parse(Buffer.from(t.split('.')[1], 'base64').toString()).businessId;
+  async function wholeProd(token, loc, wholesalePrice) {
+    const prod = await stockedProduct(token, loc, 10, 1000);
+    await prisma.product.update({ where: { id: prod }, data: { wholesalePrice } });
+    return prod;
+  }
+  async function deliverFlow(token, orderId, itemId) {
+    await request(app).post(`/api/v1/wholesale/orders/${orderId}/pick`).set(auth(token)).send({ item_ids: [itemId] });
+    await request(app).post(`/api/v1/wholesale/orders/${orderId}/dispatch`).set(auth(token)).send({ driver_name: 'Ali' });
+    await request(app).post(`/api/v1/wholesale/orders/${orderId}/deliver`).set(auth(token));
+  }
+
+  test('a customer price tier adjusts the wholesale price', async () => {
+    const token = await register(); await enableModule(token, 'wholesale');
+    const loc = await location(token);
+    const prod = await wholeProd(token, loc, 10);
+    const pg = await prisma.priceGroup.create({ data: { businessId: biz(token), name: 'Gold', percent: -10 } });
+    const cust = (await request(app).post('/api/v1/customers').set(auth(token)).send({ name: 'Gold Shop', price_group_id: pg.id })).body;
+
+    const order = (await request(app).post('/api/v1/wholesale/orders').set(auth(token))
+      .send({ customer_id: cust.id, items: [{ product_id: prod, quantity: 2 }] })).body;
+    expect(Number(order.items[0].unitPrice)).toBeCloseTo(9, 2);  // 10 − 10%
+    expect(Number(order.total)).toBeCloseTo(18, 2);
+  });
+
+  test('the credit limit blocks an order beyond the open balance; override proceeds', async () => {
+    const token = await register(); await enableModule(token, 'wholesale');
+    const loc = await location(token);
+    const prod = await wholeProd(token, loc, 50);
+    const cust = (await request(app).post('/api/v1/customers').set(auth(token)).send({ name: 'Risky Shop', credit_limit: 100 })).body;
+
+    // First order of 50, delivered + unpaid → 50 open.
+    const o1 = (await request(app).post('/api/v1/wholesale/orders').set(auth(token)).send({ customer_id: cust.id, items: [{ product_id: prod, quantity: 1 }] })).body;
+    await deliverFlow(token, o1.id, o1.items[0].id);
+
+    // A second order of 100 would take the open balance to 150 > limit 100.
+    const blocked = await request(app).post('/api/v1/wholesale/orders').set(auth(token)).send({ customer_id: cust.id, items: [{ product_id: prod, quantity: 2 }] });
+    expect(blocked.status).toBe(400);
+    expect(blocked.body.code).toBe('CREDIT_LIMIT_EXCEEDED');
+
+    const ok = await request(app).post('/api/v1/wholesale/orders').set(auth(token)).send({ customer_id: cust.id, items: [{ product_id: prod, quantity: 2 }], override_credit_limit: true });
+    expect(ok.status).toBe(201);
+  });
+
+  test('outstanding shows AR aging buckets by due date', async () => {
+    const token = await register(); await enableModule(token, 'wholesale');
+    const loc = await location(token);
+    const prod = await wholeProd(token, loc, 40);
+    const cust = (await request(app).post('/api/v1/customers').set(auth(token)).send({ name: 'Aging Shop', wholesale_terms_days: 0 })).body;
+
+    const o = (await request(app).post('/api/v1/wholesale/orders').set(auth(token)).send({ customer_id: cust.id, items: [{ product_id: prod, quantity: 1 }] })).body;
+    await deliverFlow(token, o.id, o.items[0].id);
+    await prisma.wholesaleOrder.update({ where: { id: o.id }, data: { dueDate: new Date(Date.now() - 45 * 86400000) } }); // 45 days overdue
+
+    const out = await request(app).get('/api/v1/wholesale/outstanding').set(auth(token));
+    expect(out.status).toBe(200);
+    expect(out.body.aging_totals.d31_60).toBeCloseTo(40, 2);
+    expect(out.body.total_outstanding).toBeCloseTo(40, 2);
+    expect(out.body.outstanding[0].aging.d31_60).toBeCloseTo(40, 2);
+  });
+});
+
+describe('construction completeness — labour-to-GL & retention release', () => {
+  async function consBiz() {
+    const t = await register(); await enableModule(t, 'construction');
+    const p = (await request(app).post('/api/v1/projects').set(auth(t)).send({ name: 'Site', budget: 5000, status: 'active' })).body;
+    const bizId = (await prisma.project.findUnique({ where: { id: p.id } })).businessId;
+    return { t, pid: p.id, bizId };
+  }
+  const setStatus = (t, msId, body) => request(app).put(`/api/v1/construction/milestones/${msId}/status`).set(auth(t)).send(body);
+
+  test('logging site labour books a wage expense to the GL', async () => {
+    const { t, pid, bizId } = await consBiz();
+    const lab = await request(app).post(`/api/v1/construction/${pid}/labor`).set(auth(t)).send({ work_date: '2026-07-02', workers: 4, daily_rate: 25 }); // 100
+    expect(lab.status).toBe(201);
+
+    const bal = await accounting.accountBalances(bizId);
+    const at = (c) => (bal.find(a => a.code === c) || { balance: 0 }).balance;
+    expect(at('5100')).toBeCloseTo(100, 2);   // Salaries & Wages expense booked
+    const je = await prisma.journalEntry.findFirst({ where: { businessId: bizId, sourceType: 'construction_labor' } });
+    expect(je).toBeTruthy();
+  });
+
+  test('retention is released after billing, clearing the held receivable', async () => {
+    const { t, pid, bizId } = await consBiz();
+    const ms = (await request(app).post(`/api/v1/construction/${pid}/milestones`).set(auth(t)).send({ name: 'Phase 1', amount: 1000, retention_pct: 10 })).body;
+
+    // Can't release before the milestone is billed.
+    expect((await request(app).post(`/api/v1/construction/milestones/${ms.id}/release-retention`).set(auth(t)).send({})).status).toBe(422);
+
+    await setStatus(t, ms.id, { status: 'complete' });
+    await setStatus(t, ms.id, { status: 'billed' });
+    await setStatus(t, ms.id, { status: 'paid', method: 'cash' });
+
+    let bal = await accounting.accountBalances(bizId);
+    const at = (c) => (bal.find(a => a.code === c) || { balance: 0 }).balance;
+    expect(at('1120')).toBeCloseTo(100, 2); // 10% of 1000 held as retention
+
+    const rel = await request(app).post(`/api/v1/construction/milestones/${ms.id}/release-retention`).set(auth(t)).send({ method: 'cash' });
+    expect(rel.status).toBe(200);
+    expect(rel.body.retention).toBeCloseTo(100, 2);
+    bal = await accounting.accountBalances(bizId);
+    expect(at('1120')).toBeCloseTo(0, 2); // retention cleared
+
+    // Idempotent — a second release is rejected.
+    expect((await request(app).post(`/api/v1/construction/milestones/${ms.id}/release-retention`).set(auth(t)).send({})).status).toBe(400);
+  });
+});
+
+describe('inventory completeness — landed cost & refund reversal', () => {
+  test('landed cost (freight + duty) is capitalised into the cost layer and GL', async () => {
+    const token = await register();
+    const loc = await location(token);
+    const supplier = (await request(app).post('/api/v1/suppliers').set(auth(token)).send({ name: 'Importer', currency: 'USD' })).body;
+    const prod = (await request(app).post('/api/v1/products').set(auth(token)).send({ name: 'Imported Widget', selling_price: 30, cost_price: 10 })).body;
+
+    const po = (await request(app).post('/api/v1/purchase-orders').set(auth(token)).send({
+      supplier_id: supplier.id, location_id: loc,
+      items: [{ product_id: prod.id, ordered_qty: 10, unit_price: 10 }],
+      freight_cost: 15, customs_duty: 5, currency: 'USD',
+    })).body;
+    const poItem = await prisma.purchaseOrderItem.findFirst({ where: { poId: po.id } });
+    expect((await request(app).put(`/api/v1/purchase-orders/${po.id}/status`).set(auth(token))
+      .send({ status: 'received', received_items: [{ id: poItem.id, product_id: prod.id, qty: 10, unit_price: 10 }] })).status).toBe(200);
+
+    // goods 100, landed 20 → factor 0.2 → landed unit cost 12
+    const layer = await prisma.costLayer.findFirst({ where: { productId: prod.id, poId: po.id } });
+    expect(Number(layer.unitCost)).toBeCloseTo(12, 2);
+    expect(Number((await prisma.product.findUnique({ where: { id: prod.id } })).costPrice)).toBeCloseTo(12, 2);
+
+    const je = await prisma.journalEntry.findFirst({ where: { sourceType: 'purchase', sourceId: po.id }, include: { lines: { include: { account: true } } } });
+    const by = Object.fromEntries(je.lines.map(l => [l.account.code, l]));
+    expect(parseFloat(by['1200'].debit)).toBeCloseTo(120, 2); // 10 units × landed 12
+  });
+
+  test('a refund reverses revenue, tax and COGS, and restocks a fresh cost layer', async () => {
+    const token = await register();
+    const loc = await location(token);
+    const prod = await stockedProduct(token, loc, 20, 100); // cost 5, sells for 20
+    const saleRes = await makeSale(token, loc, prod, { qty: 2, price: 20 }); // total 40
+    expect(saleRes.status).toBe(201);
+    const saleId = saleRes.body.id;
+    const si = await prisma.saleItem.findFirst({ where: { saleId } });
+
+    const refund = await request(app).post(`/api/v1/sales/${saleId}/refund`).set(auth(token))
+      .send({ items: [{ sale_item_id: si.id, product_id: prod, quantity: 1, unit_price: 20, restock: true }], reason: 'damaged', refund_method: 'cash' });
+    expect(refund.status).toBe(201);
+
+    // Revenue + tender reversed (no tax on this product → all revenue).
+    const rev = await prisma.journalEntry.findFirst({ where: { sourceType: 'sale_refund', sourceId: refund.body.id }, include: { lines: { include: { account: true } } } });
+    const r = Object.fromEntries(rev.lines.map(l => [l.account.code, l]));
+    expect(parseFloat(r['4000'].debit)).toBeCloseTo(20, 2); // 1 × 20 sales return
+    expect(parseFloat(r['1000'].credit)).toBeCloseTo(20, 2); // cash paid back
+
+    // COGS reversed at the item's captured cost.
+    const cogs = await prisma.journalEntry.findFirst({ where: { sourceType: 'sale_refund_cogs', sourceId: refund.body.id }, include: { lines: { include: { account: true } } } });
+    const c = Object.fromEntries(cogs.lines.map(l => [l.account.code, l]));
+    const cost = parseFloat(si.costPrice);
+    expect(parseFloat(c['1200'].debit)).toBeCloseTo(cost, 2);  // inventory back
+    expect(parseFloat(c['5000'].credit)).toBeCloseTo(cost, 2); // COGS reversed
+
+    // stock: 100 − 2 sold + 1 returned = 99
+    expect((await prisma.stockLevel.findFirst({ where: { productId: prod, locationId: loc } })).quantity).toBe(99);
+
+    const tb = (await request(app).get('/api/v1/accounting/trial-balance').set(auth(token))).body;
+    expect(tb.totals.balanced).toBe(true);
+  });
+});
+
+describe('inventory completeness — FEFO consumption + valuation/expiring reports', () => {
+  test('a sale consumes the nearest-expiry layer first; valuation & expiring reports reconcile', async () => {
+    const token = await register();
+    const loc = await location(token);
+    const bizId = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString()).businessId;
+    const prod = (await request(app).post('/api/v1/products').set(auth(token))
+      .send({ name: 'Fresh Milk', selling_price: 5, cost_price: 2, opening_stock: 0, location_id: loc })).body.id;
+
+    // Two layers: the CHEAPER one expires LATER; the PRICIER one expires SOONER.
+    const soon  = new Date(Date.now() +  5 * 86400000);
+    const later = new Date(Date.now() + 60 * 86400000);
+    await prisma.costLayer.create({ data: { businessId: bizId, productId: prod, locationId: loc, quantityReceived: 10, quantityRemaining: 10, unitCost: 2, expiryDate: later, receivedAt: new Date(Date.now() - 86400000) } });
+    const soonLayer = await prisma.costLayer.create({ data: { businessId: bizId, productId: prod, locationId: loc, quantityReceived: 10, quantityRemaining: 10, unitCost: 3, expiryDate: soon } });
+    await prisma.$executeRaw`INSERT INTO stock_levels (id, product_id, location_id, quantity) VALUES (gen_random_uuid(), ${prod}::uuid, ${loc}::uuid, 20) ON CONFLICT (product_id, location_id) DO UPDATE SET quantity = 20`;
+
+    // Sell 5 — FEFO must draw from the soon-expiry layer (cost 3), not the older cheaper one.
+    await request(app).post('/api/v1/sales/shifts/open').set(auth(token)).send({ location_id: loc, opening_float: 100 });
+    const ik = (await request(app).post('/api/v1/sales/initiate').set(auth(token))).body.idempotency_key;
+    const sale = await request(app).post('/api/v1/sales').set(auth(token)).send({
+      idempotency_key: ik, items: [{ product_id: prod, quantity: 5, override_price: 5 }], location_id: loc, payment_method: 'cash', cash_tendered: 25,
+    });
+    expect(sale.status).toBe(201);
+
+    // The soon-expiry layer dropped to 5; the later cheaper layer is untouched (FEFO, not FIFO).
+    expect((await prisma.costLayer.findUnique({ where: { id: soonLayer.id } })).quantityRemaining).toBe(5);
+    const je = await prisma.journalEntry.findFirst({ where: { businessId: bizId, sourceType: 'sale', sourceId: sale.body.id }, include: { lines: { include: { account: true } } } });
+    const cogs = je.lines.find(l => l.account.code === '5000');
+    expect(parseFloat(cogs.debit)).toBeCloseTo(15, 2); // 5 × cost 3 (FEFO); FIFO would be 10
+
+    // Valuation: soon 5×3=15 + later 10×2=20 = 35.
+    const val = await request(app).get('/api/v1/stock/valuation').set(auth(token));
+    expect(val.status).toBe(200);
+    expect(val.body.total_value).toBeCloseTo(35, 2);
+
+    // Expiring within 10 days: only the soon layer (5 left × 3 = 15 at risk).
+    const exp = await request(app).get('/api/v1/stock/expiring').set(auth(token)).query({ days: 10 });
+    expect(exp.status).toBe(200);
+    expect(exp.body.value_at_risk).toBeCloseTo(15, 2);
+    expect(exp.body.expiring.find(e => e.product_id === prod)).toBeTruthy();
+  });
+});
+
+describe('inventory completeness — 3-way match (PO ↔ GRN ↔ supplier invoice)', () => {
+  let token, loc, prod, poId, poItemId;
+  beforeAll(async () => {
+    token = await register();
+    loc = await location(token);
+    const supplier = (await request(app).post('/api/v1/suppliers').set(auth(token)).send({ name: 'Sup3way', currency: 'USD' })).body;
+    prod = (await request(app).post('/api/v1/products').set(auth(token)).send({ name: 'Matched Item', selling_price: 30, cost_price: 18 })).body;
+    poId = (await request(app).post('/api/v1/purchase-orders').set(auth(token)).send({
+      supplier_id: supplier.id, location_id: loc, items: [{ product_id: prod.id, ordered_qty: 50, unit_price: 18 }], currency: 'USD',
+    })).body.id;
+    poItemId = (await prisma.purchaseOrderItem.findFirst({ where: { poId } })).id;
+    await request(app).put(`/api/v1/purchase-orders/${poId}/status`).set(auth(token))
+      .send({ status: 'received', received_items: [{ id: poItemId, product_id: prod.id, qty: 50, unit_price: 18 }] });
+  });
+
+  test('a matching invoice passes the 3-way match and can be approved', async () => {
+    const inv = await request(app).post(`/api/v1/purchase-orders/${poId}/invoice`).set(auth(token))
+      .send({ invoice_number: 'INV-1', items: [{ po_item_id: poItemId, product_id: prod.id, quantity: 50, unit_price: 18 }] });
+    expect(inv.status).toBe(201);
+    expect(inv.body.match_status).toBe('matched');
+    expect(inv.body.variances).toHaveLength(0);
+
+    const appr = await request(app).post(`/api/v1/purchase-orders/invoices/${inv.body.id}/approve`).set(auth(token)).send({});
+    expect(appr.status).toBe(200);
+    expect(appr.body.invoice.status).toBe('approved');
+  });
+
+  test('a price + over-billing variance is flagged and gated from approval', async () => {
+    const inv = await request(app).post(`/api/v1/purchase-orders/${poId}/invoice`).set(auth(token))
+      .send({ invoice_number: 'INV-2', items: [{ po_item_id: poItemId, product_id: prod.id, quantity: 55, unit_price: 20 }] }); // billed 55 > received 50, at 20 not 18
+    expect(inv.status).toBe(201);
+    expect(inv.body.match_status).toBe('variance');
+    expect(inv.body.variances[0].flags).toEqual(expect.arrayContaining(['price_variance', 'over_billed']));
+
+    const blocked = await request(app).post(`/api/v1/purchase-orders/invoices/${inv.body.id}/approve`).set(auth(token)).send({});
+    expect(blocked.status).toBe(409);
+    expect(blocked.body.code).toBe('INVOICE_VARIANCE');
+
+    const ok = await request(app).post(`/api/v1/purchase-orders/invoices/${inv.body.id}/approve`).set(auth(token)).send({ override: true });
+    expect(ok.status).toBe(200);
+    expect(ok.body.invoice.status).toBe('approved');
+  });
+});
+
+describe('delivery completeness — driver COD settlement + failed attempts', () => {
+  async function deliveryBiz() {
+    const token = await register(); await enableModule(token, 'delivery'); await location(token);
+    const bizId = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString()).businessId;
+    const drv = (await request(app).post('/api/v1/delivery/drivers').set(auth(token)).send({ name: 'Driver', vehicle_type: 'motorbike' })).body;
+    await request(app).put(`/api/v1/delivery/drivers/${drv.id}/status`).set(auth(token)).send({ status: 'available' });
+    return { token, bizId, driverId: drv.id };
+  }
+
+  test('a COD delivery owes the driver; settling clears the receivable on the GL', async () => {
+    const { token, bizId, driverId } = await deliveryBiz();
+    const del = (await request(app).post('/api/v1/delivery').set(auth(token)).send({
+      customer_name: 'Ayaan', address: 'St 1', order_amount: 40, delivery_fee: 5, payment_mode: 'cod',
+    })).body;
+    await request(app).put(`/api/v1/delivery/${del.id}/status`).set(auth(token)).send({ status: 'picked_up' });
+    await request(app).put(`/api/v1/delivery/${del.id}/status`).set(auth(token)).send({ status: 'delivered' });
+
+    // The driver now owes the COD fee.
+    const acct = await request(app).get(`/api/v1/delivery/drivers/${driverId}/account`).set(auth(token));
+    expect(acct.status).toBe(200);
+    expect(acct.body.cod_owed).toBeCloseTo(5, 2);
+    expect(acct.body.unsettled_deliveries).toBe(1);
+
+    // Settle: driver remits cash → receivable cleared.
+    const settle = await request(app).post(`/api/v1/delivery/drivers/${driverId}/settle`).set(auth(token)).send({ method: 'cash' });
+    expect(settle.status).toBe(200);
+    expect(settle.body.settled_amount).toBeCloseTo(5, 2);
+
+    const bal = await accounting.accountBalances(bizId);
+    const at = (c) => (bal.find(a => a.code === c) || { balance: 0 }).balance;
+    expect(at('1100')).toBeCloseTo(0, 2);  // COD receivable cleared
+    expect(at('1000')).toBeCloseTo(5, 2);  // cash collected
+    expect(at('4100')).toBeCloseTo(5, 2);  // revenue stands
+
+    // Account is now clear; settling again is rejected.
+    expect((await request(app).get(`/api/v1/delivery/drivers/${driverId}/account`).set(auth(token))).body.cod_owed).toBeCloseTo(0, 2);
+    expect((await request(app).post(`/api/v1/delivery/drivers/${driverId}/settle`).set(auth(token)).send({})).status).toBe(400);
+  });
+
+  test('a failed attempt records the reason, frees the driver, and earns no fee', async () => {
+    const { token, bizId, driverId } = await deliveryBiz();
+    const del = (await request(app).post('/api/v1/delivery').set(auth(token)).send({
+      customer_name: 'Out', address: 'St 2', delivery_fee: 5, payment_mode: 'cod',
+    })).body;
+    await request(app).put(`/api/v1/delivery/${del.id}/status`).set(auth(token)).send({ status: 'picked_up' });
+
+    const failed = await request(app).put(`/api/v1/delivery/${del.id}/status`).set(auth(token)).send({ status: 'failed', fail_reason: 'Customer unreachable' });
+    expect(failed.status).toBe(200);
+    expect(failed.body.status).toBe('failed');
+    expect(failed.body.fail_reason).toBe('Customer unreachable');
+
+    // Driver freed, no delivery revenue posted.
+    expect((await request(app).get('/api/v1/delivery/drivers').set(auth(token)).query({ status: 'available' })).body.drivers.length).toBe(1);
+    const bal = await accounting.accountBalances(bizId);
+    expect((bal.find(a => a.code === '4100') || { balance: 0 }).balance).toBeCloseTo(0, 2);
+  });
+});
+
+describe('hrm completeness — pro-rata, statutory remittance, payslip breakdown', () => {
+  async function hrmBiz() {
+    const token = await register(); await enableModule(token, 'hrm');
+    const bizId = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString()).businessId;
+    return { token, bizId };
+  }
+
+  test('a mid-month joiner is paid pro-rata for the days worked', async () => {
+    const { token } = await hrmBiz();
+    const emp = (await request(app).post('/api/v1/hrm/employee').set(auth(token)).send({ name: 'Joiner', salary: 30000, joined: '2026-09-16' })).body;
+    const run = await request(app).post('/api/v1/hrm/payroll').set(auth(token))
+      .send({ employee_id: emp.id, month: '2026-09', basic: 30000, prorate: true });
+    expect(run.status).toBe(201);
+    expect(run.body.proration).toBeTruthy();
+    expect(run.body.proration.prorated_basic).toBeCloseTo(15000, 2); // joined 16th of a 30-day month → 15/30
+    expect(Number(run.body.net)).toBeCloseTo(15000, 2);
+  });
+
+  test('statutory withholding is remitted to the authority, clearing the payable; payslip shows the breakdown', async () => {
+    const { token, bizId } = await hrmBiz();
+    const emp = (await request(app).post('/api/v1/hrm/employee').set(auth(token)).send({ name: 'KE Staff', salary: 50000, joined: '2026-01-01' })).body;
+    const run = (await request(app).post('/api/v1/hrm/payroll').set(auth(token))
+      .send({ employee_id: emp.id, month: '2026-10', basic: 50000, statutory_country: 'KE' })).body;
+
+    // Payslip carries the statutory breakdown (previously omitted).
+    const slip = await request(app).get(`/api/v1/hrm/payslip/${run.id}`).set(auth(token));
+    expect(slip.status).toBe(200);
+    expect(slip.body.statutory.total).toBeCloseTo(10701.60, 1);
+    expect(slip.body.statutory.remitted).toBe(false);
+
+    let bal = await accounting.accountBalances(bizId);
+    const at = (c) => (bal.find(a => a.code === c) || { balance: 0 }).balance;
+    expect(at('2120')).toBeCloseTo(10701.60, 1); // statutory payable accrued
+
+    const remit = await request(app).post('/api/v1/hrm/payroll/remit-statutory').set(auth(token)).send({ month: '2026-10', method: 'bank' });
+    expect(remit.status).toBe(200);
+    expect(remit.body.remitted).toBeCloseTo(10701.60, 1);
+
+    bal = await accounting.accountBalances(bizId);
+    expect(at('2120')).toBeCloseTo(0, 1); // payable cleared
+
+    expect((await request(app).get(`/api/v1/hrm/payslip/${run.id}`).set(auth(token))).body.statutory.remitted).toBe(true);
+    // Nothing left to remit.
+    expect((await request(app).post('/api/v1/hrm/payroll/remit-statutory').set(auth(token)).send({ month: '2026-10' })).status).toBe(400);
   });
 });
 

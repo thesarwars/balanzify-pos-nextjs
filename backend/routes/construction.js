@@ -128,13 +128,29 @@ router.post('/:id/labor', auth, validate(z.object({
   work_date: z.string(),
   workers: z.coerce.number().int().positive(),
   daily_rate: z.coerce.number().positive(),
+  method: z.string().max(30).optional(), // how the crew was paid (default cash)
   notes: z.string().max(255).optional(),
 })), async (req, res, next) => {
   try {
     const project = await ownProject(req, res); if (!project) return;
     const total = +(req.body.workers * req.body.daily_rate).toFixed(2);
-    const entry = await prisma.laborEntry.create({
-      data: { projectId: project.id, workDate: new Date(req.body.work_date), workers: req.body.workers, dailyRate: req.body.daily_rate, total, notes: req.body.notes },
+    const entry = await prisma.$transaction(async (tx) => {
+      const e = await tx.laborEntry.create({
+        data: { projectId: project.id, workDate: new Date(req.body.work_date), workers: req.body.workers, dailyRate: req.body.daily_rate, total, notes: req.body.notes },
+      });
+      // GL: site labour is a wage expense paid in cash — book it so the project's
+      // labour cost is on the books, not just in the budget rollup.
+      if (total > 0) {
+        await accounting.postJournal(tx, {
+          businessId: req.user.business_id, description: `Site labour — ${project.name || 'project'}`,
+          sourceType: 'construction_labor', sourceId: e.id, createdById: req.user.id,
+          lines: [
+            { code: '5100', debit: total, credit: 0, description: 'Site labour' },
+            { code: accounting.tenderAccountCode(req.body.method || 'cash'), debit: 0, credit: total, description: 'Paid to crew' },
+          ],
+        });
+      }
+      return e;
     });
     res.status(201).json(entry);
   } catch (err) { next(err); }
@@ -250,6 +266,38 @@ router.put('/milestones/:msId/status', auth, validate(z.object({
       return tx.projectMilestone.update({ where: { id: ms.id }, data: { status: next_, ...stamps } });
     });
     res.json(updated);
+  } catch (err) { next(err); }
+});
+
+// Release the retention held back on a billed milestone (collected at the end of
+// the defects-liability period). Clears the Retention Receivable (1120) and
+// brings the cash in. Idempotent.
+router.post('/milestones/:msId/release-retention', auth, requireRole('owner', 'manager'), validate(z.object({
+  method: z.string().max(30).optional(),
+})), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const ms = await prisma.projectMilestone.findFirst({ where: { id: req.params.msId, project: { businessId } } });
+    if (!ms) return res.status(404).json({ title: 'Milestone not found', status: 404 });
+    if (!ms.billedAt) return res.status(422).json({ title: 'Retention can only be released after the milestone is billed', status: 422 });
+    if (ms.retentionReleasedAt) return res.status(400).json({ title: 'Retention already released', status: 400 });
+
+    const retention = +(parseFloat(ms.amount) * parseFloat(ms.retentionPct) / 100).toFixed(2);
+    if (retention <= 0) return res.status(400).json({ title: 'No retention was held on this milestone', status: 400 });
+
+    const updated = await prisma.$transaction(async (tx) => {
+      // GL: collect the held retention — cash in, Retention Receivable cleared.
+      await accounting.postJournal(tx, {
+        businessId, description: `Retention release — ${ms.name}`,
+        sourceType: 'retention_release', sourceId: ms.id, createdById: req.user.id,
+        lines: [
+          { code: accounting.tenderAccountCode(req.body.method || 'cash'), debit: retention, credit: 0, description: 'Retention collected' },
+          { code: '1120', debit: 0, credit: retention, description: 'Retention receivable cleared' },
+        ],
+      });
+      return tx.projectMilestone.update({ where: { id: ms.id }, data: { retentionReleasedAt: new Date() } });
+    });
+    res.json({ message: `Retention of ${retention.toFixed(2)} released.`, retention, milestone: updated });
   } catch (err) { next(err); }
 });
 

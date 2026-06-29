@@ -5,7 +5,7 @@
 // ─────────────────────────────────────────────────────────────────
 import React from 'react';
 import type { Theme } from '@/lib/theme';
-import { Btn, Badge, Panel, Modal, methodTone } from '@/components/kit';
+import { Btn, Badge, Panel, Modal, methodTone, useViewport } from '@/components/kit';
 import { Topbar } from '@/components/shell';
 import { API } from '@/lib/api';
 import { money, timeAgo } from '@/lib/theme';
@@ -29,6 +29,7 @@ function adaptSaleRow(r: any): any {
 }
 
 export function Sales({ T }: { T: Theme }) {
+  const { isMobile } = useViewport();
   const isReal = !!(API.config?.isReal?.());
   const [f, setF] = useStateM('all');
   const [selSale, setSelSale] = useStateM<any>(null);
@@ -62,6 +63,33 @@ export function Sales({ T }: { T: Theme }) {
                 }}>{lbl}</button>
               ))}
             </div>
+            {isMobile ? (
+              // On a phone the 8-column table overflows; render each sale as a
+              // tap-target card so nothing is clipped or needs sideways scroll.
+              <div style={{ display: 'flex', flexDirection: 'column' }}>
+                {rows.map((s: any) => (
+                  <button key={s.id} onClick={() => setSelSale(s)} style={{
+                    textAlign: 'left', border: 'none', cursor: 'pointer', background: 'transparent',
+                    padding: '13px 16px', borderBottom: `1px solid ${T.line}`, fontFamily: T.fBody,
+                    display: 'flex', flexDirection: 'column', gap: 7,
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+                      <span style={{ fontFamily: T.fMono, fontSize: 12.5, fontWeight: 600, color: T.accent.text }}>{s.id}</span>
+                      <span style={{ fontFamily: T.fMono, fontSize: 14, fontWeight: 700, color: T.ink }}>{money(s.total)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+                      <span style={{ fontSize: 13, color: s.customer === 'Walk-in' ? T.inkMute : T.ink }}>{s.customer}</span>
+                      <span style={{ fontSize: 11.5, color: T.inkSub }}>{timeAgo(s.minsAgo)}</span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <Badge T={T} tone={methodTone(s.method)}>{s.methodLabel}</Badge>
+                      <Badge T={T} tone={tone[s.status]}>{s.status[0].toUpperCase() + s.status.slice(1)}</Badge>
+                      <span style={{ marginLeft: 'auto', fontFamily: T.fMono, fontSize: 11.5, color: T.inkSub }}>{s.items} items</span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            ) : (
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead><tr>{([['Order', 'l'], ['Customer', 'l'], ['Cashier', 'l'], ['Items', 'r'], ['Payment', 'l'], ['Amount', 'r'], ['Time', 'r'], ['Status', 'r']] as any[]).map(([h, a]) => (
                 <th key={h} style={{ textAlign: a === 'r' ? 'right' : 'left', padding: '11px 18px', fontSize: 10, fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', color: T.inkSub, background: T.paperAlt, borderBottom: `1px solid ${T.line}` }}>{h}</th>
@@ -83,6 +111,7 @@ export function Sales({ T }: { T: Theme }) {
                 ))}
               </tbody>
             </table>
+            )}
             {loading && <div style={{ padding: 44, textAlign: 'center', fontFamily: T.fMono, fontSize: 12.5, color: T.inkSub }}>Loading sales…</div>}
             {!loading && rows.length === 0 && <div style={{ padding: 44, textAlign: 'center', color: T.inkMute, fontSize: 13 }}>No sales{f !== 'all' ? ` (${f})` : ' yet'}.</div>}
           </Panel>

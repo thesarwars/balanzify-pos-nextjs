@@ -146,11 +146,69 @@ stockRouter.get('/adjustments', auth, async (req, res, next) => {
   }
 });
 
+// Stock valuation at cost — from the live FIFO/FEFO cost layers, so it
+// reconciles to the GL Inventory account (1200). The number a lender or owner
+// asks for: what is the stock on hand actually worth?
+stockRouter.get('/valuation', auth, async (req, res, next) => {
+  try {
+    const rows = await prisma.$queryRaw`
+      SELECT cl.product_id, p.name, p.sku,
+             COALESCE(SUM(cl.quantity_remaining), 0)::int AS qty,
+             ROUND(SUM(cl.quantity_remaining * cl.unit_cost)::numeric, 2) AS value
+      FROM cost_layers cl
+      JOIN products p ON p.id = cl.product_id
+      WHERE cl.business_id = ${req.user.business_id}::uuid AND cl.quantity_remaining > 0
+      GROUP BY cl.product_id, p.name, p.sku
+      ORDER BY value DESC`;
+    const items = rows.map(r => ({ product_id: r.product_id, name: r.name, sku: r.sku, quantity: r.qty, value: parseFloat(r.value) }));
+    res.json({ items, total_value: +items.reduce((s, i) => s + i.value, 0).toFixed(2), product_count: items.length });
+  } catch (err) { next(err); }
+});
+
+// Expiring stock — cost layers (so quantities are live) with an expiry within
+// the window, nearest first, plus the value at risk. Drives sell-through / pull
+// decisions before write-off.
+stockRouter.get('/expiring', auth, async (req, res, next) => {
+  try {
+    const days = Math.min(Math.max(parseInt(req.query.days) || 30, 1), 365);
+    const cutoff = new Date(Date.now() + days * 86400000);
+    const rows = await prisma.$queryRaw`
+      SELECT cl.product_id, p.name, p.sku, cl.expiry_date,
+             cl.quantity_remaining::int AS qty,
+             ROUND((cl.quantity_remaining * cl.unit_cost)::numeric, 2) AS value
+      FROM cost_layers cl
+      JOIN products p ON p.id = cl.product_id
+      WHERE cl.business_id = ${req.user.business_id}::uuid
+        AND cl.quantity_remaining > 0
+        AND cl.expiry_date IS NOT NULL
+        AND cl.expiry_date <= ${cutoff}
+      ORDER BY cl.expiry_date ASC`;
+    const now = Date.now();
+    const layers = rows.map(r => ({
+      product_id: r.product_id, name: r.name, sku: r.sku,
+      expiry_date: r.expiry_date, quantity: r.qty, value: parseFloat(r.value),
+      expired: new Date(r.expiry_date).getTime() < now,
+    }));
+    res.json({
+      window_days: days,
+      expiring: layers,
+      already_expired: layers.filter(l => l.expired).length,
+      value_at_risk: +layers.reduce((s, l) => s + l.value, 0).toFixed(2),
+    });
+  } catch (err) { next(err); }
+});
+
 stockRouter.post('/adjustments/:id/approve', auth, requireRole('owner', 'manager'), async (req, res, next) => {
   try {
     const adj = await prisma.stockAdjustment.findUnique({ where: { id: req.params.id } });
     if (!adj || adj.businessId !== req.user.business_id) return res.status(404).json({ title: 'Not found', status: 404 });
     if (adj.status !== 'pending') return res.status(400).json({ title: 'Already processed', status: 400 });
+
+    // Value the adjustment at cost so the GL Inventory balance tracks the stock.
+    // unitCost defaults to 0 on capture — fall back to the product's cost then.
+    const product = await prisma.product.findUnique({ where: { id: adj.productId }, select: { costPrice: true } });
+    const unitCost = parseFloat(adj.unitCost) > 0 ? parseFloat(adj.unitCost) : parseFloat(product?.costPrice || 0);
+    const value = Math.abs(adj.quantity) * unitCost;
 
     await prisma.$transaction(async (tx) => {
       await tx.$executeRaw`
@@ -170,6 +228,13 @@ stockRouter.post('/adjustments/:id/approve', auth, requireRole('owner', 'manager
         where: { id: req.params.id },
         data: { status: 'approved', approvedById: req.user.id, approvedAt: new Date() },
       });
+      // GL: a write-off/loss is an expense; 'found' is a gain. Inventory follows.
+      if (value > 0) {
+        await accounting.postInventoryAdjustment(tx, {
+          businessId: req.user.business_id, amount: value, gain: adj.quantity > 0,
+          sourceType: 'stock_adjustment', sourceId: adj.id, createdById: req.user.id,
+        });
+      }
     });
     res.json({ message: 'Adjustment approved.' });
   } catch (err) { next(err); }
@@ -1070,7 +1135,7 @@ customersRouter.get('/', auth, async (req, res, next) => {
 
 customersRouter.post('/', auth, validate(CustomerSchema), async (req, res, next) => {
   try {
-    const customer = await prisma.customer.create({ data: { businessId: req.user.business_id, name: req.body.name, phone: req.body.phone, whatsapp: req.body.whatsapp, email: req.body.email, address: req.body.address, creditLimit: req.body.credit_limit || 0, customerGroupId: req.body.customer_group_id || null, notes: req.body.notes } });
+    const customer = await prisma.customer.create({ data: { businessId: req.user.business_id, name: req.body.name, phone: req.body.phone, whatsapp: req.body.whatsapp, email: req.body.email, address: req.body.address, creditLimit: req.body.credit_limit || 0, customerGroupId: req.body.customer_group_id || null, priceGroupId: req.body.price_group_id || null, ...(req.body.wholesale_terms_days !== undefined && { wholesaleTermsDays: req.body.wholesale_terms_days }), notes: req.body.notes } });
     res.status(201).json(customer);
   } catch (err) { next(err); }
 });
@@ -1080,7 +1145,7 @@ customersRouter.put('/:id', auth, validate(CustomerSchema.partial()), async (req
     // Tenant isolation: scope the update to the caller's business.
     const result = await prisma.customer.updateMany({
       where: { id: req.params.id, businessId: req.user.business_id },
-      data: { name: req.body.name, phone: req.body.phone, whatsapp: req.body.whatsapp, email: req.body.email, address: req.body.address, creditLimit: req.body.credit_limit, customerGroupId: req.body.customer_group_id, notes: req.body.notes },
+      data: { name: req.body.name, phone: req.body.phone, whatsapp: req.body.whatsapp, email: req.body.email, address: req.body.address, creditLimit: req.body.credit_limit, customerGroupId: req.body.customer_group_id, ...(req.body.price_group_id !== undefined && { priceGroupId: req.body.price_group_id }), ...(req.body.wholesale_terms_days !== undefined && { wholesaleTermsDays: req.body.wholesale_terms_days }), notes: req.body.notes },
     });
     if (result.count === 0) return res.status(404).json({ title: 'Customer not found', status: 404 });
     const customer = await prisma.customer.findUnique({ where: { id: req.params.id } });
@@ -1176,7 +1241,7 @@ expensesRouter.get('/', auth, async (req, res, next) => {
 
 expensesRouter.post('/', auth, validate(ExpenseSchema), async (req, res, next) => {
   try {
-    const { category_id, location_id, amount, date, payment_status, expense_for, note, is_refund } = req.body;
+    const { category_id, location_id, amount, date, payment_status, expense_for, note, is_refund, receipt_url } = req.body;
     const expense = await prisma.$transaction(async (tx) => {
       const e = await tx.expense.create({
         data: {
@@ -1188,6 +1253,7 @@ expensesRouter.post('/', auth, validate(ExpenseSchema), async (req, res, next) =
           paymentStatus: payment_status || 'paid',
           expenseFor: expense_for || null,
           note: note || null,
+          receiptUrl: receipt_url || null,
           isRefund: is_refund || false,
           expenseDate: date ? new Date(date) : new Date(),
           createdById: req.user.id,

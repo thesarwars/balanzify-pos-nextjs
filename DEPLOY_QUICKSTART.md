@@ -89,8 +89,27 @@ Verify the same way: `BACKEND_URL=https://api.yourdomain node scripts/contract-s
 - **Offline-first**: the till keeps selling with the network down and syncs on
   reconnect (installable PWA, no hardware).
 - Mobile-money-aware books, fiscalization spine, Zakat/Hijri, Somali/Arabic + RTL.
-- Embedded-finance and delivery modules are present but **opt-in** (and lending
-  needs a licence/partner before disbursing — see `docs/COMPETITIVE_ANALYSIS.md`).
+- **19 opt-in modules.** Live, ready-to-use add-ons (no licence): savings circles
+  (hagbad/ayuuto), loyalty stamp cards, demand forecasting, Zakat/Sadaqah,
+  expense capture, one-tap supplier reorder, WhatsApp storefront, peer
+  benchmarking, B2B trade rails.
+- **Mobile money:** Zaad, eDahab, EVC, Telebirr, CBE Birr work today in
+  manual-confirm (cashier confirms the transfer); M-Pesa STK + async settlement
+  reconciliation is wired for when Daraja credentials are added.
+- **Licence-gated financial products** — asset/vehicle finance, the merchant
+  wallet, and takaful are **fully built and deployable but must NOT move real
+  money** until the relevant licence/partner + capital are in place (each module
+  carries the warning in its description and code). Lending likewise needs a
+  licence/partner before disbursing — see `docs/COMPETITIVE_ANALYSIS.md`.
 
-Post-deploy, the `contract-smoke` 24/24 is your green light that the full merchant
+## Verified deployable
+
+Confirmed against this build (NODE_ENV=production):
+- All **56 migrations** apply cleanly from an empty database (`prisma migrate deploy`).
+- The server boots in production mode; `/health` returns ok.
+- Every module route is wired (auth/module gates enforced); the auth-only
+  endpoints (forecast, benchmarking, Zakat) serve live data end-to-end.
+- Backend suite: **207/207** green.
+
+Post-deploy, the `contract-smoke` is your green light that the full merchant
 daily loop works against the live server.
