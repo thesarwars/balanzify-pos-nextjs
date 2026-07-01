@@ -40,6 +40,10 @@ router.post('/register', validate(RegisterSchema), async (req, res, next) => {
           role: 'owner',
         },
       });
+      // Seed a default invoice scheme so a new account has one out of the box.
+      await tx.invoiceScheme.create({
+        data: { businessId: business.id, name: 'Default', startNumber: 1, totalDigits: 4, numberingType: 'sequential', includeYear: false },
+      });
       return { business, user };
     });
 
