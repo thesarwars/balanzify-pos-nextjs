@@ -2356,10 +2356,11 @@ function adaptRealInvoiceLayout(l: any): any {
     show_letterhead: !!l.showLetterhead,
     hide_prices: !!l.hidePrices,
     is_default: !!l.isDefault,
+    config: l.config || {},
     _real: l,
   };
 }
-const INVOICE_LAYOUT_KEYS = ['name', 'design', 'header_text', 'footer_text', 'show_address', 'show_tax_summary', 'show_total_in_words', 'show_discount', 'show_qr', 'show_letterhead', 'hide_prices', 'is_default'];
+const INVOICE_LAYOUT_KEYS = ['name', 'design', 'header_text', 'footer_text', 'show_address', 'show_tax_summary', 'show_total_in_words', 'show_discount', 'show_qr', 'show_letterhead', 'hide_prices', 'is_default', 'config'];
 function toRealInvoiceLayoutBody(f: any): any {
   const b: any = {};
   for (const k of INVOICE_LAYOUT_KEYS) if (f[k] !== undefined) b[k] = f[k];

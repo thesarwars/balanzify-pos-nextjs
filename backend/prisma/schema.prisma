@@ -1093,6 +1093,7 @@ model InvoiceLayout {
   showLetterhead   Boolean  @default(false) @map("show_letterhead")
   hidePrices       Boolean  @default(false) @map("hide_prices")
   isDefault        Boolean  @default(false) @map("is_default")
+  config           Json?    @map("config") // extended layout settings (labels, sub-headings, show-toggles, QR fields, credit-note labels)
   createdAt        DateTime @default(now()) @map("created_at")
 
   business  Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
