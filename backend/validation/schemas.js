@@ -444,6 +444,32 @@ const LocationSchema = z.object({
   type: z.enum(['warehouse','store','branch']).default('warehouse'),
   address: optStr(500),
   is_active: z.boolean().default(true),
+  // Contact / address
+  location_code: optStr(50),
+  landmark: optStr(255),
+  city: optStr(120),
+  zip_code: optStr(30),
+  state: optStr(120),
+  country: optStr(120),
+  mobile: optStr(40),
+  alt_contact: optStr(40),
+  email: optStr(255),
+  website: optStr(255),
+  // Manager (a team member) + invoicing / pricing references
+  manager_id: uuid.optional().nullable(),
+  invoice_scheme_id: uuid.optional().nullable(),
+  invoice_layout_id: uuid.optional().nullable(),
+  price_group_id: uuid.optional().nullable(),
+  // Custom fields
+  custom_field1: optStr(255),
+  custom_field2: optStr(255),
+  custom_field3: optStr(255),
+  custom_field4: optStr(255),
+  // POS featured products + per-location payment config
+  featured_product_ids: z.array(uuid).max(100).optional(),
+  payment_methods: z.array(z.string().trim().min(1).max(30)).max(30).optional(),
+  default_payment: optStr(30),
+  payment_accounts: z.record(z.string(), uuid.nullable()).optional().nullable(),
 });
 
 const CustomerSchema = z.object({

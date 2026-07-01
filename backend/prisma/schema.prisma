@@ -1095,7 +1095,8 @@ model InvoiceLayout {
   isDefault        Boolean  @default(false) @map("is_default")
   createdAt        DateTime @default(now()) @map("created_at")
 
-  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  business  Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  locations Location[] @relation("location_invoice_layout")
 
   @@map("invoice_layouts")
 }
@@ -1109,7 +1110,8 @@ model InvoiceScheme {
   totalDigits Int      @default(4) @map("total_digits")
   createdAt   DateTime @default(now()) @map("created_at")
 
-  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  business  Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  locations Location[] @relation("location_invoice_scheme")
 
   @@map("invoice_schemes")
 }
@@ -1124,6 +1126,7 @@ model PriceGroup {
 
   business  Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
   customers Customer[]
+  locations Location[]  @relation("location_price_group")
 
   @@unique([businessId, name])
   @@map("price_groups")
@@ -1216,6 +1219,7 @@ model User {
 
   lostFoundFound  LostFound[]  @relation("lost_found_finder")
   waitedTables    RestaurantTable[] @relation("table_waiter")
+  managedLocations Location[]  @relation("location_manager")
 
   @@map("users")
 }
@@ -1264,6 +1268,30 @@ model Location {
   isActive   Boolean      @default(true) @map("is_active")
   createdAt  DateTime     @default(now()) @map("created_at")
 
+  // Richer location profile — contact/address, invoicing, pricing, config.
+  locationCode String? @map("location_code") @db.VarChar(50)
+  landmark     String? @db.VarChar(255)
+  city         String? @db.VarChar(120)
+  zipCode      String? @map("zip_code") @db.VarChar(30)
+  state        String? @db.VarChar(120)
+  country      String? @db.VarChar(120)
+  mobile       String? @db.VarChar(40)
+  altContact   String? @map("alt_contact") @db.VarChar(40)
+  email        String? @db.VarChar(255)
+  website      String? @db.VarChar(255)
+  managerId       String? @map("manager_id")        @db.Uuid
+  invoiceSchemeId String? @map("invoice_scheme_id") @db.Uuid
+  invoiceLayoutId String? @map("invoice_layout_id") @db.Uuid
+  priceGroupId    String? @map("price_group_id")    @db.Uuid
+  customField1 String? @map("custom_field1") @db.VarChar(255)
+  customField2 String? @map("custom_field2") @db.VarChar(255)
+  customField3 String? @map("custom_field3") @db.VarChar(255)
+  customField4 String? @map("custom_field4") @db.VarChar(255)
+  featuredProductIds String[] @map("featured_product_ids") @db.Uuid
+  paymentMethods     String[] @map("payment_methods")
+  defaultPayment     String?  @map("default_payment") @db.VarChar(30)
+  paymentAccounts    Json?    @map("payment_accounts")
+
   business           Business            @relation(fields: [businessId], references: [id], onDelete: Cascade)
   stockLevels        StockLevel[]
   stockBatches       StockBatch[]
@@ -1285,6 +1313,12 @@ model Location {
   pettyCash          PettyCash[]
   productVariants    ProductVariant[]    @relation("variant_stock_location")
 
+  manager       User?          @relation("location_manager",        fields: [managerId],       references: [id], onDelete: SetNull)
+  invoiceScheme InvoiceScheme? @relation("location_invoice_scheme", fields: [invoiceSchemeId], references: [id], onDelete: SetNull)
+  invoiceLayout InvoiceLayout? @relation("location_invoice_layout", fields: [invoiceLayoutId], references: [id], onDelete: SetNull)
+  priceGroup    PriceGroup?    @relation("location_price_group",    fields: [priceGroupId],    references: [id], onDelete: SetNull)
+
+  @@index([businessId])
   @@map("locations")
 }
 
