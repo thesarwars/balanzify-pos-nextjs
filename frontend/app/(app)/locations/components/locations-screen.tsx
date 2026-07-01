@@ -42,11 +42,14 @@ export function Locations({ T }: { T: any }) {
   }, []);
   const loadRefs = React.useCallback(() => {
     const asList = (x: any) => (Array.isArray(x) ? x : ((x && (x.items || x.data)) || []));
+    // Each ref is loaded defensively — a missing client or failed request must
+    // never crash the management screen, it just yields an empty dropdown.
+    const safe = (fn: () => Promise<any>) => { try { return Promise.resolve(fn()).catch(() => undefined); } catch { return Promise.resolve(undefined); } };
     Promise.all([
-      API.invoiceScheme.list(), API.invoiceLayout.list(), API.priceGroup.list(), API.paymentMethod.list(),
-      API.user.list().catch(() => []), API.paymentAccount.list().catch(() => []), API.products.list({}).catch(() => ({ items: [] })),
+      safe(() => API.invoiceScheme.list()), safe(() => API.invoiceLayout.list()), safe(() => API.priceGroup.list()), safe(() => API.paymentMethod.list()),
+      safe(() => API.user.list()), safe(() => API.paymentAccount.list()), safe(() => API.product.list({})),
     ]).then(([schemes, layouts, groups, methods, users, accounts, products]) =>
-      setRefs({ schemes, layouts, groups, methods, users: asList(users), accounts: asList(accounts), products: asList(products) })
+      setRefs({ schemes: asList(schemes), layouts: asList(layouts), groups: asList(groups), methods: asList(methods), users: asList(users), accounts: asList(accounts), products: asList(products) })
     ).catch(() => {});
   }, []);
   useEffectLo(() => { reload(); }, [reload]);
