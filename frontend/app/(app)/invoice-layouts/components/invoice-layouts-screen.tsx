@@ -37,6 +37,8 @@ export function InvoiceLayouts({ T, embedded }: { T: Theme; embedded?: boolean }
   const [adding, setAdding] = useStateIv(false);
   const [name, setName] = useStateIv('');
   const [loading, setLoading] = useStateIv(true);
+  const [uploadingLogo, setUploadingLogo] = useStateIv(false);
+  const fileRef = React.useRef<any>(null);
   const [toast, toastNode] = useToast();
 
   const reload = React.useCallback(() => API.invoiceLayout.list().then((ls: any) => {
@@ -55,6 +57,24 @@ export function InvoiceLayouts({ T, embedded }: { T: Theme; embedded?: boolean }
   }
   async function makeDefault() { const u = await API.invoiceLayout.update(sel.id, { is_default: true }); await reload(); setSel({ ...sel, is_default: true }); toast('Set as default'); }
   async function del() { try { await API.invoiceLayout.remove(sel.id); await reload(); toast('Layout deleted'); } catch (e: any) { toast(e.message); } }
+  // Logo upload: writes both config.logoUrl + config.logoKey in one update (and
+  // flips showLogo on) so a second setCfg doesn't clobber the first.
+  async function onLogoFile(e: any) {
+    const f = e.target.files && e.target.files[0]; e.target.value = '';
+    if (!f) return;
+    setUploadingLogo(true);
+    try {
+      const { url, key } = await API.upload.image(f);
+      setSel((prev: any) => { const up = { ...prev, config: { ...(prev.config || {}), logoUrl: url, logoKey: key, showLogo: true } }; save(up); return up; });
+      setRows((rs: any) => rs.map((r: any) => (r.id === (sel && sel.id) ? { ...r, config: { ...(r.config || {}), logoUrl: url, logoKey: key, showLogo: true } } : r)));
+      toast('Logo uploaded');
+    } catch (ex: any) { toast(ex.message || 'Could not upload the logo.'); } finally { setUploadingLogo(false); }
+  }
+  function removeLogo() {
+    const key = sel.config && sel.config.logoKey;
+    if (key) API.upload.remove(key).catch(() => {});
+    setSel((prev: any) => { const up = { ...prev, config: { ...(prev.config || {}), logoUrl: '', logoKey: '' } }; save(up); return up; });
+  }
 
   const addBtn = <Btn T={T} kind="accent" onClick={() => setAdding(true)}>+ Add Layout</Btn>;
 
@@ -138,7 +158,18 @@ export function InvoiceLayouts({ T, embedded }: { T: Theme; embedded?: boolean }
               {gap()}
               {tgrid(<>{colTog('show_letterhead', 'Show letter head')}{tog('showLogo', 'Show invoice logo')}{colTog('hide_prices', 'Gift receipt (hide prices)')}</>)}
               {gap()}
-              {fgrid(<>{txt('logoUrl', 'Invoice logo URL', 'https://…')}</>)}
+              <div>
+                {lbl('Invoice logo')}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                  {cfg('logoUrl')
+                    ? <img src={cfg('logoUrl')} alt="logo" style={{ height: 46, maxWidth: 130, objectFit: 'contain', borderRadius: 6, border: `1px solid ${T.line}`, background: '#fff', padding: 4 }} />
+                    : <div style={{ height: 46, width: 84, borderRadius: 6, border: `1px dashed ${T.line}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, color: T.inkSub }}>No logo</div>}
+                  <Btn T={T} kind="ghost" onClick={() => fileRef.current && fileRef.current.click()} disabled={uploadingLogo}>{uploadingLogo ? 'Uploading…' : cfg('logoUrl') ? 'Replace' : 'Choose file'}</Btn>
+                  {cfg('logoUrl') && <Btn T={T} kind="ghost" onClick={removeLogo} style={{ color: T.redText }}>Remove</Btn>}
+                  <input type="file" accept="image/png,image/jpeg,image/webp" ref={fileRef} onChange={onLogoFile} style={{ display: 'none' }} />
+                </div>
+                <div style={{ fontSize: 10.5, color: T.inkSub, marginTop: 5 }}>PNG, JPG or WebP · up to 5 MB.</div>
+              </div>
             </Panel>
 
             {/* Header */}
@@ -262,6 +293,7 @@ function ReceiptPreview({ T, layout: L }: { T: Theme; layout: any }) {
 
   return (
     <div style={{ width, background: '#fff', color: '#1a1a1a', fontFamily: slim ? mono : 'Georgia, serif', padding: slim ? '14px 14px' : '24px 26px', boxShadow: '0 8px 30px rgba(0,0,0,0.18)', borderRadius: slim ? 4 : 8, fontSize: 12, lineHeight: 1.4 }}>
+      {C.showLogo && C.logoUrl && <div style={{ textAlign: 'center', marginBottom: 8 }}><img src={C.logoUrl} alt="logo" style={{ maxHeight: 48, maxWidth: '68%', objectFit: 'contain' }} /></div>}
       {L.show_letterhead && <div style={{ height: 36, borderRadius: 4, background: 'linear-gradient(90deg,#1f2d4d,#2a3f6b)', marginBottom: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 10, letterSpacing: 1, fontFamily: 'system-ui' }}>LETTERHEAD</div>}
       <div style={{ textAlign: 'center', marginBottom: 8 }}>
         <div style={{ fontSize: slim ? 15 : 20, fontWeight: 800, letterSpacing: slim ? 0 : -0.3 }}>{L.header_text || bizName}</div>

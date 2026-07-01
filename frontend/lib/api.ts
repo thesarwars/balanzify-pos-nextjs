@@ -3223,6 +3223,22 @@ const API: any = {
     },
   },
   paymentMethod: { async list() { return (await transport('GET', '/connector/api/payment-method')).data; } },
+  upload: {
+    // Multipart upload — realReq only does JSON, so post FormData directly.
+    async image(file: any): Promise<{ url: string; key: string }> {
+      const fd = new FormData();
+      fd.append('image', file);
+      const tok = getAccessToken();
+      const res = await fetch(BACKEND_BASE + '/api/v1/upload/image', { method: 'POST', headers: tok ? { Authorization: 'Bearer ' + tok } : {}, body: fd });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new ApiError(res.status, (json && (json.title || json.message || json.detail)) || 'Upload failed', null);
+      return json;
+    },
+    async remove(key: string): Promise<any> {
+      if (!key) return;
+      return realReq('DELETE', '/upload/image', { query: { key } });
+    },
+  },
   discount: {
     async list() {
       if (REAL_MODE) {
