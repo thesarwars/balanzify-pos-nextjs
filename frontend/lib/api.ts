@@ -2250,6 +2250,16 @@ function toRealUpdateUserBody(f: any): any {
 // fields (manager, city, payment methods, invoice scheme…) have no columns yet.
 const UI_TO_LOC_TYPE: Record<string, string> = { Retail: 'store', Kiosk: 'store', Warehouse: 'warehouse', Headquarters: 'branch', store: 'store', warehouse: 'warehouse', branch: 'branch' };
 const LOC_TYPE_TO_UI: Record<string, string> = { warehouse: 'Warehouse', store: 'Retail', branch: 'Headquarters' };
+function toRealSchemeBody(b: any): any {
+  return {
+    name: b.name,
+    prefix: b.prefix || undefined,
+    start_number: Number(b.start_number ?? 1),
+    total_digits: Number(b.total_digits ?? 4),
+    numbering_type: b.numbering_type === 'aleatory' ? 'aleatory' : 'sequential',
+    include_year: !!b.include_year,
+  };
+}
 function adaptRealLocation(l: any): any {
   if (!l) return l;
   return {
@@ -3156,13 +3166,21 @@ const API: any = {
     async list() {
       if (REAL_MODE) {
         const res = await realReq('GET', '/invoice-schemes');
-        return ((res && (res.schemes || res.data)) || []).map((s: any) => ({ id: s.id, name: s.name, prefix: s.prefix || '', start_number: s.startNumber, total_digits: s.totalDigits }));
+        return ((res && (res.schemes || res.data)) || []).map((s: any) => ({ id: s.id, name: s.name, prefix: s.prefix || '', start_number: s.startNumber, total_digits: s.totalDigits, numbering_type: s.numberingType || 'sequential', include_year: !!s.includeYear }));
       }
       return (await transport('GET', '/connector/api/invoice-scheme')).data;
     },
     async create(body: any) {
-      if (REAL_MODE) return await realReq('POST', '/invoice-schemes', { body: { name: body.name, prefix: body.prefix || undefined, start_number: Number(body.start_number || 1), total_digits: Number(body.total_digits || 4) } });
+      if (REAL_MODE) return await realReq('POST', '/invoice-schemes', { body: toRealSchemeBody(body) });
       return (await transport('POST', '/connector/api/invoice-scheme', { body })).data;
+    },
+    async update(id: any, body: any) {
+      if (REAL_MODE) return await realReq('PUT', '/invoice-schemes/' + id, { body: toRealSchemeBody(body) });
+      return (await transport('PUT', '/connector/api/invoice-scheme/' + id, { body })).data;
+    },
+    async delete(id: any) {
+      if (REAL_MODE) return await realReq('DELETE', '/invoice-schemes/' + id);
+      return (await transport('DELETE', '/connector/api/invoice-scheme/' + id)).data;
     },
   },
   invoiceLayout: {

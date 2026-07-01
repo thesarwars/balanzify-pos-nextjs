@@ -2,7 +2,7 @@
 // connections (the norm in target markets). The app shell is cached so the UI
 // loads offline; API calls are NEVER cached (the app's own /sync handles offline
 // data), so business data is always fresh or explicitly queued by the app.
-const CACHE = 'balanzify-shell-v2';
+const CACHE = 'balanzify-shell-v3';
 const SHELL = ['/'];
 
 self.addEventListener('install', (event) => {
@@ -23,6 +23,11 @@ self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
+
+  // Only handle our own origin. Cross-origin resources (e.g. Google Fonts) must
+  // reach the browser directly — if the SW fetch()es them here, CSP connect-src
+  // blocks it and the request fails with "Failed to convert value to 'Response'".
+  if (url.origin !== self.location.origin) return;
 
   // Never intercept API traffic — business data must be live (or queued by /sync).
   if (url.pathname.startsWith('/api/')) return;
