@@ -519,10 +519,12 @@ const InvoiceLayoutSchema = z.object({
 });
 
 const InvoiceSchemeSchema = z.object({
-  name:         shortStr(255),
-  prefix:       optStr(20),
-  start_number: z.coerce.number().int().min(0).default(1),
-  total_digits: z.coerce.number().int().min(1).max(12).default(4),
+  name:          shortStr(255),
+  prefix:        optStr(20),
+  start_number:  z.coerce.number().int().min(0).default(1),
+  total_digits:  z.coerce.number().int().min(1).max(12).default(4),
+  numbering_type: z.enum(['sequential', 'aleatory']).default('sequential'),
+  include_year:  z.boolean().default(false),
 });
 
 const DiscountSchema = z.object({

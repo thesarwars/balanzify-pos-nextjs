@@ -1104,11 +1104,13 @@ model InvoiceLayout {
 model InvoiceScheme {
   id          String   @id @default(uuid()) @db.Uuid
   businessId  String   @map("business_id") @db.Uuid
-  name        String   @db.VarChar(255)
-  prefix      String?  @db.VarChar(20)
-  startNumber Int      @default(1) @map("start_number")
-  totalDigits Int      @default(4) @map("total_digits")
-  createdAt   DateTime @default(now()) @map("created_at")
+  name          String   @db.VarChar(255)
+  prefix        String?  @db.VarChar(20)
+  startNumber   Int      @default(1) @map("start_number")
+  totalDigits   Int      @default(4) @map("total_digits")
+  numberingType String   @default("sequential") @map("numbering_type") @db.VarChar(20) // 'sequential' | 'aleatory'
+  includeYear   Boolean  @default(false) @map("include_year") // prefix numbers with the year, e.g. 2026-AS0001
+  createdAt     DateTime @default(now()) @map("created_at")
 
   business  Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
   locations Location[] @relation("location_invoice_scheme")

@@ -1695,11 +1695,30 @@ invoiceSchemesRouter.get('/', auth, async (req, res, next) => {
     res.json({ schemes });
   } catch (err) { next(err); }
 });
+// Build Prisma data from a (possibly partial) validated scheme body.
+function invoiceSchemeData(b) {
+  const d = {};
+  if (b.name          !== undefined) d.name = b.name;
+  if (b.prefix        !== undefined) d.prefix = b.prefix || null;
+  if (b.start_number  !== undefined) d.startNumber = b.start_number;
+  if (b.total_digits  !== undefined) d.totalDigits = b.total_digits;
+  if (b.numbering_type!== undefined) d.numberingType = b.numbering_type;
+  if (b.include_year  !== undefined) d.includeYear = b.include_year;
+  return d;
+}
+
 invoiceSchemesRouter.post('/', auth, requireRole('owner', 'manager'), validate(InvoiceSchemeSchema), async (req, res, next) => {
   try {
-    const { name, prefix, start_number, total_digits } = req.body;
-    const scheme = await prisma.invoiceScheme.create({ data: { businessId: req.user.business_id, name, prefix: prefix || null, startNumber: start_number ?? 1, totalDigits: total_digits ?? 4 } });
+    const scheme = await prisma.invoiceScheme.create({ data: { businessId: req.user.business_id, ...invoiceSchemeData(req.body) } });
     res.status(201).json(scheme);
+  } catch (err) { next(err); }
+});
+invoiceSchemesRouter.put('/:id', auth, requireRole('owner', 'manager'), validate(InvoiceSchemeSchema.partial()), async (req, res, next) => {
+  try {
+    const existing = await prisma.invoiceScheme.findFirst({ where: { id: req.params.id, businessId: req.user.business_id } });
+    if (!existing) return res.status(404).json({ title: 'Not found', status: 404 });
+    const scheme = await prisma.invoiceScheme.update({ where: { id: req.params.id }, data: invoiceSchemeData(req.body) });
+    res.json(scheme);
   } catch (err) { next(err); }
 });
 invoiceSchemesRouter.delete('/:id', auth, requireRole('owner', 'manager'), async (req, res, next) => {
