@@ -7,7 +7,7 @@
 // ─────────────────────────────────────────────────────────────────
 import React from 'react';
 import type { Theme } from '@/lib/theme';
-import { Btn, Badge, Panel, Field, TextField, useToast } from '@/components/kit';
+import { Btn, Badge, Panel, Field, TextField, SelectField, useToast } from '@/components/kit';
 import { Topbar, useSession } from '@/components/shell';
 import { API } from '@/lib/api';
 import { BUSINESS } from '@/lib/data';
@@ -80,10 +80,27 @@ export function InvoiceLayouts({ T, embedded }: { T: Theme; embedded?: boolean }
     );
   }
 
-  const OPTS = [
-    ['show_address', 'Show business address'], ['show_tax_summary', 'Tax summary'], ['show_total_in_words', 'Total in words'],
-    ['show_discount', 'Show discount'], ['show_qr', 'QR code'], ['show_letterhead', 'Letterhead'], ['hide_prices', 'Gift receipt (hide prices)'],
-  ];
+  // Extended settings live in sel.config; existing show_* toggles are columns.
+  // NOTE: these are functions we CALL ({txt(...)}), not inline components, so the
+  // inputs keep focus across the debounced auto-save re-renders.
+  const cfg = (k: string, d: any = '') => (sel.config && sel.config[k] !== undefined ? sel.config[k] : d);
+  const setCfg = (k: string, v: any) => set('config', { ...(sel.config || {}), [k]: v });
+  const lbl = (t: string) => <div style={{ fontSize: 11, fontWeight: 600, color: T.inkSub, marginBottom: 4 }}>{t}</div>;
+  const txt = (k: string, label: string, ph?: string) => <div key={k} style={{ minWidth: 0 }}>{lbl(label)}<TextField T={T} value={cfg(k, '')} onChange={(v: any) => setCfg(k, v)} placeholder={ph || label} /></div>;
+  const colTxt = (ck: string, label: string, ph?: string) => <div key={ck} style={{ minWidth: 0 }}>{lbl(label)}<TextField T={T} value={sel[ck] || ''} onChange={(v: any) => set(ck, v)} placeholder={ph || label} /></div>;
+  const toggle = (on: boolean, onClick: () => void, label: string, key: string) => (
+    <button key={key} onClick={onClick} style={{ display: 'flex', alignItems: 'center', gap: 9, background: 'none', border: 'none', cursor: 'pointer', padding: 0, textAlign: 'left' }}>
+      <span style={{ width: 36, height: 21, borderRadius: 99, background: on ? T.accent.base : T.lineMid, position: 'relative', flexShrink: 0, transition: 'background .18s' }}>
+        <span style={{ position: 'absolute', top: 2, left: on ? 17 : 2, width: 17, height: 17, borderRadius: 99, background: '#fff', transition: 'left .18s', boxShadow: '0 1px 3px rgba(0,0,0,0.25)' }} />
+      </span>
+      <span style={{ fontSize: 12.5, fontWeight: 600, color: T.inkMid }}>{label}</span>
+    </button>
+  );
+  const tog = (k: string, label: string, def = false) => toggle(!!cfg(k, def), () => setCfg(k, !cfg(k, def)), label, k);
+  const colTog = (ck: string, label: string) => toggle(!!sel[ck], () => set(ck, !sel[ck]), label, ck);
+  const fgrid = (children: any, min = 170) => <div style={{ display: 'grid', gridTemplateColumns: `repeat(auto-fit, minmax(${min}px, 1fr))`, gap: 12 }}>{children}</div>;
+  const tgrid = (children: any) => <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 10, rowGap: 13 }}>{children}</div>;
+  const gap = (h = 14) => <div style={{ height: h }} />;
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: embedded ? 'visible' : 'hidden', background: embedded ? 'transparent' : T.paperAlt, minHeight: 0 }}>
@@ -91,7 +108,7 @@ export function InvoiceLayouts({ T, embedded }: { T: Theme; embedded?: boolean }
         ? <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>{addBtn}</div>
         : <Topbar T={T} title="Invoice Layouts" subtitle="Receipt & invoice formats" right={addBtn} />}
       <div style={{ flex: 1, overflowY: 'auto', padding: embedded ? 0 : 28 }}>
-        <div style={{ maxWidth: 1100, margin: '0 auto', display: 'grid', gridTemplateColumns: 'min(100%, 340px) 1fr', gap: 20, alignItems: 'start' }}>
+        <div style={{ maxWidth: 1360, margin: '0 auto', display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 360px', gap: 20, alignItems: 'start' }}>
           {/* editor */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             <Panel T={T} title="Layouts" pad={false}>
@@ -109,37 +126,113 @@ export function InvoiceLayouts({ T, embedded }: { T: Theme; embedded?: boolean }
               )}
             </Panel>
 
-            <Panel T={T} title={sel.name}>
+            {/* Design & branding */}
+            <Panel T={T} title="Design & branding">
               <Field T={T} label="Design" full>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6 }}>
-                  {[['classic', 'Classic'], ['elegant', 'Elegant'], ['slim', 'Slim 80mm']].map(([d, lbl]) => (
-                    <button key={d} onClick={() => set('design', d)} style={{ padding: '8px', borderRadius: T.r, cursor: 'pointer', fontFamily: T.fBody, fontSize: 12, fontWeight: 700, background: sel.design === d ? T.accent.soft : T.paper, border: `1.5px solid ${sel.design === d ? T.accent.base : T.line}`, color: sel.design === d ? T.accent.text : T.inkMid }}>{lbl}</button>
+                  {[['classic', 'Classic'], ['elegant', 'Elegant'], ['slim', 'Slim 80mm']].map(([d, dl]) => (
+                    <button key={d} onClick={() => set('design', d)} style={{ padding: '8px', borderRadius: T.r, cursor: 'pointer', fontFamily: T.fBody, fontSize: 12, fontWeight: 700, background: sel.design === d ? T.accent.soft : T.paper, border: `1.5px solid ${sel.design === d ? T.accent.base : T.line}`, color: sel.design === d ? T.accent.text : T.inkMid }}>{dl}</button>
                   ))}
                 </div>
               </Field>
-              <div style={{ height: 12 }} />
-              <Field T={T} label="Header text" full><TextField T={T} value={sel.header_text} onChange={(v: any) => set('header_text', v)} placeholder={BUSINESS.name} /></Field>
-              <div style={{ height: 12 }} />
-              <Field T={T} label="Footer text" full><TextField T={T} value={sel.footer_text} onChange={(v: any) => set('footer_text', v)} placeholder="Thank you!" /></Field>
-              <div style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 9 }}>
-                {OPTS.map(([k, lbl]) => (
-                  <button key={k} onClick={() => set(k, !sel[k])} style={{ display: 'flex', alignItems: 'center', gap: 9, background: 'none', border: 'none', cursor: 'pointer', padding: 0, textAlign: 'left' }}>
-                    <span style={{ width: 38, height: 22, borderRadius: 99, background: sel[k] ? T.accent.base : T.lineMid, position: 'relative', flexShrink: 0, transition: 'background .18s' }}>
-                      <span style={{ position: 'absolute', top: 2, left: sel[k] ? 18 : 2, width: 18, height: 18, borderRadius: 99, background: '#fff', transition: 'left .18s', boxShadow: '0 1px 3px rgba(0,0,0,0.25)' }} />
-                    </span>
-                    <span style={{ fontSize: 12.5, fontWeight: 600, color: T.inkMid }}>{lbl}</span>
-                  </button>
-                ))}
-              </div>
-              <div style={{ display: 'flex', gap: 8, marginTop: 18 }}>
-                {!sel.is_default && <Btn T={T} kind="ghost" onClick={makeDefault}>Set default</Btn>}
-                {!sel.is_default && <Btn T={T} kind="ghost" onClick={del} style={{ color: T.redText }}>Delete</Btn>}
-              </div>
+              {gap()}
+              {tgrid(<>{colTog('show_letterhead', 'Show letter head')}{tog('showLogo', 'Show invoice logo')}{colTog('hide_prices', 'Gift receipt (hide prices)')}</>)}
+              {gap()}
+              {fgrid(<>{txt('logoUrl', 'Invoice logo URL', 'https://…')}</>)}
             </Panel>
+
+            {/* Header */}
+            <Panel T={T} title="Header & sub-headings">
+              {colTxt('header_text', 'Header text', BUSINESS.name)}
+              {gap()}
+              {fgrid(<>{txt('subHeading1', 'Sub heading line 1')}{txt('subHeading2', 'Sub heading line 2')}{txt('subHeading3', 'Sub heading line 3')}{txt('subHeading4', 'Sub heading line 4')}{txt('subHeading5', 'Sub heading line 5')}</>)}
+            </Panel>
+
+            {/* Invoice headings & labels */}
+            <Panel T={T} title="Invoice headings & labels">
+              {fgrid(<>
+                {txt('invoiceHeading', 'Invoice heading', 'Invoice')}
+                {txt('invoiceNoLabel', 'Invoice no. label', 'Invoice No.')}
+                {txt('dateLabel', 'Date label', 'Date')}
+                {txt('dueDateLabel', 'Due date label')}
+                {txt('quotationHeading', 'Quotation heading')}
+                {txt('salesOrderHeading', 'Sales order heading')}
+                {txt('proformaHeading', 'Proforma heading')}
+                {txt('dateTimeFormat', 'Date time format')}
+                {txt('headingSuffixPaid', 'Heading suffix (paid)')}
+                {txt('headingSuffixUnpaid', 'Heading suffix (not paid)')}
+              </>)}
+              {gap()}
+              {tgrid(<>{tog('showDueDate', 'Show due date')}{tog('showBusinessName', 'Show business name')}{tog('showLocationName', 'Show location name', true)}{tog('showSalesPerson', 'Show sales person')}{tog('showCommissionAgent', 'Show commission agent')}</>)}
+            </Panel>
+
+            {/* Customer details */}
+            <Panel T={T} title="Customer details">
+              {tgrid(<>{tog('showCustomerInfo', 'Show customer information', true)}{tog('showClientId', 'Show client ID')}{tog('showRewardPoint', 'Show reward point')}</>)}
+              {gap()}
+              {fgrid(<>{txt('customerLabel', 'Customer label', 'Customer')}{txt('clientIdLabel', 'Client ID label')}{txt('clientTaxLabel', 'Client tax number label')}</>)}
+            </Panel>
+
+            {/* Address & contact fields */}
+            <Panel T={T} title="Address, communication & tax fields">
+              {lbl('Location address')}
+              {tgrid(<>{tog('addrLandmark', 'Landmark', true)}{tog('addrCity', 'City', true)}{tog('addrState', 'State', true)}{tog('addrCountry', 'Country', true)}{tog('addrZip', 'Zip code', true)}</>)}
+              {gap()}
+              {lbl('Communication & tax')}
+              {tgrid(<>{tog('commMobile', 'Mobile number', true)}{tog('commAlt', 'Alternate number')}{tog('commEmail', 'Email')}{tog('taxDetails1', 'Tax 1 details', true)}{tog('taxDetails2', 'Tax 2 details')}{colTog('show_address', 'Show business address')}{colTog('show_tax_summary', 'Show tax summary')}</>)}
+            </Panel>
+
+            {/* Product columns */}
+            <Panel T={T} title="Product columns & details">
+              {fgrid(<>{txt('productLabel', 'Product label', 'Product')}{txt('quantityLabel', 'Quantity label', 'Quantity')}{txt('unitPriceLabel', 'Unit price label', 'Unit Price')}{txt('subtotalColLabel', 'Subtotal label', 'Subtotal')}{txt('hsnLabel', 'HSN / category label')}{txt('itemDiscountLabel', 'Item discount label')}</>)}
+              {gap()}
+              {tgrid(<>{tog('showSku', 'Show SKU', true)}{tog('showBrand', 'Show brand')}{tog('showHsn', 'Show category / HSN')}{tog('showProductImage', 'Show product image')}{tog('showProductDesc', 'Show product description')}{tog('showSaleDesc', 'Show sale description')}{tog('showWarranty', 'Show warranty')}{tog('showBaseUnit', 'Show base unit')}</>)}
+            </Panel>
+
+            {/* Totals & summary */}
+            <Panel T={T} title="Totals & summary">
+              {fgrid(<>
+                {txt('subtotalLabel', 'Subtotal label', 'Subtotal')}
+                {txt('discountLabel', 'Discount label', 'Discount')}
+                {txt('taxLabel', 'Tax label', 'Tax')}
+                {txt('totalLabel', 'Total label', 'Total')}
+                {txt('totalItemsLabel', 'Total items label')}
+                {txt('roundOffLabel', 'Round off label')}
+                {txt('totalDueLabel', 'Total due label', 'Total Due')}
+                {txt('amountPaidLabel', 'Amount paid label', 'Total Paid')}
+                {txt('changeReturnLabel', 'Change return label')}
+                {txt('taxSummaryLabel', 'Tax summary label')}
+              </>)}
+              {gap()}
+              {tgrid(<>{colTog('show_discount', 'Show discount')}{colTog('show_total_in_words', 'Total in words')}{tog('showPaymentInfo', 'Show payment info', true)}{tog('showBarcode', 'Show barcode')}</>)}
+              {gap()}
+              <div style={{ width: 220 }}>{lbl('Amount-in-words format')}<SelectField T={T} value={cfg('wordFormat', 'international')} options={['international', 'indian']} onChange={(v: any) => setCfg('wordFormat', v)} render={(v: any) => (v === 'indian' ? 'Indian' : 'International')} /></div>
+            </Panel>
+
+            {/* QR code */}
+            <Panel T={T} title="QR code">
+              {tgrid(<>{colTog('show_qr', 'Show QR code')}{tog('qrShowLabels', 'Show labels')}{tog('qrZatca', 'ZATCA (Fatoora) QR')}</>)}
+              {gap(10)}
+              {lbl('Fields shown in QR')}
+              {tgrid(<>{tog('qrBusinessName', 'Business name', true)}{tog('qrLocationAddr', 'Location address')}{tog('qrTax1', 'Business tax')}{tog('qrInvoiceNo', 'Invoice no.', true)}{tog('qrInvoiceDatetime', 'Invoice datetime')}{tog('qrSubtotal', 'Subtotal')}{tog('qrTotalWithTax', 'Total with tax', true)}{tog('qrTotalTax', 'Total tax')}{tog('qrCustomerName', 'Customer name')}{tog('qrInvoiceUrl', 'Invoice URL')}</>)}
+            </Panel>
+
+            {/* Footer & credit note */}
+            <Panel T={T} title="Footer & credit note">
+              {colTxt('footer_text', 'Footer text', 'Thank you!')}
+              {gap()}
+              {lbl('Credit note / sell return')}
+              {fgrid(<>{txt('creditNoteHeading', 'Heading', 'Credit Note')}{txt('creditNoteRefLabel', 'Reference number label')}{txt('creditNoteTotalLabel', 'Total amount label')}</>)}
+            </Panel>
+
+            <div style={{ display: 'flex', gap: 8 }}>
+              {!sel.is_default && <Btn T={T} kind="ghost" onClick={makeDefault}>Set default</Btn>}
+              {!sel.is_default && <Btn T={T} kind="ghost" onClick={del} style={{ color: T.redText }}>Delete</Btn>}
+            </div>
           </div>
 
           {/* live preview */}
-          <div>
+          <div style={{ position: 'sticky', top: 0 }}>
             <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase', color: T.inkSub, marginBottom: 10 }}>Live preview</div>
             <div style={{ display: 'flex', justifyContent: 'center', padding: '20px', background: '#e9e4da', borderRadius: T.rLg }}>
               <ReceiptPreview T={T} layout={sel} />
@@ -155,6 +248,8 @@ export function InvoiceLayouts({ T, embedded }: { T: Theme; embedded?: boolean }
 function ReceiptPreview({ T, layout: L }: { T: Theme; layout: any }) {
   const session = useSession();
   const bizName = (session && session.business_name) || BUSINESS.name;
+  const C = L.config || {};
+  const subHeadings = [C.subHeading1, C.subHeading2, C.subHeading3, C.subHeading4, C.subHeading5].filter(Boolean);
   const slim = L.design === 'slim';
   const width = slim ? 250 : 380;
   const sub = SAMPLE_INV.lines.reduce((s, l) => s + l.qty * l.price, 0);
@@ -171,14 +266,16 @@ function ReceiptPreview({ T, layout: L }: { T: Theme; layout: any }) {
       <div style={{ textAlign: 'center', marginBottom: 8 }}>
         <div style={{ fontSize: slim ? 15 : 20, fontWeight: 800, letterSpacing: slim ? 0 : -0.3 }}>{L.header_text || bizName}</div>
         {L.show_address && <div style={{ fontSize: 9.5, color: '#555', marginTop: 2 }}>{BUSINESS.branch} · Mogadishu</div>}
+        {subHeadings.map((s: any, i: number) => <div key={i} style={{ fontSize: 9.5, color: '#555' }}>{s}</div>)}
         {!slim && L.design === 'elegant' && <div style={{ width: 40, height: 2, background: '#1a1a1a', margin: '8px auto 0' }} />}
       </div>
+      {(C.invoiceHeading || C.showInvoiceHeading !== false) && <div style={{ textAlign: 'center', fontSize: slim ? 11 : 13, fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase', margin: '2px 0 4px' }}>{C.invoiceHeading || 'Invoice'}</div>}
       <Hr />
-      <Row l={`Invoice: ${SAMPLE_INV.no}`} r="" sz={10} />
-      <Row l={`Date: ${SAMPLE_INV.date}`} r="" sz={10} />
-      <Row l={`Customer: ${SAMPLE_INV.customer}`} r="" sz={10} />
+      <Row l={`${C.invoiceNoLabel || 'Invoice No.'}: ${SAMPLE_INV.no}`} r="" sz={10} />
+      <Row l={`${C.dateLabel || 'Date'}: ${SAMPLE_INV.date}`} r="" sz={10} />
+      {C.showCustomerInfo !== false && <Row l={`${C.customerLabel || 'Customer'}: ${SAMPLE_INV.customer}`} r="" sz={10} />}
       <Hr />
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9.5, fontWeight: 700, color: '#666', textTransform: 'uppercase', letterSpacing: 0.4 }}><span>Item</span>{!L.hide_prices && <span>Amount</span>}</div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9.5, fontWeight: 700, color: '#666', textTransform: 'uppercase', letterSpacing: 0.4 }}><span>{C.productLabel || 'Item'}</span>{!L.hide_prices && <span>{C.subtotalColLabel || 'Amount'}</span>}</div>
       {SAMPLE_INV.lines.map((l, i) => (
         <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, margin: '3px 0' }}>
           <span>{l.name} <span style={{ color: '#888' }}>×{l.qty}</span></span>
@@ -187,12 +284,12 @@ function ReceiptPreview({ T, layout: L }: { T: Theme; layout: any }) {
       ))}
       <Hr />
       {!L.hide_prices && <>
-        <Row l="Subtotal" r={`$${sub.toFixed(2)}`} />
-        {L.show_discount && <Row l="Discount" r={`-$${disc.toFixed(2)}`} />}
-        <Row l="Tax (5%)" r={`$${tax.toFixed(2)}`} />
+        <Row l={C.subtotalLabel || 'Subtotal'} r={`$${sub.toFixed(2)}`} />
+        {L.show_discount && <Row l={C.discountLabel || 'Discount'} r={`-$${disc.toFixed(2)}`} />}
+        <Row l={`${C.taxLabel || 'Tax'} (5%)`} r={`$${tax.toFixed(2)}`} />
         {L.show_tax_summary && <div style={{ fontSize: 9, color: '#777', margin: '3px 0' }}>VAT 5% on ${sub.toFixed(2)} = ${tax.toFixed(2)}</div>}
         <Hr />
-        <Row l="TOTAL" r={`$${total.toFixed(2)}`} b sz={14} />
+        <Row l={(C.totalLabel || 'Total').toUpperCase()} r={`$${total.toFixed(2)}`} b sz={14} />
         {L.show_total_in_words && <div style={{ fontSize: 9.5, color: '#555', fontStyle: 'italic', marginTop: 4 }}>{amountInWords(total)}</div>}
       </>}
       {L.hide_prices && <div style={{ textAlign: 'center', fontSize: 11, color: '#777', fontStyle: 'italic', padding: '6px 0' }}>Gift receipt — prices hidden</div>}

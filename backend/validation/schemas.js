@@ -516,6 +516,7 @@ const InvoiceLayoutSchema = z.object({
   show_letterhead:     z.coerce.boolean().optional(),
   hide_prices:         z.coerce.boolean().optional(),
   is_default:          z.coerce.boolean().optional(),
+  config:              z.record(z.any()).optional().nullable(), // extended layout settings (labels, toggles, QR, credit-note)
 });
 
 const InvoiceSchemeSchema = z.object({

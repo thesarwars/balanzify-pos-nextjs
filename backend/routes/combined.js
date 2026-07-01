@@ -1645,6 +1645,7 @@ function mapInvoiceLayout(b) {
   if (b.show_letterhead     !== undefined) m.showLetterhead = b.show_letterhead;
   if (b.hide_prices         !== undefined) m.hidePrices = b.hide_prices;
   if (b.is_default          !== undefined) m.isDefault = b.is_default;
+  if (b.config              !== undefined) m.config = b.config;
   return m;
 }
 
