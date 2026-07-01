@@ -44,6 +44,10 @@ router.post('/register', validate(RegisterSchema), async (req, res, next) => {
       await tx.invoiceScheme.create({
         data: { businessId: business.id, name: 'Default', startNumber: 1, totalDigits: 4, numberingType: 'sequential', includeYear: false },
       });
+      // Seed a default invoice layout too, so the Invoice Layouts screen has one.
+      await tx.invoiceLayout.create({
+        data: { businessId: business.id, name: 'Default', design: 'classic', isDefault: true, showAddress: true, showTaxSummary: true, showDiscount: true },
+      });
       return { business, user };
     });
 

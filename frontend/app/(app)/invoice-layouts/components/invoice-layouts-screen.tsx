@@ -31,14 +31,19 @@ const SAMPLE_INV = {
   lines: [{ name: 'Basmati Rice 5kg', qty: 2, price: 8.9 }, { name: 'Cooking Oil 3L', qty: 1, price: 6.5 }, { name: 'Somali Tea (Shaah)', qty: 4, price: 1.5 }],
 };
 
-export function InvoiceLayouts({ T }: { T: Theme }) {
+export function InvoiceLayouts({ T, embedded }: { T: Theme; embedded?: boolean }) {
   const [rows, setRows] = useStateIv<any[]>([]);
   const [sel, setSel] = useStateIv<any>(null);
   const [adding, setAdding] = useStateIv(false);
   const [name, setName] = useStateIv('');
+  const [loading, setLoading] = useStateIv(true);
   const [toast, toastNode] = useToast();
 
-  const reload = React.useCallback(() => API.invoiceLayout.list().then((ls: any) => { setRows(ls); setSel((s: any) => ls.find((x: any) => x.id === (s && s.id)) || ls[0] || null); }).catch(() => {}), []);
+  const reload = React.useCallback(() => API.invoiceLayout.list().then((ls: any) => {
+    const arr = Array.isArray(ls) ? ls : [];
+    setRows(arr);
+    setSel((s: any) => arr.find((x: any) => x.id === (s && s.id)) || arr[0] || null);
+  }).catch(() => setRows([])).finally(() => setLoading(false)), []);
   useEffectIv(() => { reload(); }, [reload]);
 
   const set = (k: any, v: any) => { const up = { ...sel, [k]: v }; setSel(up); save(up); };
@@ -51,7 +56,29 @@ export function InvoiceLayouts({ T }: { T: Theme }) {
   async function makeDefault() { const u = await API.invoiceLayout.update(sel.id, { is_default: true }); await reload(); setSel({ ...sel, is_default: true }); toast('Set as default'); }
   async function del() { try { await API.invoiceLayout.remove(sel.id); await reload(); toast('Layout deleted'); } catch (e: any) { toast(e.message); } }
 
-  if (!sel) return <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: T.paperAlt, fontFamily: T.fMono, fontSize: 12.5, color: T.inkSub }}>GET /connector/api/invoice-layout…</div>;
+  const addBtn = <Btn T={T} kind="accent" onClick={() => setAdding(true)}>+ Add Layout</Btn>;
+
+  if (loading) return <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: embedded ? 'transparent' : T.paperAlt, minHeight: 200, fontSize: 13, color: T.inkSub }}>Loading invoice layouts…</div>;
+  if (!sel) {
+    const emptyBody = (
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, minHeight: 240 }}>
+        <div style={{ fontSize: 14, color: T.inkSub }}>No invoice layouts yet.</div>
+        {adding ? (
+          <div style={{ display: 'flex', gap: 8 }}>
+            <input value={name} onChange={e => setName(e.target.value)} placeholder="Layout name" autoFocus style={{ padding: '9px 12px', fontSize: 13, fontFamily: T.fBody, color: T.ink, background: T.paper, border: `1.5px solid ${T.line}`, borderRadius: T.r, outline: 'none' }} />
+            <Btn T={T} kind="accent" onClick={add}>Add</Btn>
+          </div>
+        ) : <Btn T={T} kind="accent" onClick={() => setAdding(true)}>+ Add your first layout</Btn>}
+      </div>
+    );
+    return embedded ? <>{emptyBody}{toastNode}</> : (
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: T.paperAlt }}>
+        <Topbar T={T} title="Invoice Layouts" subtitle="Receipt & invoice formats" right={addBtn} />
+        {emptyBody}
+        {toastNode}
+      </div>
+    );
+  }
 
   const OPTS = [
     ['show_address', 'Show business address'], ['show_tax_summary', 'Tax summary'], ['show_total_in_words', 'Total in words'],
@@ -59,9 +86,11 @@ export function InvoiceLayouts({ T }: { T: Theme }) {
   ];
 
   return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: T.paperAlt }}>
-      <Topbar T={T} title="Invoice Layouts" subtitle="Receipt & invoice formats" right={<Btn T={T} kind="accent" onClick={() => setAdding(true)}>+ Add Layout</Btn>} />
-      <div style={{ flex: 1, overflowY: 'auto', padding: 28 }}>
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: embedded ? 'visible' : 'hidden', background: embedded ? 'transparent' : T.paperAlt, minHeight: 0 }}>
+      {embedded
+        ? <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>{addBtn}</div>
+        : <Topbar T={T} title="Invoice Layouts" subtitle="Receipt & invoice formats" right={addBtn} />}
+      <div style={{ flex: 1, overflowY: 'auto', padding: embedded ? 0 : 28 }}>
         <div style={{ maxWidth: 1100, margin: '0 auto', display: 'grid', gridTemplateColumns: 'min(100%, 340px) 1fr', gap: 20, alignItems: 'start' }}>
           {/* editor */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
