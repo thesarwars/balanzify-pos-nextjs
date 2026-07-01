@@ -197,13 +197,16 @@ describe('discounts', () => {
 describe('invoicing', () => {
   let token;
   beforeAll(async () => { token = await register(); });
-  test('first layout auto-defaults; default exclusivity + delete guard', async () => {
-    const l1 = (await request(app).post('/api/v1/invoice-layouts').set(auth(token)).send({ name: 'Classic' })).body;
-    expect(l1.isDefault).toBe(true);
+  test('seeded default layout; default exclusivity + delete guard', async () => {
+    // Registration seeds a "Default" layout, so a business always has one default.
+    const seeded = (await request(app).get('/api/v1/invoice-layouts').set(auth(token))).body.layouts;
+    expect(seeded.filter(x => x.isDefault)).toHaveLength(1);
     const l2 = (await request(app).post('/api/v1/invoice-layouts').set(auth(token)).send({ name: 'Elegant' })).body;
+    expect(l2.isDefault).toBe(false); // not the first layout, so not auto-default
     await request(app).put(`/api/v1/invoice-layouts/${l2.id}`).set(auth(token)).send({ is_default: true });
     const list = (await request(app).get('/api/v1/invoice-layouts').set(auth(token))).body.layouts;
-    expect(list.filter(x => x.isDefault)).toHaveLength(1);
+    expect(list.filter(x => x.isDefault)).toHaveLength(1); // exclusivity
+    expect(list.find(x => x.isDefault).id).toBe(l2.id);
     expect((await request(app).delete(`/api/v1/invoice-layouts/${l2.id}`).set(auth(token))).status).toBe(422); // default protected
   });
 });
