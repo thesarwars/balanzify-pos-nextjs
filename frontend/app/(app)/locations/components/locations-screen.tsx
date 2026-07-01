@@ -31,7 +31,7 @@ function StatStrip({ T, stats }: { T: Theme; stats: any[] }) {
 export function Locations({ T }: { T: any }) {
   const [rows, setRows] = useStateLo<any[]>([]);
   const [loading, setLoading] = useStateLo(true);
-  const [refs, setRefs] = useStateLo<any>({ schemes: [], layouts: [], groups: [], methods: [] });
+  const [refs, setRefs] = useStateLo<any>({ schemes: [], layouts: [], groups: [], methods: [], users: [], accounts: [], products: [] });
   const [edit, setEdit] = useStateLo<any>(null);
   const [schemeMgr, setSchemeMgr] = useStateLo(false);
   const [show, node] = useToast();
@@ -41,8 +41,13 @@ export function Locations({ T }: { T: any }) {
     API.location.list({ all: true }).then(setRows).catch(() => setRows([])).finally(() => setLoading(false));
   }, []);
   const loadRefs = React.useCallback(() => {
-    Promise.all([API.invoiceScheme.list(), API.invoiceLayout.list(), API.priceGroup.list(), API.paymentMethod.list()])
-      .then(([schemes, layouts, groups, methods]) => setRefs({ schemes, layouts, groups, methods })).catch(() => {});
+    const asList = (x: any) => (Array.isArray(x) ? x : ((x && (x.items || x.data)) || []));
+    Promise.all([
+      API.invoiceScheme.list(), API.invoiceLayout.list(), API.priceGroup.list(), API.paymentMethod.list(),
+      API.user.list().catch(() => []), API.paymentAccount.list().catch(() => []), API.products.list({}).catch(() => ({ items: [] })),
+    ]).then(([schemes, layouts, groups, methods, users, accounts, products]) =>
+      setRefs({ schemes, layouts, groups, methods, users: asList(users), accounts: asList(accounts), products: asList(products) })
+    ).catch(() => {});
   }, []);
   useEffectLo(() => { reload(); }, [reload]);
   useEffectLo(() => { loadRefs(); }, [loadRefs]);
@@ -60,7 +65,7 @@ export function Locations({ T }: { T: any }) {
       <Topbar T={T} title="Business Locations" subtitle={`${rows.length} locations · ${active} active`}
         right={<>
           <Btn T={T} kind="ghost" onClick={() => setSchemeMgr(true)}>◷ Invoice Schemes</Btn>
-          <Btn T={T} kind="accent" onClick={() => setEdit({ payment_methods: ['cash'], default_payment: 'cash', invoice_scheme_id: 1, invoice_layout_id: 1, price_group_id: 0, type: 'Retail' })}>+ Add Location</Btn>
+          <Btn T={T} kind="accent" onClick={() => setEdit({ payment_methods: ['cash'], default_payment: 'cash', type: 'Retail', featured_product_ids: [], payment_accounts: {} })}>+ Add Location</Btn>
         </>} />
       <div style={{ flex: 1, overflowY: 'auto', padding: 28 }}>
         <div style={{ maxWidth: 1200, margin: '0 auto' }}>
@@ -111,9 +116,16 @@ export function Locations({ T }: { T: any }) {
 function LocationEditor({ T, loc, refs, onClose, onSaved, onNewScheme }: { T: any; loc: any; refs: any; onClose: () => void; onSaved: () => void; onNewScheme: () => void }) {
   const editing = !!loc.id;
   const [f, setF] = useStateLo<any>({
-    name: loc.name || '', type: loc.type || 'Retail', landmark: loc.landmark || '', city: loc.city || '', mobile: loc.mobile || '', manager: loc.manager || '',
-    invoice_scheme_id: loc.invoice_scheme_id || 1, invoice_layout_id: loc.invoice_layout_id || 1, price_group_id: loc.price_group_id ?? 0,
+    name: loc.name || '', type: loc.type || 'Retail',
+    manager_id: loc.manager_id || '', location_code: loc.location_code || '',
+    landmark: loc.landmark || '', city: loc.city || '', zip_code: loc.zip_code || '',
+    state: loc.state || '', country: loc.country || '', mobile: loc.mobile || '',
+    alt_contact: loc.alt_contact || '', email: loc.email || '', website: loc.website || '',
+    invoice_scheme_id: loc.invoice_scheme_id || '', invoice_layout_id: loc.invoice_layout_id || '', price_group_id: loc.price_group_id || '',
+    custom_field1: loc.custom_field1 || '', custom_field2: loc.custom_field2 || '', custom_field3: loc.custom_field3 || '', custom_field4: loc.custom_field4 || '',
+    featured_product_ids: Array.isArray(loc.featured_product_ids) ? [...loc.featured_product_ids] : [],
     payment_methods: loc.payment_methods ? [...loc.payment_methods] : ['cash'], default_payment: loc.default_payment || 'cash',
+    payment_accounts: loc.payment_accounts ? { ...loc.payment_accounts } : {},
   });
   const [busy, setBusy] = useStateLo(false);
   const [err, setErr] = useStateLo<any>(null);
@@ -122,8 +134,17 @@ function LocationEditor({ T, loc, refs, onClose, onSaved, onNewScheme }: { T: an
     const has = s.payment_methods.includes(key);
     const pm = has ? s.payment_methods.filter((x: any) => x !== key) : [...s.payment_methods, key];
     const dp = has && s.default_payment === key ? (pm[0] || '') : s.default_payment;
-    return { ...s, payment_methods: pm, default_payment: dp };
+    const pa = { ...s.payment_accounts }; if (has) delete pa[key];
+    return { ...s, payment_methods: pm, default_payment: dp, payment_accounts: pa };
   });
+  const setAccount = (method: any, accId: any) => setF((s: any) => ({ ...s, payment_accounts: { ...s.payment_accounts, [method]: accId || undefined } }));
+
+  const users = refs.users || [], accounts = refs.accounts || [], products = refs.products || [];
+  const userName = (id: any) => { const u = users.find((x: any) => x.id === id); return u ? (u.name || u.email || id) : ''; };
+  const prodName = (id: any) => { const p = products.find((x: any) => x.id === id); return p ? p.name : id; };
+  const addFeatured = (id: any) => { if (id && !f.featured_product_ids.includes(id)) set('featured_product_ids', [...f.featured_product_ids, id]); };
+  const removeFeatured = (id: any) => set('featured_product_ids', f.featured_product_ids.filter((x: any) => x !== id));
+  const H = ({ children }: any) => <div style={{ marginTop: 18, marginBottom: 10, fontSize: 12, fontWeight: 700, color: T.inkSub, letterSpacing: 0.3 }}>{children}</div>;
 
   async function save() {
     if (!f.name.trim()) { setErr('Location name is required.'); return; }
@@ -134,30 +155,43 @@ function LocationEditor({ T, loc, refs, onClose, onSaved, onNewScheme }: { T: an
   }
 
   return (
-    <Modal T={T} title={editing ? 'Edit location' : 'New location'} subtitle={editing ? loc.name : 'Add a store, kiosk or warehouse'} width={640} onClose={onClose}
+    <Modal T={T} title={editing ? 'Edit location' : 'New location'} subtitle={editing ? loc.name : 'Add a store, kiosk or warehouse'} width={680} onClose={onClose}
       footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Cancel</Btn><Btn T={T} kind="accent" onClick={save} disabled={busy}>{busy ? 'Saving…' : editing ? 'Save changes' : 'Create location'}</Btn></>}>
       <FormGrid>
         <Field T={T} label="Location name" full><TextField T={T} value={f.name} onChange={(v: any) => set('name', v)} placeholder="e.g. Main Store" /></Field>
         <Field T={T} label="Type"><SelectField T={T} value={f.type} options={['Retail', 'Kiosk', 'Warehouse', 'Headquarters']} onChange={(v: any) => set('type', v)} /></Field>
-        <Field T={T} label="Manager"><TextField T={T} value={f.manager} onChange={(v: any) => set('manager', v)} placeholder="Who runs it" /></Field>
-        <Field T={T} label="Address / landmark" full><TextField T={T} value={f.landmark} onChange={(v: any) => set('landmark', v)} placeholder="Street, district" /></Field>
-        <Field T={T} label="City"><TextField T={T} value={f.city} onChange={(v: any) => set('city', v)} placeholder="City" /></Field>
-        <Field T={T} label="Mobile"><TextField T={T} value={f.mobile} onChange={(v: any) => set('mobile', v)} placeholder="+252 …" /></Field>
+        <Field T={T} label="Manager">
+          <SelectField T={T} value={f.manager_id} options={['', ...users.map((u: any) => u.id)]} onChange={(v: any) => set('manager_id', v)} render={(v: any) => (v ? userName(v) : '— No manager —')} />
+        </Field>
+        <Field T={T} label="Location ID"><TextField T={T} value={f.location_code} onChange={(v: any) => set('location_code', v)} placeholder="Internal code (optional)" /></Field>
       </FormGrid>
 
-      <div style={{ marginTop: 18, marginBottom: 10, fontSize: 12, fontWeight: 700, color: T.inkSub, letterSpacing: 0.3 }}>INVOICING</div>
+      <H>ADDRESS &amp; CONTACT</H>
+      <FormGrid>
+        <Field T={T} label="Address / landmark" full><TextField T={T} value={f.landmark} onChange={(v: any) => set('landmark', v)} placeholder="Street, district" /></Field>
+        <Field T={T} label="City"><TextField T={T} value={f.city} onChange={(v: any) => set('city', v)} placeholder="City" /></Field>
+        <Field T={T} label="Zip / postal code"><TextField T={T} value={f.zip_code} onChange={(v: any) => set('zip_code', v)} placeholder="Zip code" /></Field>
+        <Field T={T} label="State / region"><TextField T={T} value={f.state} onChange={(v: any) => set('state', v)} placeholder="State" /></Field>
+        <Field T={T} label="Country"><TextField T={T} value={f.country} onChange={(v: any) => set('country', v)} placeholder="Country" /></Field>
+        <Field T={T} label="Mobile"><TextField T={T} value={f.mobile} onChange={(v: any) => set('mobile', v)} placeholder="+252 …" /></Field>
+        <Field T={T} label="Alternate contact"><TextField T={T} value={f.alt_contact} onChange={(v: any) => set('alt_contact', v)} placeholder="Alt number" /></Field>
+        <Field T={T} label="Email"><TextField T={T} value={f.email} onChange={(v: any) => set('email', v)} placeholder="branch@business.com" /></Field>
+        <Field T={T} label="Website"><TextField T={T} value={f.website} onChange={(v: any) => set('website', v)} placeholder="https://…" /></Field>
+      </FormGrid>
+
+      <H>INVOICING &amp; PRICING</H>
       <FormGrid>
         <Field T={T} label="Invoice scheme">
           <div style={{ display: 'flex', gap: 6 }}>
-            <div style={{ flex: 1 }}><SelectField T={T} value={String(f.invoice_scheme_id)} options={refs.schemes.map((s: any) => String(s.id))} onChange={(v: any) => set('invoice_scheme_id', Number(v))} render={(v: any) => { const s = refs.schemes.find((x: any) => String(x.id) === v) || {}; return s.name + (s.prefix ? ` (${s.prefix})` : ''); }} /></div>
+            <div style={{ flex: 1 }}><SelectField T={T} value={f.invoice_scheme_id} options={['', ...refs.schemes.map((s: any) => s.id)]} onChange={(v: any) => set('invoice_scheme_id', v)} render={(v: any) => { if (!v) return '— None —'; const s = refs.schemes.find((x: any) => x.id === v) || {}; return (s.name || v) + (s.prefix ? ` (${s.prefix})` : ''); }} /></div>
             <button onClick={onNewScheme} title="Manage schemes" style={{ width: 40, borderRadius: T.r, border: `1.5px solid ${T.line}`, background: T.paper, color: T.accent.text, cursor: 'pointer', fontSize: 16 }}>+</button>
           </div>
         </Field>
-        <Field T={T} label="Invoice layout"><SelectField T={T} value={String(f.invoice_layout_id)} options={refs.layouts.map((l: any) => String(l.id))} onChange={(v: any) => set('invoice_layout_id', Number(v))} render={(v: any) => (refs.layouts.find((x: any) => String(x.id) === v) || {}).name} /></Field>
-        <Field T={T} label="Default selling price group" full><SelectField T={T} value={String(f.price_group_id)} options={refs.groups.map((g: any) => String(g.id))} onChange={(v: any) => set('price_group_id', Number(v))} render={(v: any) => (refs.groups.find((x: any) => String(x.id) === v) || {}).name} /></Field>
+        <Field T={T} label="Invoice layout"><SelectField T={T} value={f.invoice_layout_id} options={['', ...refs.layouts.map((l: any) => l.id)]} onChange={(v: any) => set('invoice_layout_id', v)} render={(v: any) => (v ? ((refs.layouts.find((x: any) => x.id === v) || {}).name || v) : '— None —')} /></Field>
+        <Field T={T} label="Default selling price group" full><SelectField T={T} value={f.price_group_id} options={['', ...refs.groups.map((g: any) => g.id)]} onChange={(v: any) => set('price_group_id', v)} render={(v: any) => (v ? ((refs.groups.find((x: any) => x.id === v) || {}).name || v) : '— Default —')} /></Field>
       </FormGrid>
 
-      <div style={{ marginTop: 18, marginBottom: 10, fontSize: 12, fontWeight: 700, color: T.inkSub, letterSpacing: 0.3 }}>PAYMENT METHODS</div>
+      <H>PAYMENT METHODS</H>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
         {refs.methods.map((m: any) => (
           <button key={m.key} onClick={() => toggleMethod(m.key)} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '7px 13px', borderRadius: 99, cursor: 'pointer', fontFamily: T.fBody, fontSize: 12.5, fontWeight: 600, background: f.payment_methods.includes(m.key) ? T.accent.soft : T.paper, border: `1.5px solid ${f.payment_methods.includes(m.key) ? T.accent.base : T.line}`, color: f.payment_methods.includes(m.key) ? T.accent.text : T.inkMid }}>
@@ -166,11 +200,50 @@ function LocationEditor({ T, loc, refs, onClose, onSaved, onNewScheme }: { T: an
         ))}
       </div>
       {f.payment_methods.length > 0 && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span style={{ fontSize: 12.5, color: T.inkSub }}>Default method</span>
-          <div style={{ width: 200 }}><SelectField T={T} value={f.default_payment} options={f.payment_methods} onChange={(v: any) => set('default_payment', v)} render={(v: any) => (refs.methods.find((m: any) => m.key === v) || { label: v }).label} /></div>
-        </div>
+        <>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+            <span style={{ fontSize: 12.5, color: T.inkSub }}>Default method</span>
+            <div style={{ width: 200 }}><SelectField T={T} value={f.default_payment} options={f.payment_methods} onChange={(v: any) => set('default_payment', v)} render={(v: any) => (refs.methods.find((m: any) => m.key === v) || { label: v }).label} /></div>
+          </div>
+          {accounts.length > 0 && (
+            <div style={{ display: 'grid', gap: 8 }}>
+              {f.payment_methods.map((m: any) => (
+                <div key={m} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span style={{ width: 150, fontSize: 12.5, color: T.inkSub }}>{(refs.methods.find((x: any) => x.key === m) || { label: m }).label} account</span>
+                  <div style={{ flex: 1 }}><SelectField T={T} value={f.payment_accounts[m] || ''} options={['', ...accounts.map((a: any) => a.id)]} onChange={(v: any) => setAccount(m, v)} render={(v: any) => (v ? ((accounts.find((a: any) => a.id === v) || {}).name || v) : 'No default account')} /></div>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
       )}
+
+      <H>POS FEATURED PRODUCTS</H>
+      {products.length > 0 ? (
+        <>
+          <Field T={T} label="Add a product to feature" full>
+            <SelectField T={T} value="" options={['', ...products.filter((p: any) => !f.featured_product_ids.includes(p.id)).map((p: any) => p.id)]} onChange={(v: any) => addFeatured(v)} render={(v: any) => (v ? prodName(v) : '— Select a product —')} />
+          </Field>
+          {f.featured_product_ids.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+              {f.featured_product_ids.map((id: any) => (
+                <span key={id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 10px', borderRadius: 99, background: T.accent.soft, color: T.accent.text, fontSize: 12, fontWeight: 600 }}>
+                  {prodName(id)}<button onClick={() => removeFeatured(id)} style={{ border: 'none', background: 'none', color: T.accent.text, cursor: 'pointer', fontSize: 13, lineHeight: 1 }}>×</button>
+                </span>
+              ))}
+            </div>
+          )}
+        </>
+      ) : <div style={{ fontSize: 12, color: T.inkSub }}>No products yet — add products first to feature them here.</div>}
+
+      <H>CUSTOM FIELDS</H>
+      <FormGrid>
+        <Field T={T} label="Custom field 1"><TextField T={T} value={f.custom_field1} onChange={(v: any) => set('custom_field1', v)} placeholder="Custom field 1" /></Field>
+        <Field T={T} label="Custom field 2"><TextField T={T} value={f.custom_field2} onChange={(v: any) => set('custom_field2', v)} placeholder="Custom field 2" /></Field>
+        <Field T={T} label="Custom field 3"><TextField T={T} value={f.custom_field3} onChange={(v: any) => set('custom_field3', v)} placeholder="Custom field 3" /></Field>
+        <Field T={T} label="Custom field 4"><TextField T={T} value={f.custom_field4} onChange={(v: any) => set('custom_field4', v)} placeholder="Custom field 4" /></Field>
+      </FormGrid>
+
       {err && <div style={{ marginTop: 16, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5, fontWeight: 500 }}>⚠ {err}</div>}
     </Modal>
   );

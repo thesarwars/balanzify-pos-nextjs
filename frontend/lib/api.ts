@@ -2256,15 +2256,46 @@ function adaptRealLocation(l: any): any {
     id: l.id, name: l.name,
     type: LOC_TYPE_TO_UI[l.type] || l.type || 'Retail',
     status: l.isActive === false ? 'inactive' : 'active',
-    landmark: l.address || '',
+    // contact / address
+    location_code: l.locationCode || '',
+    landmark: l.landmark ?? l.address ?? '',
+    city: l.city || '', zip_code: l.zipCode || '', state: l.state || '', country: l.country || '',
+    mobile: l.mobile || '', alt_contact: l.altContact || '', email: l.email || '', website: l.website || '',
+    // manager + invoicing / pricing (ids + display names for the card)
+    manager_id: l.managerId || '', manager: l.manager?.name || '',
+    invoice_scheme_id: l.invoiceSchemeId || '', scheme_name: l.invoiceScheme?.name || '',
+    invoice_layout_id: l.invoiceLayoutId || '', layout_name: l.invoiceLayout?.name || '',
+    price_group_id: l.priceGroupId || '', price_group_name: l.priceGroup?.name || '',
+    // custom fields
+    custom_field1: l.customField1 || '', custom_field2: l.customField2 || '',
+    custom_field3: l.customField3 || '', custom_field4: l.customField4 || '',
+    // featured products + per-location payment config
+    featured_product_ids: l.featuredProductIds || [],
+    payment_methods: l.paymentMethods || [],
+    default_payment: l.defaultPayment || (l.paymentMethods && l.paymentMethods[0]) || '',
+    payment_accounts: l.paymentAccounts || {},
     _real: l,
   };
 }
 function toRealLocationBody(f: any): any {
+  const s = (v: any) => (v === '' || v === undefined || v === null ? undefined : v);
   const body: any = {
     name: f.name,
     type: UI_TO_LOC_TYPE[f.type] || 'store',
-    address: f.landmark || f.address || undefined,
+    location_code: s(f.location_code),
+    landmark: s(f.landmark ?? f.address),
+    city: s(f.city), zip_code: s(f.zip_code), state: s(f.state), country: s(f.country),
+    mobile: s(f.mobile), alt_contact: s(f.alt_contact), email: s(f.email), website: s(f.website),
+    manager_id: f.manager_id || null,
+    invoice_scheme_id: f.invoice_scheme_id || null,
+    invoice_layout_id: f.invoice_layout_id || null,
+    price_group_id: f.price_group_id || null,
+    custom_field1: s(f.custom_field1), custom_field2: s(f.custom_field2),
+    custom_field3: s(f.custom_field3), custom_field4: s(f.custom_field4),
+    featured_product_ids: Array.isArray(f.featured_product_ids) ? f.featured_product_ids : undefined,
+    payment_methods: Array.isArray(f.payment_methods) ? f.payment_methods : undefined,
+    default_payment: s(f.default_payment),
+    payment_accounts: f.payment_accounts && Object.keys(f.payment_accounts).length ? f.payment_accounts : undefined,
   };
   if (f.is_active !== undefined) body.is_active = f.is_active;
   return body;
