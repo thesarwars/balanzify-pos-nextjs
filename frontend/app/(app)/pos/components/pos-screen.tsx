@@ -76,6 +76,8 @@ export function POS({ T, tweaks }: { T: any; tweaks: any }) {
   const [payMode, setPayMode] = useStateP('quick'); // 'quick' | 'split'
   const [tenders, setTenders] = useStateP<any[]>([]);      // split-payment lines [{method, amount}]
   const [changeDue, setChangeDue] = useStateP(0);
+  const [locations, setLocations] = useStateP<any[]>([]);  // active business locations
+  const [posLoc, setPosLoc] = useStateP<any>('');          // location the till is selling from
 
   // Catalog: default to the seed (mock mode); in real mode load it from /api/v1.
   const [prods, setProds] = useStateP<any[]>(PRODUCTS);
@@ -90,6 +92,7 @@ export function POS({ T, tweaks }: { T: any; tweaks: any }) {
     API.heldSale.list().then(setParked).catch(() => {});
     API.serviceType.list().then(setServiceTypes).catch(() => {});
     API.discount.list().then(setDiscounts).catch(() => {});
+    API.location.list().then((ls: any[]) => setLocations(ls || [])).catch(() => {});
     if (API.config?.isReal?.()) {
       // Active products only — DELETE /products soft-deletes (isActive=false),
       // and archived products must not appear on the sell grid.
@@ -97,6 +100,13 @@ export function POS({ T, tweaks }: { T: any; tweaks: any }) {
       API.category.list().then((cs: any) => setCats([{ id: 'all', name: 'All Items' }, ...(cs || [])])).catch(() => {});
     }
   }, []);
+  // Selling location: an open register pins it (sales post there); otherwise a
+  // single location auto-selects and multiple offer a dropdown (default first).
+  useEffectP(() => {
+    if (register && register.location_id) setPosLoc(String(register.location_id));
+    else if (locations.length && !posLoc) setPosLoc(String(locations[0].id));
+  }, [register, locations]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // keep the register's running totals fresh (every 30s)
   useEffectP(() => {
     const t = setInterval(() => { API.register.current().then(setRegister).catch(() => {}); }, 30000);
@@ -130,6 +140,10 @@ export function POS({ T, tweaks }: { T: any; tweaks: any }) {
   };
   const stockOf = (p: any, varName?: any) => {
     if (varName && p.variations) { const v = p.variations.find((v: any) => v.name === varName); return v ? v.stock : 0; }
+    // Per-location stock when the backend supplied stockLevels (real mode);
+    // demo products fall back to their flat total.
+    const levels = p._real && Array.isArray(p._real.stockLevels) ? p._real.stockLevels : null;
+    if (levels && posLoc) return levels.filter((sl: any) => String(sl.locationId) === String(posLoc)).reduce((s: number, sl: any) => s + (sl.quantity || 0), 0);
     return p.stock;
   };
 
@@ -255,7 +269,7 @@ export function POS({ T, tweaks }: { T: any; tweaks: any }) {
     if (remaining > 0.001 && (!customer)) { setPostErr('Select a customer to sell on credit.'); return; }
     setPostErr(null); setPosting(true);
     const salePayload: any = {
-      location_id: (register && register.location_id) || 1, shift_id: register ? register.id : undefined, contact_id: customer ? customer.id : 1, customer_name: customer ? customer.name : 'Walk-in',
+      location_id: (register && register.location_id) || posLoc || 1, shift_id: register ? register.id : undefined, contact_id: customer ? customer.id : 1, customer_name: customer ? customer.name : 'Walk-in',
       method: payments[0] ? payments[0].method : 'cash', amount: total, discount_amount: discount, discount_type: 'fixed', tax_amount: tax,
       redeem_points: redeemPts,
       coupon_id: couponOk && couponDiscount > 0 ? coupon.id : undefined,
@@ -310,7 +324,8 @@ export function POS({ T, tweaks }: { T: any; tweaks: any }) {
   // ── Product tile ────────────────────────────────────────────────
   const Tile = (p: any) => {
     const inCartQty = cart.filter((c: any) => c.id === p.id).reduce((s: number, c: any) => s + c.qty, 0);
-    const avail = p.stock - inCartQty;
+    const locStock = stockOf(p);
+    const avail = locStock - inCartQty;
     const low = avail <= 12;
     const inCart = inCartQty > 0;
     return (
@@ -328,7 +343,7 @@ export function POS({ T, tweaks }: { T: any; tweaks: any }) {
         <div style={{ height: 58, background: swatchBg(p), position: 'relative', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', padding: 8 } as React.CSSProperties}>
           {p.not_for_selling && <span style={{ fontSize: 9, fontWeight: 800, color: '#fff', background: T.red, padding: '2px 6px', borderRadius: 5, letterSpacing: 0.4 }}>ARCHIVED</span>}
           {p.rx && <span style={{ fontSize: 9, fontWeight: 800, color: '#fff', background: 'rgba(0,0,0,0.28)', padding: '2px 6px', borderRadius: 5, letterSpacing: 0.4 }}>Rx</span>}
-          {(p.enable_stock !== false && p.stock !== Infinity) && <span style={{ fontSize: 9, fontWeight: 800, color: '#fff', background: avail <= 0 ? T.red : low ? T.amber : 'rgba(0,0,0,0.32)', padding: '2px 6px', borderRadius: 5, letterSpacing: 0.3, marginLeft: 'auto' }}>{avail <= 0 ? 'Out' : `${avail} in stock`}{inCart ? ` · ${p.stock}−${inCartQty}` : ''}</span>}
+          {(p.enable_stock !== false && p.stock !== Infinity) && <span style={{ fontSize: 9, fontWeight: 800, color: '#fff', background: avail <= 0 ? T.red : low ? T.amber : 'rgba(0,0,0,0.32)', padding: '2px 6px', borderRadius: 5, letterSpacing: 0.3, marginLeft: 'auto' }}>{avail <= 0 ? 'Out' : `${avail} in stock`}{inCart ? ` · ${locStock}−${inCartQty}` : ''}</span>}
           {inCart && (
             <span style={{ position: 'absolute', bottom: -11, right: 9, width: 24, height: 24, borderRadius: 7, background: T.accent.base, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 800, fontFamily: T.fMono, boxShadow: '0 2px 6px rgba(0,0,0,0.25)' } as React.CSSProperties}>{inCartQty}</span>
           )}
@@ -349,7 +364,8 @@ export function POS({ T, tweaks }: { T: any; tweaks: any }) {
   const Row = (p: any) => {
     const inCartQty = cart.filter((c: any) => c.id === p.id).reduce((s: number, c: any) => s + c.qty, 0);
     const inCart = inCartQty > 0;
-    const avail = p.stock - inCartQty;
+    const locStock = stockOf(p);
+    const avail = locStock - inCartQty;
     const low = avail <= 12;
     return (
       <button key={p.id} onClick={() => add(p)} style={{
@@ -362,7 +378,7 @@ export function POS({ T, tweaks }: { T: any; tweaks: any }) {
         <span style={{ width: 34, height: 34, borderRadius: 8, flexShrink: 0, background: swatchBg(p) }} />
         <span style={{ flex: 1, minWidth: 0 }}>
           <span style={{ display: 'block', fontSize: 13, fontWeight: 600, color: D.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } as React.CSSProperties}>{p.name}</span>
-          <span style={{ display: 'block', fontSize: 11, color: low ? T.amberText : D.mute, fontFamily: T.fMono, marginTop: 1 }}>{p.sku}{(p.enable_stock !== false && p.stock !== Infinity) ? ` · ${avail <= 0 ? 'Out of stock' : avail + ' in stock'}${inCart ? ` (${p.stock}−${inCartQty})` : ''}` : ''}</span>
+          <span style={{ display: 'block', fontSize: 11, color: low ? T.amberText : D.mute, fontFamily: T.fMono, marginTop: 1 }}>{p.sku}{(p.enable_stock !== false && p.stock !== Infinity) ? ` · ${avail <= 0 ? 'Out of stock' : avail + ' in stock'}${inCart ? ` (${locStock}−${inCartQty})` : ''}` : ''}</span>
         </span>
         <span style={{ fontFamily: T.fMono, fontSize: 14, fontWeight: 500, color: D.ink }}>{money(priceOf(p))}</span>
         <span style={{ width: 28, height: 28, borderRadius: 7, flexShrink: 0, background: inCart ? T.accent.base : (dark ? '#1d2c44' : T.paperSink), color: inCart ? '#fff' : D.sub, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, fontWeight: 700, fontFamily: T.fMono }}>{inCart ? inCartQty : '+'}</span>
@@ -569,6 +585,18 @@ export function POS({ T, tweaks }: { T: any; tweaks: any }) {
           {!isMobile && (register
             ? <button onClick={() => setRegModal('details')} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 11px', borderRadius: 99, cursor: 'pointer', background: T.greenSoft, border: `1px solid ${T.green}33`, color: T.greenText, fontSize: 11.5, fontWeight: 700, fontFamily: T.fBody }}>● Register open · {money(register.expected_cash)}</button>
             : <button onClick={() => setRegModal('open')} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 11px', borderRadius: 99, cursor: 'pointer', background: T.amberSoft, border: `1px solid ${T.amber}33`, color: T.amberText, fontSize: 11.5, fontWeight: 700, fontFamily: T.fBody }}>○ Open register</button>)}
+          {/* Selling location: single = fixed chip; multiple = dropdown. An open
+              register pins it — sales post to the register's location. */}
+          {!isMobile && locations.length === 1 && (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 11px', borderRadius: 99, background: D.chip, border: `1px solid ${D.railLine}`, color: D.chipText, fontSize: 11.5, fontWeight: 700, fontFamily: T.fBody, whiteSpace: 'nowrap' } as React.CSSProperties}>☖ {locations[0].name}</span>
+          )}
+          {!isMobile && locations.length > 1 && (
+            <select value={posLoc} onChange={e => setPosLoc(e.target.value)} disabled={!!register}
+              title={register ? 'Location is set by the open register — close it to switch' : 'Selling location'}
+              style={{ ...pillBtn(D, T), appearance: 'none', cursor: register ? 'not-allowed' : 'pointer', paddingRight: 12, opacity: register ? 0.75 : 1 } as React.CSSProperties}>
+              {locations.map((l: any) => <option key={l.id} value={String(l.id)}>☖ {l.name}</option>)}
+            </select>
+          )}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {!isMobile && <button onClick={() => setParkedOpen(true)} style={{ ...pillBtn(D, T), border: parked.length ? `1px solid ${T.accent.base}` : pillBtn(D, T).border, color: parked.length ? T.accent.text : D.chipText }}>⏸ Parked <b style={{ fontFamily: T.fMono }}>{parked.length}</b></button>}
@@ -786,7 +814,7 @@ export function POS({ T, tweaks }: { T: any; tweaks: any }) {
         </div>
       )}
 
-      {regModal && <RegisterModal T={T} mode={regModal} register={register} onClose={() => setRegModal(null)}
+      {regModal && <RegisterModal T={T} mode={regModal} register={register} defaultLocId={posLoc} onClose={() => setRegModal(null)}
         onSwitchClose={() => setRegModal('close')}
         onOpened={(r: any) => { setRegister(r); setRegModal(null); }}
         onClosed={() => { setRegister(null); setRegModal(null); }} />}
@@ -832,7 +860,7 @@ function custRow(T: any, active: any): React.CSSProperties {
 }
 
 // ── Cash register: open / details / close ───────────────────────────
-function RegisterModal({ T, mode, register, onClose, onOpened, onClosed, onSwitchClose }: { T: any; mode: any; register: any; onClose: () => void; onOpened: (r: any) => void; onClosed: () => void; onSwitchClose: () => void }) {
+function RegisterModal({ T, mode, register, defaultLocId, onClose, onOpened, onClosed, onSwitchClose }: { T: any; mode: any; register: any; defaultLocId?: any; onClose: () => void; onOpened: (r: any) => void; onClosed: () => void; onSwitchClose: () => void }) {
   const [openingCash, setOpeningCash] = useStateP('100');
   const [locId, setLocId] = useStateP<any>('');   // location id (UUID in real mode)
   const [locs, setLocs] = useStateP<any[]>([]);
@@ -841,7 +869,7 @@ function RegisterModal({ T, mode, register, onClose, onOpened, onClosed, onSwitc
   const [err, setErr] = useStateP<any>(null);
   const [shiftId, setShiftId] = useStateP<any>('');
   const [shifts, setShifts] = useStateP<any[]>([]);
-  useEffectP(() => { if (mode === 'open') { API.location.list().then((ls: any[]) => { setLocs(ls); if (ls && ls[0]) setLocId(String(ls[0].id)); }).catch(() => {}); API.register.shifts().then(setShifts).catch(() => {}); } }, [mode]);
+  useEffectP(() => { if (mode === 'open') { API.location.list().then((ls: any[]) => { setLocs(ls); const preferred = defaultLocId && ls && ls.some((l: any) => String(l.id) === String(defaultLocId)) ? String(defaultLocId) : (ls && ls[0] ? String(ls[0].id) : ''); if (preferred) setLocId(preferred); }).catch(() => {}); API.register.shifts().then(setShifts).catch(() => {}); } }, [mode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function doOpen() {
     setBusy(true); setErr(null);
