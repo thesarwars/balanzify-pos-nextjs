@@ -94,9 +94,9 @@ export function POS({ T, tweaks }: { T: any; tweaks: any }) {
     API.discount.list().then(setDiscounts).catch(() => {});
     API.location.list().then((ls: any[]) => setLocations(ls || [])).catch(() => {});
     if (API.config?.isReal?.()) {
-      // Active products only — DELETE /products soft-deletes (isActive=false),
-      // and archived products must not appear on the sell grid.
-      API.product.list({ is_active: 'true' }).then((r: any) => setProds(r.items || [])).catch(() => {});
+      // Active + sellable only — DELETE /products soft-deletes (isActive=false)
+      // and "not for selling" items are catalog-only; neither belongs on the grid.
+      API.product.list({ is_active: 'true', sellable: '1' }).then((r: any) => setProds(r.items || [])).catch(() => {});
       API.category.list().then((cs: any) => setCats([{ id: 'all', name: 'All Items' }, ...(cs || [])])).catch(() => {});
     }
   }, []);
@@ -116,13 +116,16 @@ export function POS({ T, tweaks }: { T: any; tweaks: any }) {
 
   const items = useMemo(() => {
     let list = prods;
+    // Per-location availability: a product limited to specific locations only
+    // shows on tills selling from one of them (empty list = all locations).
+    if (posLoc) list = list.filter((p: any) => !Array.isArray(p.location_ids) || !p.location_ids.length || p.location_ids.some((id: any) => String(id) === String(posLoc)));
     if (cat !== 'all' && gridMode !== 'category') list = list.filter((p: any) => p.cat === cat);
     if (q.trim()) {
       const s = q.toLowerCase();
       list = list.filter((p: any) => p.name.toLowerCase().includes(s) || (p.sku || '').toLowerCase().includes(s));
     }
     return list;
-  }, [cat, q, gridMode, prods]);
+  }, [cat, q, gridMode, prods, posLoc]);
 
   // group-adjusted price + variation resolution
   const group = customer ? custGroups.find((g: any) => g.id === customer.customer_group_id) : null;

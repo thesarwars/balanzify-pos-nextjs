@@ -1361,6 +1361,17 @@ model Product {
   imageUrl           String?  @map("image_url")
   imageKey           String?  @map("image_key")
   notes              String?
+  // ── Catalog profile (reference product form) ──
+  barcodeType         String   @default("C128") @map("barcode_type") @db.VarChar(10) // C128 | C39 | EAN13 | EAN8 | UPCA | UPCE
+  weight              Decimal? @db.Decimal(10, 3)
+  prepTimeMinutes     Int?     @map("prep_time_minutes") // service staff timer / preparation time
+  notForSelling       Boolean  @default(false) @map("not_for_selling") // stocked but never sold (raw materials, internal use)
+  enableStock         Boolean  @default(true) @map("enable_stock") // off = unlimited (services)
+  sellingPriceTaxType String   @default("exclusive") @map("selling_price_tax_type") @db.VarChar(10) // exclusive | inclusive
+  brochureUrl         String?  @map("brochure_url")
+  brochureKey         String?  @map("brochure_key")
+  locationIds         String[] @map("location_ids") @db.Uuid // availability; empty = all locations
+  tileColor           String?  @map("tile_color") @db.VarChar(10)
   createdAt          DateTime @default(now()) @map("created_at")
   updatedAt          DateTime @default(now()) @updatedAt @map("updated_at")
 

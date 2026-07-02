@@ -25,7 +25,7 @@ export function Products({ T }: { T: any }) {
   const [form, setForm] = useStatePr<any>({});
   const [saving, setSaving] = useStatePr(false);
   const [formErr, setFormErr] = useStatePr<any>(null);
-  const [refs, setRefs] = useStatePr<any>({ units: [], brands: [], variations: [], taxRates: [], priceGroups: [], cats: [] });
+  const [refs, setRefs] = useStatePr<any>({ units: [], brands: [], variations: [], taxRates: [], priceGroups: [], cats: [], locations: [] });
   const [unitMgr, setUnitMgr] = useStatePr(false);
   const [varMgr, setVarMgr] = useStatePr(false);
   const [pgMgr, setPgMgr] = useStatePr(false);
@@ -34,6 +34,7 @@ export function Products({ T }: { T: any }) {
   const [confirmDel, setConfirmDel] = useStatePr<any>(null);
   const [toast, toastNode] = useToast();
   const fileRef = React.useRef<any>(null);
+  const brochureRef = React.useRef<any>(null);
 
   // Load the catalog from the API (GET /connector/api/product).
   const reload = React.useCallback(() => {
@@ -47,8 +48,9 @@ export function Products({ T }: { T: any }) {
 
   // Load catalog reference data (units, brands, variation templates, taxes).
   const loadRefs = React.useCallback(() => {
-    Promise.all([API.unit.list(), API.brand.list(), API.variation.list(), API.taxRate.list(), API.priceGroup.list(), API.category.list()])
-      .then(([units, brands, variations, taxRates, priceGroups, cats]: any) => setRefs({ units, brands, variations, taxRates, priceGroups, cats }))
+    const safe = (fn: () => Promise<any>) => { try { return Promise.resolve(fn()).catch(() => []); } catch { return Promise.resolve([]); } };
+    Promise.all([safe(() => API.unit.list()), safe(() => API.brand.list()), safe(() => API.variation.list()), safe(() => API.taxRate.list()), safe(() => API.priceGroup.list()), safe(() => API.category.list()), safe(() => API.location.list())])
+      .then(([units, brands, variations, taxRates, priceGroups, cats, locations]: any) => setRefs({ units, brands, variations, taxRates, priceGroups, cats, locations }))
       .catch(() => {});
   }, []);
   React.useEffect(() => { loadRefs(); }, [loadRefs]);
@@ -60,7 +62,17 @@ export function Products({ T }: { T: any }) {
     const reader = new FileReader();
     reader.onload = () => setF('img', reader.result);
     reader.readAsDataURL(f);
+    setF('_imgFile', f); // kept for the real S3 upload after save
     e.target.value = '';
+  }
+  async function onPickBrochure(e: any) {
+    const f = e.target.files && e.target.files[0]; e.target.value = '';
+    if (!f) return;
+    try {
+      const { url, key } = await API.upload.file(f);
+      setForm((prev: any) => ({ ...prev, brochure_url: url, brochure_key: key }));
+      toast('Brochure uploaded');
+    } catch (ex: any) { toast(ex.message || 'Could not upload the brochure.'); }
   }
 
   let rows = list;
@@ -75,16 +87,20 @@ export function Products({ T }: { T: any }) {
 
   const SWATCHES = ['#E7B85C', '#7FB7D6', '#C0504D', '#5B8A4C', '#D9C9A3', '#9AC0CB', '#B5793F', '#7A4A2B'];
 
+  const blankForm = () => ({
+    type: 'single', name: '', sku: '', sku_prefix: '', cat: cats[0].id,
+    unit: (refs.units[0] || {}).short_name || 'Pc(s)', brand_id: '', tax_id: 0,
+    alert_quantity: '', enable_stock: true, not_for_selling: false,
+    price: '', cost: '', stock: '',
+    var_template_id: '', variations: [], combo: [],
+    sw: SWATCHES[Math.floor(Math.random() * SWATCHES.length)], img: null, _imgFile: null,
+    barcode: '', barcode_type: 'C128', weight: '', prep_time_minutes: '',
+    is_serialized: false, selling_price_tax_type: 'exclusive',
+    location_ids: [], description: '', brochure_url: '', brochure_key: '',
+  });
   function openNew() {
     setEditing(null); setFormErr(null);
-    setForm({
-      type: 'single', name: '', sku: '', sku_prefix: '', cat: cats[0].id,
-      unit: (refs.units[0] || {}).short_name || 'Pc(s)', brand_id: '', tax_id: 0,
-      alert_quantity: '', enable_stock: true, not_for_selling: false,
-      price: '', cost: '', stock: '',
-      var_template_id: '', variations: [], combo: [],
-      sw: SWATCHES[Math.floor(Math.random() * SWATCHES.length)], img: null,
-    });
+    setForm(blankForm());
     setOpen(true);
   }
   function openEdit(p: any) {
@@ -96,7 +112,13 @@ export function Products({ T }: { T: any }) {
       enable_stock: p.enable_stock !== false, not_for_selling: !!p.not_for_selling,
       price: String(p.price ?? ''), cost: String(p.cost ?? ''), stock: p.stock === Infinity ? '' : String(p.stock ?? ''),
       var_template_id: '', variations: (p.variations || []).map((v: any) => ({ ...v, cost: String(v.cost), price: String(v.price), stock: String(v.stock) })),
-      combo: (p.combo || []).map((c: any) => ({ ...c })), sw: p.sw, img: p.img || null,
+      combo: (p.combo || []).map((c: any) => ({ ...c })), sw: p.sw, img: p.img || null, _imgFile: null,
+      barcode: p.barcode || '', barcode_type: p.barcode_type || 'C128',
+      weight: p.weight != null && p.weight !== '' ? String(p.weight) : '',
+      prep_time_minutes: p.prep_time_minutes != null && p.prep_time_minutes !== '' ? String(p.prep_time_minutes) : '',
+      is_serialized: !!p.is_serialized, selling_price_tax_type: p.selling_price_tax_type || 'exclusive',
+      location_ids: Array.isArray(p.location_ids) ? [...p.location_ids] : [],
+      description: p.description || '', brochure_url: p.brochure_url || '', brochure_key: p.brochure_key || '',
     });
     setOpen(true);
   }
@@ -123,25 +145,39 @@ export function Products({ T }: { T: any }) {
     if (form.type === 'combo' && !form.combo.length) return 'Add at least one product to the combo.';
     return null;
   }
-  async function save() {
+  async function save(andAnother = false) {
     const err = validate();
     if (err) { setFormErr(err); return; }
     setFormErr(null); setSaving(true);
     const payload = {
       type: form.type, name: form.name.trim(), sku: form.sku.trim(), sku_prefix: form.sku_prefix,
       cat: form.cat, unit: form.unit, sw: form.sw, img: form.img,
-      brand_id: form.brand_id ? (/^\d+$/.test(String(form.brand_id)) ? Number(form.brand_id) : form.brand_id) : null, tax_id: Number(form.tax_id) || 0,
+      brand_id: form.brand_id ? (/^\d+$/.test(String(form.brand_id)) ? Number(form.brand_id) : form.brand_id) : null, tax_id: form.tax_id || 0,
       alert_quantity: Number(form.alert_quantity || 0),
       enable_stock: form.type === 'combo' ? true : form.enable_stock, not_for_selling: form.not_for_selling,
       price: parseFloat(form.price || 0), cost: parseFloat(form.cost || 0), stock: parseInt(form.stock || 0),
       variations: form.variations.map((v: any) => ({ name: v.name, sku: v.sku, cost: parseFloat(v.cost || 0), price: parseFloat(v.price || 0), stock: parseInt(v.stock || 0) })),
       combo: form.combo,
+      barcode: form.barcode, barcode_type: form.barcode_type,
+      weight: form.weight, prep_time_minutes: form.prep_time_minutes,
+      is_serialized: form.is_serialized, selling_price_tax_type: form.selling_price_tax_type,
+      location_ids: form.location_ids, description: form.description,
+      brochure_url: form.brochure_url, brochure_key: form.brochure_key,
     };
     try {
+      let savedId: any = editing && editing.id;
       if (editing) { const up = await API.product.update(editing.id, payload); if (sel && sel.id === editing.id) setSel(up); }
-      else await API.product.create(payload);
-      setOpen(false);
+      else { const created = await API.product.create(payload); savedId = created && created.id; }
+      // Real photo upload (S3) — the dataURL preview is only local.
+      if (savedId && API.config?.isReal?.()) {
+        try {
+          if (form._imgFile) await API.upload.productImage(savedId, form._imgFile);
+          else if (editing && editing.img && !form.img) await API.upload.removeProductImage(savedId);
+        } catch { toast('Product saved, but the photo upload failed.'); }
+      }
       toast(editing ? 'Product updated' : 'Product created');
+      if (andAnother) { setEditing(null); setForm(blankForm()); }
+      else setOpen(false);
       reload();
     } catch (ex: any) { setFormErr(ex.message || 'Could not save the product.'); }
     finally { setSaving(false); }
@@ -305,7 +341,8 @@ export function Products({ T }: { T: any }) {
           footer={<>
             <div style={{ flex: 1 }} />
             <Btn T={T} kind="ghost" onClick={() => setOpen(false)}>Cancel</Btn>
-            <Btn T={T} kind="accent" onClick={save} disabled={saving}>{saving ? 'Saving…' : editing ? 'Save changes' : 'Create product'}</Btn>
+            {!editing && <Btn T={T} kind="ghost" onClick={() => save(true)} disabled={saving}>{saving ? '…' : 'Save & add another'}</Btn>}
+            <Btn T={T} kind="accent" onClick={() => save()} disabled={saving}>{saving ? 'Saving…' : editing ? 'Save changes' : 'Create product'}</Btn>
           </>}>
           {/* product type */}
           <div style={{ marginBottom: 20 }}>
@@ -338,30 +375,69 @@ export function Products({ T }: { T: any }) {
             </Field>
             <Field T={T} label="Product name" full><TextField T={T} value={form.name} onChange={(v: any) => setF('name', v)} placeholder="e.g. Basmati Rice 5kg" /></Field>
 
-            <Field T={T} label={form.sku ? 'SKU' : 'SKU (auto-generated if blank)'}><TextField T={T} value={form.sku} onChange={(v: any) => setF('sku', v)} placeholder="Scan barcode or leave blank" /></Field>
+            <Field T={T} label={form.sku ? 'SKU' : 'SKU (auto-generated if blank)'}><TextField T={T} value={form.sku} onChange={(v: any) => setF('sku', v)} placeholder="Leave blank to auto-generate" /></Field>
+            <Field T={T} label="Barcode"><TextField T={T} value={form.barcode} onChange={(v: any) => setF('barcode', v)} placeholder="Scan or type barcode" /></Field>
+            <Field T={T} label="Barcode type"><SelectField T={T} value={form.barcode_type} options={['C128', 'C39', 'EAN13', 'EAN8', 'UPCA', 'UPCE']} onChange={(v: any) => setF('barcode_type', v)} render={(v: any) => (({ C128: 'Code 128 (C128)', C39: 'Code 39 (C39)', EAN13: 'EAN-13', EAN8: 'EAN-8', UPCA: 'UPC-A', UPCE: 'UPC-E' } as any)[v] || v)} /></Field>
             <Field T={T} label="Category"><SelectField T={T} value={form.cat} options={cats.map((c: any) => c.id)} onChange={(v: any) => setF('cat', v)} /></Field>
             <Field T={T} label="Brand">
               <SelectField T={T} value={String(form.brand_id)} options={[{ v: '', l: '— None —' }, ...refs.brands.map((b: any) => ({ v: String(b.id), l: b.name }))].map((o: any) => o.v)} onChange={(v: any) => setF('brand_id', v)}
                 render={(v: any) => (refs.brands.find((b: any) => String(b.id) === v) || {}).name || '— None —'} />
             </Field>
             <Field T={T} label="Unit"><SelectField T={T} value={form.unit} options={refs.units.map((u: any) => u.short_name)} onChange={(v: any) => setF('unit', v)} /></Field>
-            <Field T={T} label="Applicable tax"><SelectField T={T} value={String(form.tax_id)} options={refs.taxRates.map((t: any) => String(t.id))} onChange={(v: any) => setF('tax_id', v)} render={(v: any) => (refs.taxRates.find((t: any) => String(t.id) === v) || {}).name || 'None'} /></Field>
+            <Field T={T} label="Applicable tax"><SelectField T={T} value={String(form.tax_id)} options={['', ...refs.taxRates.map((t: any) => String(t.id))]} onChange={(v: any) => setF('tax_id', v)} render={(v: any) => (refs.taxRates.find((t: any) => String(t.id) === v) || {}).name || 'None'} /></Field>
+            <Field T={T} label="Selling price tax type"><SelectField T={T} value={form.selling_price_tax_type} options={['exclusive', 'inclusive']} onChange={(v: any) => setF('selling_price_tax_type', v)} render={(v: any) => (v === 'inclusive' ? 'Inclusive' : 'Exclusive')} /></Field>
             <Field T={T} label="Alert quantity"><TextField T={T} type="number" value={form.alert_quantity} onChange={(v: any) => setF('alert_quantity', v)} placeholder="Low-stock threshold" /></Field>
+            <Field T={T} label="Weight"><TextField T={T} type="number" value={form.weight} onChange={(v: any) => setF('weight', v)} placeholder="e.g. 0.5" /></Field>
+            <Field T={T} label="Preparation time (minutes)"><TextField T={T} type="number" value={form.prep_time_minutes} onChange={(v: any) => setF('prep_time_minutes', v)} placeholder="Service staff timer" /></Field>
 
             {/* toggles */}
             <Field T={T} label="Inventory options" full>
               <div style={{ display: 'flex', gap: 22, flexWrap: 'wrap' }}>
                 {form.type !== 'combo' && <Toggle T={T} on={form.enable_stock} onChange={(v: any) => setF('enable_stock', v)} label="Manage stock" hint="Off = sell unlimited (services)" />}
                 <Toggle T={T} on={form.not_for_selling} onChange={(v: any) => setF('not_for_selling', v)} label="Not for selling" hint="Hide from POS & Sales" />
+                <Toggle T={T} on={form.is_serialized} onChange={(v: any) => setF('is_serialized', v)} label="IMEI / serial number" hint="Track each unit's serial" />
               </div>
             </Field>
 
-            {/* SINGLE pricing */}
+            {/* per-location availability */}
+            {refs.locations.length > 1 && (
+              <Field T={T} label="Business locations" hint="Which locations sell this — none selected = all" full>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {refs.locations.map((l: any) => {
+                    const on = form.location_ids.includes(l.id);
+                    return (
+                      <button key={l.id} onClick={() => setF('location_ids', on ? form.location_ids.filter((x: any) => x !== l.id) : [...form.location_ids, l.id])} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '7px 13px', borderRadius: 99, cursor: 'pointer', fontFamily: T.fBody, fontSize: 12.5, fontWeight: 600, background: on ? T.accent.soft : T.paper, border: `1.5px solid ${on ? T.accent.base : T.line}`, color: on ? T.accent.text : T.inkMid }}>
+                        <span style={{ fontSize: 11 }}>{on ? '✓' : '+'}</span>{l.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              </Field>
+            )}
+
+            <Field T={T} label="Product description" full>
+              <textarea value={form.description} onChange={e => setF('description', e.target.value)} placeholder="Optional description shown on catalogs & invoices" rows={3}
+                style={{ width: '100%', padding: '10px 13px', fontSize: 13.5, fontFamily: T.fBody, color: T.ink, background: T.paper, border: `1.5px solid ${T.line}`, borderRadius: T.r, outline: 'none', resize: 'vertical', boxSizing: 'border-box' }} />
+            </Field>
+
+            <Field T={T} label="Product brochure" hint="PDF, CSV, ZIP, DOC, DOCX or image · up to 5 MB" full>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <input ref={brochureRef} type="file" accept=".pdf,.csv,.zip,.doc,.docx,.jpeg,.jpg,.png" onChange={onPickBrochure} style={{ display: 'none' }} />
+                <Btn T={T} kind="ghost" onClick={() => brochureRef.current && brochureRef.current.click()}>{form.brochure_url ? '↻ Replace file' : '⍑ Choose file'}</Btn>
+                {form.brochure_url && <a href={form.brochure_url} target="_blank" rel="noreferrer" style={{ fontSize: 12.5, color: T.accent.text, fontWeight: 600 }}>View uploaded file</a>}
+                {form.brochure_url && <button onClick={() => { setF('brochure_url', ''); setF('brochure_key', ''); }} style={{ background: 'none', border: 'none', color: T.redText, fontSize: 12, fontWeight: 600, cursor: 'pointer', padding: 0, fontFamily: T.fBody }}>Remove</button>}
+              </div>
+            </Field>
+
+            {/* SINGLE pricing — margin drives the selling price (reference behaviour) */}
             {form.type === 'single' && <>
-              <Field T={T} label="Cost price ($)"><TextField T={T} type="number" value={form.cost} onChange={(v: any) => setF('cost', v)} placeholder="0.00" /></Field>
+              <Field T={T} label="Purchase price ($)"><TextField T={T} type="number" value={form.cost} onChange={(v: any) => setF('cost', v)} placeholder="0.00" /></Field>
+              <Field T={T} label="Margin (%)">
+                <TextField T={T} type="number" value={form.price && form.cost ? String(marginOf(form)) : ''} placeholder="e.g. 25"
+                  onChange={(v: any) => { const c = parseFloat(form.cost || 0); const m = parseFloat(v); if (c > 0 && !isNaN(m)) setF('price', (Math.round(c / (1 - Math.min(m, 99.99) / 100) * 100) / 100).toFixed(2)); }} />
+              </Field>
               <Field T={T} label="Selling price ($)"><TextField T={T} type="number" value={form.price} onChange={(v: any) => setF('price', v)} placeholder="0.00" /></Field>
               {form.enable_stock && <Field T={T} label="Opening stock"><TextField T={T} type="number" value={form.stock} onChange={(v: any) => setF('stock', v)} placeholder="0" /></Field>}
-              <Field T={T} label="Margin"><div style={{ padding: '10px 13px', borderRadius: T.r, background: T.paperAlt, border: `1px solid ${T.line}`, fontSize: 14, fontFamily: T.fMono, color: marginOf(form) >= 0 ? T.greenText : T.redText }}>{form.price && form.cost ? marginOf(form) + '%' : '—'}</div></Field>
             </>}
           </FormGrid>
 

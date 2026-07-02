@@ -65,6 +65,19 @@ const ProductSchema = z.object({
   notes: optStr(2000),
   opening_stock: nonNegInt.optional(),
   location_id: uuid.optional().nullable(),
+  // Catalog profile (reference product form)
+  barcode_type: z.enum(['C128', 'C39', 'EAN13', 'EAN8', 'UPCA', 'UPCE']).optional(),
+  weight: z.coerce.number().nonnegative().optional().nullable(),
+  prep_time_minutes: z.coerce.number().int().nonnegative().max(100000).optional().nullable(),
+  not_for_selling: z.boolean().optional(),
+  enable_stock: z.boolean().optional(),
+  selling_price_tax_type: z.enum(['exclusive', 'inclusive']).optional(),
+  tax_rate_id: uuid.optional().nullable(),
+  is_serialized: z.boolean().optional(),
+  brochure_url: optStr(500),
+  brochure_key: optStr(500),
+  location_ids: z.array(uuid).max(100).optional(),
+  tile_color: optStr(10),
 });
 
 // ── Sales ────────────────────────────────────────────────────────────────────

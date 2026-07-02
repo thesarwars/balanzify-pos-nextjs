@@ -1979,11 +1979,26 @@ function adaptRealProduct(p: any): any {
     cost: Number(p.costPrice ?? p.cost_price ?? 0),
     stock: p.total_stock ?? (Array.isArray(p.stockLevels) ? p.stockLevels.reduce((s: number, sl: any) => s + (sl.quantity || 0), 0) : 0),
     unit: p.unitOfMeasure || p.unit_of_measure || 'unit',
-    sw: (p.category && p.category.color) || '#D9C9A3',
+    sw: p.tileColor || (p.category && p.category.color) || '#D9C9A3',
     img: p.imageUrl || p.image_url || null,
     alert_quantity: p.reorderPoint ?? p.minStockLevel ?? 0,
     barcode: p.barcode || '',
-    not_for_selling: p.isActive === false,
+    // Distinct flags: archived (isActive=false, hidden everywhere) vs flagged
+    // "not for selling" (kept in the catalog, excluded from POS/sales).
+    not_for_selling: p.notForSelling === true,
+    is_archived: p.isActive === false,
+    enable_stock: p.enableStock !== false,
+    type: Array.isArray(p.variants) && p.variants.length ? 'variable' : 'single',
+    barcode_type: p.barcodeType || 'C128',
+    weight: p.weight != null ? Number(p.weight) : '',
+    prep_time_minutes: p.prepTimeMinutes ?? '',
+    is_serialized: !!p.isSerialized,
+    tax_id: p.taxRateId || '',
+    selling_price_tax_type: p.sellingPriceTaxType || 'exclusive',
+    brochure_url: p.brochureUrl || '',
+    brochure_key: p.brochureKey || '',
+    location_ids: Array.isArray(p.locationIds) ? p.locationIds : [],
+    description: p.description || '',
     variations: Array.isArray(p.variants) ? p.variants.map((v: any) => ({ id: v.id, name: attrsToName(v.attributes), price: Number(v.sellingPrice ?? 0), cost: Number(v.costPrice ?? 0), stock: 0, sub_sku: v.sku || '' })) : [],
     _real: p,
   };
@@ -2000,8 +2015,21 @@ function toRealProductBody(vm: any): any {
     cost_price: Number(vm.cost || 0),
     selling_price: Number(vm.price || 0),
     reorder_point: Number(vm.alert_quantity || 0),
-    is_active: vm.not_for_selling ? false : true,
-    opening_stock: vm.stock != null ? Number(vm.stock) : undefined,
+    opening_stock: vm.stock != null && vm.stock !== '' ? Number(vm.stock) : undefined,
+    // Catalog profile — "not for selling" is its own flag now, NOT is_active.
+    not_for_selling: !!vm.not_for_selling,
+    enable_stock: vm.enable_stock !== false,
+    barcode_type: vm.barcode_type || undefined,
+    weight: vm.weight !== '' && vm.weight != null ? Number(vm.weight) : undefined,
+    prep_time_minutes: vm.prep_time_minutes !== '' && vm.prep_time_minutes != null ? Number(vm.prep_time_minutes) : undefined,
+    is_serialized: vm.is_serialized !== undefined ? !!vm.is_serialized : undefined,
+    tax_rate_id: isUuid(vm.tax_id) ? vm.tax_id : null,
+    selling_price_tax_type: vm.selling_price_tax_type || undefined,
+    brochure_url: vm.brochure_url || undefined,
+    brochure_key: vm.brochure_key || undefined,
+    location_ids: Array.isArray(vm.location_ids) ? vm.location_ids : undefined,
+    tile_color: vm.sw || undefined,
+    description: vm.description || undefined,
   };
 }
 // Map the mock POS payment method → backend enum.
@@ -3246,6 +3274,29 @@ const API: any = {
     async remove(key: string): Promise<any> {
       if (!key) return;
       return realReq('DELETE', '/upload/image', { query: { key } });
+    },
+    // Documents (product brochures): pdf/csv/zip/doc/docx/jpg/png.
+    async file(file: any): Promise<{ url: string; key: string }> {
+      const fd = new FormData();
+      fd.append('file', file);
+      const tok = getAccessToken();
+      const res = await fetch(BACKEND_BASE + '/api/v1/upload/file', { method: 'POST', headers: tok ? { Authorization: 'Bearer ' + tok } : {}, body: fd });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new ApiError(res.status, (json && (json.title || json.message || json.detail)) || 'Upload failed', null);
+      return json;
+    },
+    // Product photo — dedicated endpoint sets imageUrl and cleans up the old object.
+    async productImage(productId: string, file: any): Promise<{ url: string; key: string }> {
+      const fd = new FormData();
+      fd.append('image', file);
+      const tok = getAccessToken();
+      const res = await fetch(BACKEND_BASE + '/api/v1/upload/product/' + productId + '/image', { method: 'POST', headers: tok ? { Authorization: 'Bearer ' + tok } : {}, body: fd });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new ApiError(res.status, (json && (json.title || json.message || json.detail)) || 'Upload failed', null);
+      return json;
+    },
+    async removeProductImage(productId: string): Promise<any> {
+      return realReq('DELETE', '/upload/product/' + productId + '/image');
     },
   },
   discount: {

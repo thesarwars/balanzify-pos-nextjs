@@ -10,8 +10,8 @@ const router = express.Router();
 // ==========================================
 router.get('/', auth, async (req, res, next) => {
   try {
-    const { page = 1, limit = 100, search, category_id, is_active, low_stock } = req.query;
-    
+    const { page = 1, limit = 100, search, category_id, is_active, low_stock, sellable } = req.query;
+
     const where = {
       businessId: req.user.business_id,
       ...(search && {
@@ -23,6 +23,8 @@ router.get('/', auth, async (req, res, next) => {
       }),
       ...(category_id && { categoryId: category_id }),
       ...(is_active !== undefined && { isActive: is_active === 'true' }),
+      // POS: exclude items flagged "not for selling" (raw materials, internal use).
+      ...(sellable === '1' && { notForSelling: false }),
     };
 
     const products = await prisma.product.findMany({
@@ -87,9 +89,38 @@ router.get('/:id', auth, async (req, res, next) => {
 // ==========================================
 // POST / - Create a Product & Initialize Stock
 // ==========================================
+// Catalog-profile fields (reference product form) → Prisma columns; only maps
+// keys present so PUT stays partial.
+function productProfileData(b) {
+  const d = {};
+  if (b.barcode_type           !== undefined) d.barcodeType = b.barcode_type;
+  if (b.weight                 !== undefined) d.weight = b.weight;
+  if (b.prep_time_minutes      !== undefined) d.prepTimeMinutes = b.prep_time_minutes;
+  if (b.not_for_selling        !== undefined) d.notForSelling = b.not_for_selling;
+  if (b.enable_stock           !== undefined) d.enableStock = b.enable_stock;
+  if (b.selling_price_tax_type !== undefined) d.sellingPriceTaxType = b.selling_price_tax_type;
+  if (b.tax_rate_id            !== undefined) d.taxRateId = b.tax_rate_id || null;
+  if (b.is_serialized          !== undefined) d.isSerialized = b.is_serialized;
+  if (b.brochure_url           !== undefined) d.brochureUrl = b.brochure_url || null;
+  if (b.brochure_key           !== undefined) d.brochureKey = b.brochure_key || null;
+  if (b.location_ids           !== undefined) d.locationIds = b.location_ids || [];
+  if (b.tile_color             !== undefined) d.tileColor = b.tile_color || null;
+  return d;
+}
+
+// Cross-tenant guard for catalog references.
+async function invalidProductRef(b, businessId) {
+  if (b.tax_rate_id && !(await prisma.taxRate.count({ where: { id: b.tax_rate_id, businessId } }))) return 'Tax rate not found';
+  const locs = Array.isArray(b.location_ids) ? [...new Set(b.location_ids)] : [];
+  if (locs.length && (await prisma.location.count({ where: { id: { in: locs }, businessId } })) !== locs.length) return 'One or more locations not found';
+  return null;
+}
+
 router.post('/', auth, requireRole('owner', 'manager'), validate(ProductSchema), async (req, res, next) => {
   try {
     const { opening_stock, location_id, ...data } = req.body;
+    const bad = await invalidProductRef(data, req.user.business_id);
+    if (bad) return res.status(400).json({ title: bad, status: 400 });
 
     const product = await prisma.$transaction(async (tx) => {
       // 1. Create the base product record
@@ -97,7 +128,8 @@ router.post('/', auth, requireRole('owner', 'manager'), validate(ProductSchema),
         data: {
           businessId: req.user.business_id,
           name: data.name,
-          sku: data.sku || null,
+          // Blank SKU auto-generates a unique one (reference behaviour).
+          sku: data.sku || ('SKU-' + Date.now().toString(36).toUpperCase() + Math.floor(Math.random() * 1296).toString(36).toUpperCase().padStart(2, '0')),
           barcode: data.barcode || null,
           description: data.description || null,
           categoryId: data.category_id || null,
@@ -113,6 +145,7 @@ router.post('/', auth, requireRole('owner', 'manager'), validate(ProductSchema),
           allowPriceOverride: data.allow_price_override ?? true,
           isActive: data.is_active ?? true,
           notes: data.notes || null,
+          ...productProfileData(data),
         },
       });
 
@@ -174,13 +207,20 @@ router.put('/:id', auth, requireRole('owner', 'manager'), validate(ProductSchema
     const {
       opening_stock, location_id, category_id, brand_id, unit_of_measure, cost_price, selling_price,
       wholesale_price, min_stock_level, max_stock_level, reorder_point, track_expiry,
-      allow_price_override, is_active, ...rest
+      allow_price_override, is_active,
+      barcode_type, weight, prep_time_minutes, not_for_selling, enable_stock,
+      selling_price_tax_type, tax_rate_id, is_serialized, brochure_url, brochure_key,
+      location_ids, tile_color, ...rest
     } = req.body;
+
+    const bad = await invalidProductRef(req.body, req.user.business_id);
+    if (bad) return res.status(400).json({ title: bad, status: 400 });
 
     const updated = await prisma.product.update({
       where: { id: req.params.id },
       data: {
         ...rest,
+        ...productProfileData(req.body),
         ...(category_id !== undefined && { categoryId: category_id }),
         ...(brand_id !== undefined && { brandId: brand_id }),
         ...(unit_of_measure && { unitOfMeasure: unit_of_measure }),

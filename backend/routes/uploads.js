@@ -17,6 +17,22 @@ router.post('/image', auth, requireRole('owner', 'manager'), upload.single('imag
   } catch (err) { next(err); }
 });
 
+// ── Generic document upload (e.g. product brochure) ───────────────────────────
+// Accepts the reference's brochure types; returns { url, key }.
+const DOC_MIMES = new Set([
+  'application/pdf', 'text/csv', 'application/zip', 'application/x-zip-compressed',
+  'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'image/jpeg', 'image/png', 'image/webp',
+]);
+router.post('/file', auth, requireRole('owner', 'manager'), upload.single('file'), async (req, res, next) => {
+  try {
+    if (!req.file) return res.status(400).json({ title: 'No file uploaded', status: 400 });
+    if (!DOC_MIMES.has(req.file.mimetype)) return res.status(400).json({ title: 'File type not allowed (pdf, csv, zip, doc, docx, jpg, png)', status: 400 });
+    const { url, key } = await uploadBuffer(req.file.buffer, req.file.mimetype, 'files', req.user.business_id);
+    res.json({ url, key });
+  } catch (err) { next(err); }
+});
+
 // Delete a previously uploaded image — the key must belong to this business.
 router.delete('/image', auth, requireRole('owner', 'manager'), async (req, res, next) => {
   try {
