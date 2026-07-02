@@ -27,7 +27,7 @@ export function Purchases({ T }: { T: any }) {
 
   const reload = React.useCallback(() => {
     setLoading(true);
-    API.purchase.list().then(setRows).catch(() => setRows([])).finally(() => setLoading(false));
+    API.purchaseOrder.list().then(setRows).catch(() => setRows([])).finally(() => setLoading(false));
   }, []);
   useEffectPu(() => { reload(); }, [reload]);
   useEffectPu(() => {
@@ -86,30 +86,53 @@ export function Purchases({ T }: { T: any }) {
 // ── Purchase editor ─────────────────────────────────────────────────
 function PurchaseEditor({ T, suppliers, locs, onClose, onSaved }: { T: any; suppliers: any; locs: any; onClose: () => void; onSaved: () => void }) {
   const [supplier_id, setSupplier] = useStatePu<any>('');
-  const [location_id, setLocation] = useStatePu<any>((locs[0] || {}).id || 1);
+  const [location_id, setLocation] = useStatePu<any>((locs[0] || {}).id || '');
   const [date, setDate] = useStatePu(new Date().toISOString().slice(0, 10));
-  const [lines, setLines] = useStatePu<any[]>([{ product_id: '', qty: '', unit_cost: '' }]);
-  const [discount, setDiscount] = useStatePu<any>('');
+  const [lines, setLines] = useStatePu<any[]>([{ product_id: '', qty: '', unit_cost: '', unit_id: '' }]);
   const [paid, setPaid] = useStatePu<any>('');
   const [busy, setBusy] = useStatePu(false);
   const [err, setErr] = useStatePu<any>(null);
   // Live catalog in real mode; seed PRODUCTS is the mock fallback.
   const [catalog, setCatalog] = useStatePu<any[]>(PRODUCTS);
-  useEffectPu(() => { if (API.config?.isReal?.()) API.product.list({ per_page: 200 }).then((r: any) => setCatalog(r.items || [])).catch(() => {}); }, []);
+  const [units, setUnits] = useStatePu<any[]>([]);
+  useEffectPu(() => {
+    if (API.config?.isReal?.()) API.product.list({ per_page: 200 }).then((r: any) => setCatalog(r.items || [])).catch(() => {});
+    API.unit.list().then((us: any) => setUnits(Array.isArray(us) ? us : [])).catch(() => {});
+  }, []);
   const products = catalog.filter((p: any) => p.type !== 'combo' && p.enable_stock !== false);
 
   const setLine = (i: any, k: any, v: any) => setLines((ls: any) => ls.map((l: any, j: any) => j === i ? { ...l, [k]: v } : l));
-  const addLine = () => setLines((ls: any) => [...ls, { product_id: '', qty: '', unit_cost: '' }]);
+  const addLine = () => setLines((ls: any) => [...ls, { product_id: '', qty: '', unit_cost: '', unit_id: '' }]);
   const rmLine = (i: any) => setLines((ls: any) => ls.filter((_: any, j: any) => j !== i));
-  const onPickProduct = (i: any, pid: any) => { const p = products.find((p: any) => p.id === pid); setLines((ls: any) => ls.map((l: any, j: any) => j === i ? { ...l, product_id: pid, unit_cost: l.unit_cost || (p ? String(p.cost) : '') } : l)); };
+  const onPickProduct = (i: any, pid: any) => { const p = products.find((p: any) => p.id === pid); setLines((ls: any) => ls.map((l: any, j: any) => j === i ? { ...l, product_id: pid, unit_id: '', unit_cost: l.unit_cost || (p ? String(p.cost) : '') } : l)); };
+
+  // Purchase-unit options for a line: the product's base unit plus its multiples
+  // (1 Dozen = 12 Pieces). '' = base unit; qty & cost are per selected unit.
+  const unitOptsFor = (l: any) => {
+    const p = products.find((x: any) => x.id === l.product_id);
+    if (!p) return [];
+    const base = units.find((u: any) => u.short_name === p.unit || u.actual_name === p.unit);
+    if (!base) return [];
+    return units.filter((u: any) => String(u.base_unit_id) === String(base.id));
+  };
+  const baseUnitName = (l: any) => { const p = products.find((x: any) => x.id === l.product_id); return (p && p.unit) || 'unit'; };
 
   const subtotal = lines.reduce((s: any, l: any) => s + (Number(l.qty) || 0) * (Number(l.unit_cost) || 0), 0);
-  const total = subtotal - (Number(discount) || 0);
+  const total = subtotal;
 
   async function save() {
+    if (!supplier_id) { setErr('Pick a supplier.'); return; }
+    const valid = lines.filter((l: any) => l.product_id && Number(l.qty) > 0);
+    if (!valid.length) { setErr('Add at least one product line.'); return; }
     setBusy(true); setErr(null);
     try {
-      await API.purchase.create({ supplier_id, location_id, date, discount: Number(discount || 0), paid: Number(paid || 0), status: 'received', lines: lines.filter((l: any) => l.product_id && Number(l.qty) > 0) });
+      // Create the PO, then receive it in full (this screen records an
+      // on-the-spot purchase). Receiving converts multiples to base units.
+      const created = await API.purchaseOrder.create({ supplier_id, location_id, date, lines: valid });
+      const items = (created && created._real && created._real.items) || [];
+      const received = items.map((it: any) => ({ id: it.id, product_id: it.productId, qty: Number(it.orderedQty || 0), unit_price: Number(it.unitPrice || 0) }));
+      await API.purchaseOrder.setStatus(created.id, 'received', received);
+      if (Number(paid) > 0) await API.purchaseOrder.pay(created.id, Number(paid)).catch(() => {});
       onSaved();
     } catch (ex: any) { setErr(ex.message || 'Could not save the purchase.'); } finally { setBusy(false); }
   }
@@ -129,29 +152,33 @@ function PurchaseEditor({ T, suppliers, locs, onClose, onSaved }: { T: any; supp
 
       <div style={{ marginTop: 18, marginBottom: 9, fontSize: 12, fontWeight: 700, color: T.inkSub }}>PRODUCTS</div>
       <div style={{ border: `1px solid ${T.line}`, borderRadius: T.r, overflow: 'hidden' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 80px 100px 90px 34px', gap: 8, padding: '8px 12px', background: T.paperAlt, fontSize: 10, fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase', color: T.inkSub } as React.CSSProperties}>
-          <span>Product</span><span style={{ textAlign: 'right' }}>Qty</span><span style={{ textAlign: 'right' }}>Unit cost</span><span style={{ textAlign: 'right' }}>Subtotal</span><span></span>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 70px 110px 95px 90px 34px', gap: 8, padding: '8px 12px', background: T.paperAlt, fontSize: 10, fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase', color: T.inkSub } as React.CSSProperties}>
+          <span>Product</span><span style={{ textAlign: 'right' }}>Qty</span><span>Unit</span><span style={{ textAlign: 'right' }}>Cost / unit</span><span style={{ textAlign: 'right' }}>Subtotal</span><span></span>
         </div>
-        {lines.map((l: any, i: number) => (
-          <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 80px 100px 90px 34px', gap: 8, padding: '8px 12px', borderTop: `1px solid ${T.line}`, alignItems: 'center' }}>
+        {lines.map((l: any, i: number) => {
+          const opts = unitOptsFor(l);
+          return (
+          <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 70px 110px 95px 90px 34px', gap: 8, padding: '8px 12px', borderTop: `1px solid ${T.line}`, alignItems: 'center' }}>
             <select value={l.product_id} onChange={(e: any) => onPickProduct(i, e.target.value)} style={{ padding: '8px 10px', fontSize: 12.5, fontFamily: T.fBody, color: T.ink, background: T.paper, border: `1px solid ${T.line}`, borderRadius: 7, outline: 'none' }}>
               <option value="">Select product…</option>
               {products.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
             <input type="number" value={l.qty} onChange={(e: any) => setLine(i, 'qty', e.target.value)} placeholder="0" style={miniNum(T)} />
+            <select value={l.unit_id} onChange={(e: any) => setLine(i, 'unit_id', e.target.value)} disabled={!l.product_id} title="Purchase unit — multiples convert to base stock at receipt" style={{ padding: '8px 8px', fontSize: 12, fontFamily: T.fBody, color: T.ink, background: T.paper, border: `1px solid ${T.line}`, borderRadius: 7, outline: 'none', opacity: l.product_id ? 1 : 0.5 }}>
+              <option value="">{baseUnitName(l)}</option>
+              {opts.map((u: any) => <option key={u.id} value={u.id}>{u.short_name} (= {u.base_unit_multiplier} × {baseUnitName(l)})</option>)}
+            </select>
             <input type="number" value={l.unit_cost} onChange={(e: any) => setLine(i, 'unit_cost', e.target.value)} placeholder="0.00" style={miniNum(T)} />
             <span style={{ textAlign: 'right', fontFamily: T.fMono, fontSize: 12.5, color: T.ink } as React.CSSProperties}>{money((Number(l.qty) || 0) * (Number(l.unit_cost) || 0))}</span>
             <button onClick={() => rmLine(i)} disabled={lines.length === 1} style={{ width: 28, height: 28, borderRadius: 6, border: `1px solid ${T.line}`, background: T.paper, color: T.redText, cursor: lines.length === 1 ? 'not-allowed' : 'pointer', fontSize: 12, opacity: lines.length === 1 ? 0.4 : 1 }}>✕</button>
           </div>
-        ))}
+        ); })}
         <div style={{ padding: '8px 12px', borderTop: `1px solid ${T.line}` }}><button onClick={addLine} style={{ background: 'none', border: 'none', color: T.accent.text, fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: T.fBody }}>+ Add product line</button></div>
       </div>
 
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
         <div style={{ width: 280, display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 13 }}><span style={{ color: T.inkSub }}>Subtotal</span><span style={{ fontFamily: T.fMono, color: T.ink }}>{money(subtotal)}</span></div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 13 }}><span style={{ color: T.inkSub }}>Discount</span><input type="number" value={discount} onChange={(e: any) => setDiscount(e.target.value)} placeholder="0.00" style={{ ...miniNum(T), width: 90 }} /></div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontSize: 15, fontWeight: 700, paddingTop: 8, borderTop: `1px dashed ${T.line}` }}><span style={{ color: T.ink }}>Total</span><span style={{ fontFamily: T.fMono, color: T.ink }}>{money(total)}</span></div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontSize: 15, fontWeight: 700, paddingTop: 8 }}><span style={{ color: T.ink }}>Total</span><span style={{ fontFamily: T.fMono, color: T.ink }}>{money(total)}</span></div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 13 }}><span style={{ color: T.inkSub }}>Paid now</span><input type="number" value={paid} onChange={(e: any) => setPaid(e.target.value)} placeholder="0.00" style={{ ...miniNum(T), width: 90 }} /></div>
         </div>
       </div>
@@ -163,7 +190,7 @@ function PurchaseEditor({ T, suppliers, locs, onClose, onSaved }: { T: any; supp
 // ── Purchase detail ─────────────────────────────────────────────────
 function PurchaseView({ T, purchase, onClose }: { T: any; purchase: any; onClose: () => void }) {
   const [data, setData] = useStatePu<any>(null);
-  useEffectPu(() => { API.purchase.get(purchase.id).then(setData).catch(() => setData(purchase)); }, [purchase.id]);
+  useEffectPu(() => { API.purchaseOrder.get(purchase.id).then(setData).catch(() => setData(purchase)); }, [purchase.id]);
   const p = data || purchase;
   return (
     <Modal T={T} title={p.ref_no} subtitle={`${p.supplier_name} · ${p.location_name}`} width={520} onClose={onClose} footer={null}>
@@ -177,7 +204,7 @@ function PurchaseView({ T, purchase, onClose }: { T: any; purchase: any; onClose
         {(p.lines || []).map((l: any, i: number) => { const pr: any = PRODUCTS.find((x: any) => parseInt(String(x.id).replace(/\D/g, ''), 10) === l.product_id) || {}; return (
           <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 60px 90px 90px', padding: '9px 12px', borderTop: `1px solid ${T.line}`, fontSize: 12.5 }}>
             <span style={{ fontWeight: 600, color: T.ink }}>{l.product_name || pr.name || 'Product #' + l.product_id}</span>
-            <span style={{ textAlign: 'right', fontFamily: T.fMono, color: T.inkSub } as React.CSSProperties}>{l.qty}</span>
+            <span style={{ textAlign: 'right', fontFamily: T.fMono, color: T.inkSub } as React.CSSProperties}>{l.qty}{l.unit_name ? ` ${l.unit_name}` : ''}</span>
             <span style={{ textAlign: 'right', fontFamily: T.fMono, color: T.inkSub } as React.CSSProperties}>{money(l.unit_cost)}</span>
             <span style={{ textAlign: 'right', fontFamily: T.fMono, color: T.ink } as React.CSSProperties}>{money(l.qty * l.unit_cost)}</span>
           </div>

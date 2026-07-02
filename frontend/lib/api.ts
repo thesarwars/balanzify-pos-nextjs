@@ -2113,17 +2113,23 @@ function adaptRealModules(catalog: any[]): any[] {
 function adaptRealPO(o: any): any {
   if (!o) return o;
   const lines = Array.isArray(o.items) ? o.items.map((it: any) => ({
+    id: it.id,
     product_id: it.productId, product_name: (it.product && it.product.name) || '',
     qty: Number(it.orderedQty || 0), unit_cost: Number(it.unitPrice || 0),
+    unit_id: it.unitId || '',
+    unit_name: (it.unit && (it.unit.shortName || it.unit.actualName)) || '',
   })) : [];
+  const total = Number(o.totalAmount || 0);
+  const paid = Number(o.amountPaid || 0);
   return {
-    id: o.id, ref: o.poNumber,
-    supplier_id: o.supplierId, party_name: (o.supplier && o.supplier.name) || '—',
+    id: o.id, ref: o.poNumber, ref_no: o.poNumber,
+    supplier_id: o.supplierId, party_name: (o.supplier && o.supplier.name) || '—', supplier_name: (o.supplier && o.supplier.name) || '—',
     location_id: o.locationId, location_name: (o.location && o.location.name) || '—',
     date: o.createdAt ? String(o.createdAt).slice(0, 10) : '',
     status: o.status,
     item_count: (o._count && o._count.items) != null ? o._count.items : lines.length,
-    total: Number(o.totalAmount || 0),
+    total, grand_total: total, paid, due: Math.max(0, +(total - paid).toFixed(2)),
+    payment_status: paid >= total && total > 0 ? 'paid' : paid > 0 ? 'partial' : 'due',
     lines,
     _real: o,
   };
@@ -2138,6 +2144,7 @@ function toRealPOBody(b: any): any {
       product_id: l.product_id,
       ordered_qty: Number(l.qty || 1),
       unit_price: Number(l.unit_cost || 0),
+      unit_id: isUuid(l.unit_id) ? l.unit_id : undefined,
     })),
   };
 }
@@ -3892,11 +3899,15 @@ const API: any = {
       if (REAL_MODE) return adaptRealPO(await realReq('POST', '/purchase-orders', { body: toRealPOBody(body) }));
       return (await transport('POST', '/connector/api/purchase-order', { body })).data;
     },
-    // Receiving (status 'received'/'partial') needs a received_items payload the
-    // orders screen doesn't send yet; simple transitions (approve/send/cancel) work.
-    async setStatus(id: any, status: any) {
-      if (REAL_MODE) return adaptRealPO(await realReq('PUT', '/purchase-orders/' + id + '/status', { body: { status } }));
+    // Receiving (status 'received'/'partial') takes received_items:
+    // [{ id: <po item id>, product_id, qty, unit_price?, expiry_date?, batch_number? }].
+    async setStatus(id: any, status: any, received_items?: any[]) {
+      if (REAL_MODE) return adaptRealPO(await realReq('PUT', '/purchase-orders/' + id + '/status', { body: { status, ...(received_items ? { received_items } : {}) } }));
       return (await transport('PUT', '/connector/api/purchase-order/' + id + '/status', { body: { status } })).data;
+    },
+    async pay(id: any, amount: number, method = 'cash') {
+      if (REAL_MODE) return await realReq('POST', '/purchase-orders/' + id + '/payment', { body: { amount: Number(amount), payment_method: method } });
+      return null;
     },
     async remove(id: any) {
       if (REAL_MODE) return await realReq('DELETE', '/purchase-orders/' + id);

@@ -145,7 +145,8 @@ const HoldSaleSchema = z.object({
 const POItemSchema = z.object({
   product_id: uuid,
   ordered_qty: positiveInt,
-  unit_price: money,
+  unit_price: money, // per purchase unit (per dozen when unit_id is a dozen)
+  unit_id: uuid.optional().nullable(), // purchase unit; null = product's base unit
   expiry_date: isoDate,
   batch_number: optStr(100),
   notes: optStr(500),

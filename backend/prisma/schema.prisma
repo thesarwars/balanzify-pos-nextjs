@@ -686,6 +686,7 @@ model Unit {
   business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   baseUnit Unit?    @relation("unit_base", fields: [baseUnitId], references: [id], onDelete: SetNull)
   multiples Unit[]  @relation("unit_base")
+  poItems   PurchaseOrderItem[]
 
   @@map("units")
 }
@@ -1762,6 +1763,9 @@ model PurchaseOrderItem {
   poId        String    @map("po_id") @db.Uuid
   productId   String    @map("product_id") @db.Uuid
   variantId   String?   @map("variant_id") @db.Uuid
+  // Purchase unit — qty/price are in this unit (e.g. Dozen); NULL = the
+  // product's base unit. Stock is converted to base units at receipt.
+  unitId      String?   @map("unit_id") @db.Uuid
   orderedQty  Int       @map("ordered_qty")
   receivedQty Int       @default(0) @map("received_qty")
   unitPrice   Decimal   @map("unit_price") @db.Decimal(12, 2)
@@ -1773,6 +1777,7 @@ model PurchaseOrderItem {
   purchaseOrder PurchaseOrder   @relation(fields: [poId], references: [id], onDelete: Cascade)
   product       Product         @relation(fields: [productId], references: [id])
   variant       ProductVariant? @relation(fields: [variantId], references: [id])
+  unit          Unit?           @relation(fields: [unitId], references: [id], onDelete: SetNull)
 
   @@map("purchase_order_items")
 }

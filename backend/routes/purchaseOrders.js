@@ -35,7 +35,7 @@ router.get('/:id', auth, async (req, res, next) => {
       include: {
         supplier: true,
         location: { select: { name: true } },
-        items: { include: { product: { select: { name: true, sku: true } } } },
+        items: { include: { product: { select: { name: true, sku: true } }, unit: { select: { shortName: true, actualName: true, baseMultiplier: true, baseUnitId: true } } } },
         payments: { include: { createdBy: { select: { name: true } } } },
         goodsReceivedNotes: true,
         approvedBy: { select: { name: true } },
@@ -54,6 +54,12 @@ router.post('/', auth, requireRole('owner', 'manager'), validate(PurchaseOrderSc
     const { supplier_id, location_id, items, expected_delivery, freight_cost, customs_duty, other_charges, payment_terms, notes, currency } = req.body;
     const subtotal = items.reduce((s, i) => s + i.unit_price * i.ordered_qty, 0);
     const totalAmount = subtotal + (freight_cost || 0) + (customs_duty || 0) + (other_charges || 0);
+
+    // Purchase units must belong to this business.
+    const unitIds = [...new Set(items.map(i => i.unit_id).filter(Boolean))];
+    if (unitIds.length && (await prisma.unit.count({ where: { id: { in: unitIds }, businessId: req.user.business_id } })) !== unitIds.length) {
+      return res.status(400).json({ title: 'One or more purchase units not found', status: 400 });
+    }
 
     const po = await prisma.purchaseOrder.create({
       data: {
@@ -74,6 +80,7 @@ router.post('/', auth, requireRole('owner', 'manager'), validate(PurchaseOrderSc
         items: {
           create: items.map(item => ({
             productId: item.product_id,
+            unitId: item.unit_id || null,
             orderedQty: item.ordered_qty,
             unitPrice: item.unit_price,
             totalPrice: item.unit_price * item.ordered_qty,
@@ -167,6 +174,16 @@ router.put('/:id/status', auth, requireRole('owner', 'manager'), validate(POStat
         let receivedValue = 0;
         const itemsById = new Map(po.items.map((i) => [i.id, i]));
 
+        // Unit conversion: a line purchased in a multiple unit (1 Dozen = 12
+        // Pieces) stores stock in BASE units — quantities ×multiplier, per-unit
+        // costs ÷multiplier. Money totals are unchanged.
+        const lineUnitIds = [...new Set(po.items.map((i) => i.unitId).filter(Boolean))];
+        const lineUnits = lineUnitIds.length ? await tx.unit.findMany({ where: { id: { in: lineUnitIds } } }) : [];
+        const multiplierOf = (unitId) => {
+          const u = lineUnits.find((x) => x.id === unitId);
+          return u && u.baseUnitId && u.baseMultiplier ? Number(u.baseMultiplier) : 1;
+        };
+
         // Landed cost: spread freight + customs + other charges across every unit
         // in proportion to its value, so the cost layers (and therefore COGS and
         // margins) reflect the true landed cost — not just the supplier price.
@@ -196,9 +213,15 @@ router.put('/:id/status', auth, requireRole('owner', 'manager'), validate(POStat
           const lineUnitCost = +(baseUnitCost * (1 + landedFactor)).toFixed(4);
           receivedValue += lineUnitCost * ri.qty;
 
+          // Convert to base units when the line was purchased in a multiple
+          // (e.g. received 3 Dozen → +36 Pieces at cost/12 each).
+          const mult = multiplierOf(orderLine.unitId);
+          const baseQty = Math.round(ri.qty * mult);
+          const perBaseCost = +(lineUnitCost / mult).toFixed(4);
+
           await tx.purchaseOrderItem.update({
             where: { id: ri.id },
-            data: { receivedQty: { increment: ri.qty } },
+            data: { receivedQty: { increment: ri.qty } }, // stays in purchase units
           });
 
           // Update stock
@@ -206,9 +229,9 @@ router.put('/:id/status', auth, requireRole('owner', 'manager'), validate(POStat
           if (locId) {
             await tx.$executeRaw`
               INSERT INTO stock_levels (id, product_id, location_id, quantity)
-              VALUES (gen_random_uuid(), ${ri.product_id}::uuid, ${locId}::uuid, ${ri.qty})
+              VALUES (gen_random_uuid(), ${ri.product_id}::uuid, ${locId}::uuid, ${baseQty})
               ON CONFLICT (product_id, location_id) DO UPDATE
-              SET quantity = stock_levels.quantity + ${ri.qty}, updated_at = NOW()
+              SET quantity = stock_levels.quantity + ${baseQty}, updated_at = NOW()
             `;
 
             await tx.stockMovement.create({
@@ -217,18 +240,18 @@ router.put('/:id/status', auth, requireRole('owner', 'manager'), validate(POStat
                 productId: ri.product_id,
                 locationId: locId,
                 type: 'purchase',
-                quantity: ri.qty,
+                quantity: baseQty,
                 referenceId: po.id,
                 referenceType: 'purchase_order',
                 createdById: req.user.id,
               },
             });
 
-            // Update cost price on product to the landed unit cost.
+            // Update cost price on product to the landed per-base-unit cost.
             if (ri.unit_price) {
               await tx.product.update({
                 where: { id: ri.product_id },
-                data: { costPrice: lineUnitCost },
+                data: { costPrice: perBaseCost },
               });
             }
 
@@ -244,8 +267,8 @@ router.put('/:id/status', auth, requireRole('owner', 'manager'), validate(POStat
                 productId: ri.product_id,
                 locationId: locId,
                 batchNumber: ri.batch_number || orderLine.batchNumber || null,
-                quantity: ri.qty,
-                costPrice: lineUnitCost,
+                quantity: baseQty,
+                costPrice: perBaseCost,
                 expiryDate,
               },
             });
@@ -259,9 +282,9 @@ router.put('/:id/status', auth, requireRole('owner', 'manager'), validate(POStat
                 variantId:         orderLine.variantId || null,
                 locationId:        locId,
                 poId:              po.id,
-                quantityReceived:  ri.qty,
-                quantityRemaining: ri.qty,
-                unitCost:          lineUnitCost,
+                quantityReceived:  baseQty,
+                quantityRemaining: baseQty,
+                unitCost:          perBaseCost,
                 expiryDate,
               },
             });
