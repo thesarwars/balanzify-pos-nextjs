@@ -64,9 +64,15 @@ export function Modal({ T, title, subtitle, onClose, onSave, saveLabel = 'Save',
   { T: Theme; title: string; subtitle?: string; onClose: () => void; onSave?: () => void; saveLabel?: string; width?: number | string; children: React.ReactNode; footer?: React.ReactNode | null }) {
   const titleId = React.useId();
   const dialogRef = React.useRef<HTMLDivElement>(null);
+  // Track the latest onClose WITHOUT re-running the trap effect: callers
+  // routinely pass inline arrows (new identity each render), and with form
+  // state colocated in the caller an [onClose] dependency made the effect
+  // re-fire on EVERY keystroke — yanking focus to the ✕ button mid-typing.
+  const onCloseRef = React.useRef(onClose);
+  onCloseRef.current = onClose;
   // Accessibility: trap focus inside the dialog, close on Escape, and restore
   // focus to whatever was focused before it opened — the baseline contract a
-  // screen reader / keyboard user expects from a modal.
+  // screen reader / keyboard user expects from a modal. Runs once per open.
   React.useEffect(() => {
     const prevFocused = (typeof document !== 'undefined' ? document.activeElement : null) as HTMLElement | null;
     const node = dialogRef.current;
@@ -75,7 +81,7 @@ export function Modal({ T, title, subtitle, onClose, onSave, saveLabel = 'Save',
     const first = node?.querySelector<HTMLElement>(FOCUSABLE);
     (first || node)?.focus();
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { e.stopPropagation(); onClose(); return; }
+      if (e.key === 'Escape') { e.stopPropagation(); onCloseRef.current(); return; }
       if (e.key !== 'Tab' || !node) return;
       const els = Array.from(node.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(el => el.offsetParent !== null);
       if (!els.length) return;
@@ -85,7 +91,7 @@ export function Modal({ T, title, subtitle, onClose, onSave, saveLabel = 'Save',
     };
     document.addEventListener('keydown', onKey, true);
     return () => { document.removeEventListener('keydown', onKey, true); prevFocused?.focus?.(); };
-  }, [onClose]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <div onClick={(e) => { if (e.target === e.currentTarget) onClose(); }} style={{ position: 'fixed', inset: 0, zIndex: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(20,15,5,0.5)', backdropFilter: 'blur(3px)', padding: 20 }}>
       <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} style={{ width: `min(${typeof width === 'number' ? width + 'px' : width}, 96vw)`, maxWidth: '100%', maxHeight: '92vh', display: 'flex', flexDirection: 'column', background: T.paper, borderRadius: T.rXl, boxShadow: T.shModal, overflow: 'hidden', animation: 'sheetUp .22s cubic-bezier(.2,.7,.3,1)', outline: 'none' }}>
