@@ -507,6 +507,9 @@ const UnitSchema = z.object({
   actual_name:   shortStr(100),
   short_name:    shortStr(20),
   allow_decimal: z.coerce.boolean().default(false),
+  // "Multiple of other unit": 1 of this unit = base_multiplier × base unit.
+  base_unit_id:    uuid.optional().nullable(),
+  base_multiplier: z.coerce.number().positive().max(1000000).optional().nullable(),
 });
 
 const BrandSchema = z.object({ name: shortStr(255) });

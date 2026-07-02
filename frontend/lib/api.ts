@@ -2719,16 +2719,21 @@ const API: any = {
     async list() {
       if (REAL_MODE) {
         const res = await realReq('GET', '/units');
-        return ((res && (res.units || res.data)) || []).map((u: any) => ({ id: u.id, actual_name: u.actualName, short_name: u.shortName, allow_decimal: u.allowDecimal ? 1 : 0 }));
+        return ((res && (res.units || res.data)) || []).map((u: any) => ({
+          id: u.id, actual_name: u.actualName, short_name: u.shortName, allow_decimal: u.allowDecimal ? 1 : 0,
+          base_unit_id: u.baseUnitId || null,
+          base_unit_multiplier: u.baseMultiplier != null ? Number(u.baseMultiplier) : null,
+          base_unit_name: (u.baseUnit && (u.baseUnit.shortName || u.baseUnit.actualName)) || '',
+        }));
       }
       return (await transport('GET', '/connector/api/unit')).data;
     },
     async create(body: any) {
-      if (REAL_MODE) return await realReq('POST', '/units', { body: { actual_name: body.actual_name, short_name: body.short_name, allow_decimal: !!body.allow_decimal } });
+      if (REAL_MODE) return await realReq('POST', '/units', { body: { actual_name: body.actual_name, short_name: body.short_name, allow_decimal: !!body.allow_decimal, base_unit_id: body.base_unit_id || null, base_multiplier: body.base_unit_id ? Number(body.base_multiplier || 0) : null } });
       return (await transport('POST', '/connector/api/unit', { body })).data;
     },
     async update(id: any, body: any) {
-      if (REAL_MODE) return await realReq('PUT', '/units/' + id, { body: { actual_name: body.actual_name, short_name: body.short_name, allow_decimal: body.allow_decimal } });
+      if (REAL_MODE) return await realReq('PUT', '/units/' + id, { body: { actual_name: body.actual_name, short_name: body.short_name, allow_decimal: body.allow_decimal, base_unit_id: body.base_unit_id || null, base_multiplier: body.base_unit_id ? Number(body.base_multiplier || 0) : null } });
       return (await transport('PUT', '/connector/api/unit/' + id, { body })).data;
     },
     async remove(id: any) {

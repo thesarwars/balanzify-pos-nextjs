@@ -547,11 +547,19 @@ function UnitManager({ T, units, onClose, onChange, toast }: any) {
   const [name, setName] = useStatePr('');
   const [short, setShort] = useStatePr('');
   const [dec, setDec] = useStatePr(false);
+  const [asMultiple, setAsMultiple] = useStatePr(false);
+  const [baseId, setBaseId] = useStatePr('');
+  const [mult, setMult] = useStatePr('');
   const [busy, setBusy] = useStatePr(false);
   async function add() {
     if (!name.trim()) return;
+    if (asMultiple && (!baseId || !parseFloat(mult))) { toast('Pick a base unit and how many it equals.'); return; }
     setBusy(true);
-    try { await API.unit.create({ actual_name: name, short_name: short || name, allow_decimal: dec }); setName(''); setShort(''); setDec(false); onChange(); toast('Unit added'); }
+    try {
+      await API.unit.create({ actual_name: name, short_name: short || name, allow_decimal: dec, base_unit_id: asMultiple ? baseId : null, base_multiplier: asMultiple ? parseFloat(mult) : null });
+      setName(''); setShort(''); setDec(false); setAsMultiple(false); setBaseId(''); setMult('');
+      onChange(); toast('Unit added');
+    }
     catch (e: any) { toast(e.message); } finally { setBusy(false); }
   }
   async function del(u: any) { try { await API.unit.remove(u.id); onChange(); toast('Unit removed'); } catch (e: any) { toast(e.message); } }
@@ -561,17 +569,36 @@ function UnitManager({ T, units, onClose, onChange, toast }: any) {
         {units.map((u: any) => (
           <div key={u.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '9px 13px', border: `1px solid ${T.line}`, borderRadius: T.r, background: T.paper }}>
             <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: T.ink }}>{u.actual_name} <span style={{ color: T.inkSub, fontWeight: 400 }}>({u.short_name})</span></span>
-            {u.base_unit_id && <Badge T={T} tone="blue">×{u.base_unit_multiplier}</Badge>}
+            {u.base_unit_id && <Badge T={T} tone="blue">= {u.base_unit_multiplier} × {u.base_unit_name || 'base'}</Badge>}
             {u.allow_decimal ? <Badge T={T} tone="gray">decimals</Badge> : null}
             <button onClick={() => del(u)} style={{ width: 26, height: 26, borderRadius: 6, border: `1px solid ${T.line}`, background: T.paper, color: T.redText, cursor: 'pointer', fontSize: 12 }}>✕</button>
           </div>
         ))}
       </div>
-      <div style={{ borderTop: `1px solid ${T.line}`, paddingTop: 16, display: 'flex', alignItems: 'flex-end', gap: 10 }}>
-        <div style={{ flex: 1 }}><div style={{ fontSize: 11, fontWeight: 600, color: T.inkSub, marginBottom: 5 }}>Unit name</div><TextField T={T} value={name} onChange={setName} placeholder="e.g. Carton" /></div>
-        <div style={{ width: 100 }}><div style={{ fontSize: 11, fontWeight: 600, color: T.inkSub, marginBottom: 5 }}>Short</div><TextField T={T} value={short} onChange={setShort} placeholder="ctn" /></div>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: T.inkSub, cursor: 'pointer', paddingBottom: 11 }}><input type="checkbox" checked={dec} onChange={e => setDec(e.target.checked)} style={{ accentColor: T.accent.base }} />Decimals</label>
-        <Btn T={T} kind="accent" onClick={add} disabled={busy}>Add</Btn>
+      <div style={{ borderTop: `1px solid ${T.line}`, paddingTop: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10 }}>
+          <div style={{ flex: 1 }}><div style={{ fontSize: 11, fontWeight: 600, color: T.inkSub, marginBottom: 5 }}>Unit name</div><TextField T={T} value={name} onChange={setName} placeholder="e.g. Dozen" /></div>
+          <div style={{ width: 100 }}><div style={{ fontSize: 11, fontWeight: 600, color: T.inkSub, marginBottom: 5 }}>Short</div><TextField T={T} value={short} onChange={setShort} placeholder="dz" /></div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: T.inkSub, cursor: 'pointer', paddingBottom: 11 }}><input type="checkbox" checked={dec} onChange={e => setDec(e.target.checked)} style={{ accentColor: T.accent.base }} />Decimals</label>
+        </div>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12.5, fontWeight: 600, color: T.inkMid, cursor: 'pointer', marginTop: 12 }}>
+          <input type="checkbox" checked={asMultiple} onChange={e => setAsMultiple(e.target.checked)} style={{ accentColor: T.accent.base }} />
+          Add as multiple of another unit <span style={{ fontWeight: 400, color: T.inkSub }}>(e.g. 1 dozen = 12 pieces)</span>
+        </label>
+        {asMultiple && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10 }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: T.ink, whiteSpace: 'nowrap' }}>1 {name.trim() || 'unit'} =</span>
+            <div style={{ width: 110 }}><TextField T={T} type="number" value={mult} onChange={setMult} placeholder="e.g. 12" /></div>
+            <span style={{ fontSize: 13, color: T.inkSub }}>×</span>
+            <div style={{ flex: 1 }}>
+              <SelectField T={T} value={baseId} options={['', ...units.filter((u: any) => !u.base_unit_id).map((u: any) => u.id)]} onChange={setBaseId}
+                render={(v: any) => { if (!v) return 'Select base unit'; const u = units.find((x: any) => x.id === v) || {}; return `${u.actual_name} (${u.short_name})`; }} />
+            </div>
+          </div>
+        )}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14 }}>
+          <Btn T={T} kind="accent" onClick={add} disabled={busy}>{busy ? 'Saving…' : 'Add unit'}</Btn>
+        </div>
       </div>
     </Modal>
   );

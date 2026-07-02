@@ -1458,15 +1458,36 @@ customerGroupsRouter.delete('/:id', auth, requireRole('owner', 'manager'), async
 // ── PRODUCT REFERENCE DATA: units / brands / variation templates ──────────────
 const unitsRouter = express.Router();
 
+// A "multiple" unit must reference a base unit in the same business (and not itself).
+async function badUnitBase(b, businessId, selfId) {
+  if (b.base_unit_id === undefined) return null;
+  if (!b.base_unit_id) return null; // clearing
+  if (selfId && b.base_unit_id === selfId) return 'A unit cannot be a multiple of itself';
+  if (!(await prisma.unit.count({ where: { id: b.base_unit_id, businessId } }))) return 'Base unit not found';
+  if (!b.base_multiplier || b.base_multiplier <= 0) return 'Enter how many base units this unit equals';
+  return null;
+}
+
 unitsRouter.get('/', auth, async (req, res, next) => {
   try {
-    const units = await prisma.unit.findMany({ where: { businessId: req.user.business_id }, orderBy: { actualName: 'asc' } });
+    const units = await prisma.unit.findMany({
+      where: { businessId: req.user.business_id },
+      orderBy: { actualName: 'asc' },
+      include: { baseUnit: { select: { actualName: true, shortName: true } } },
+    });
     res.json({ units });
   } catch (err) { next(err); }
 });
 unitsRouter.post('/', auth, requireRole('owner', 'manager'), validate(UnitSchema), async (req, res, next) => {
   try {
-    const unit = await prisma.unit.create({ data: { businessId: req.user.business_id, actualName: req.body.actual_name, shortName: req.body.short_name, allowDecimal: req.body.allow_decimal || false } });
+    const bad = await badUnitBase(req.body, req.user.business_id, null);
+    if (bad) return res.status(400).json({ title: bad, status: 400 });
+    const unit = await prisma.unit.create({ data: {
+      businessId: req.user.business_id, actualName: req.body.actual_name, shortName: req.body.short_name,
+      allowDecimal: req.body.allow_decimal || false,
+      baseUnitId: req.body.base_unit_id || null,
+      baseMultiplier: req.body.base_unit_id ? req.body.base_multiplier : null,
+    } });
     res.status(201).json(unit);
   } catch (err) { next(err); }
 });
@@ -1474,11 +1495,14 @@ unitsRouter.put('/:id', auth, requireRole('owner', 'manager'), validate(UnitSche
   try {
     const existing = await prisma.unit.findFirst({ where: { id: req.params.id, businessId: req.user.business_id } });
     if (!existing) return res.status(404).json({ title: 'Not found', status: 404 });
-    const { actual_name, short_name, allow_decimal } = req.body;
+    const bad = await badUnitBase(req.body, req.user.business_id, req.params.id);
+    if (bad) return res.status(400).json({ title: bad, status: 400 });
+    const { actual_name, short_name, allow_decimal, base_unit_id, base_multiplier } = req.body;
     const unit = await prisma.unit.update({ where: { id: req.params.id }, data: {
       ...(actual_name   !== undefined && { actualName: actual_name }),
       ...(short_name    !== undefined && { shortName: short_name }),
       ...(allow_decimal !== undefined && { allowDecimal: allow_decimal }),
+      ...(base_unit_id  !== undefined && { baseUnitId: base_unit_id || null, baseMultiplier: base_unit_id ? base_multiplier : null }),
     }});
     res.json(unit);
   } catch (err) { next(err); }

@@ -678,9 +678,14 @@ model Unit {
   actualName   String   @map("actual_name") @db.VarChar(100)
   shortName    String   @map("short_name") @db.VarChar(20)
   allowDecimal Boolean  @default(false) @map("allow_decimal")
+  // "Multiple of other unit" — e.g. 1 Dozen = 12 × Pieces.
+  baseUnitId     String?  @map("base_unit_id") @db.Uuid
+  baseMultiplier Decimal? @map("base_multiplier") @db.Decimal(12, 4)
   createdAt    DateTime @default(now()) @map("created_at")
 
   business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  baseUnit Unit?    @relation("unit_base", fields: [baseUnitId], references: [id], onDelete: SetNull)
+  multiples Unit[]  @relation("unit_base")
 
   @@map("units")
 }

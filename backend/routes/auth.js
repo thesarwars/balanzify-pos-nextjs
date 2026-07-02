@@ -48,6 +48,10 @@ router.post('/register', validate(RegisterSchema), async (req, res, next) => {
       await tx.invoiceLayout.create({
         data: { businessId: business.id, name: 'Default', design: 'classic', isDefault: true, showAddress: true, showTaxSummary: true, showDiscount: true },
       });
+      // Seed a default measurement unit so the product form's Unit select isn't empty.
+      await tx.unit.create({
+        data: { businessId: business.id, actualName: 'Pieces', shortName: 'Pc(s)', allowDecimal: false },
+      });
       return { business, user };
     });
 
