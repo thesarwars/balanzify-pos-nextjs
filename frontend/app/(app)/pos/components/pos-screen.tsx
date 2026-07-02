@@ -91,7 +91,9 @@ export function POS({ T, tweaks }: { T: any; tweaks: any }) {
     API.serviceType.list().then(setServiceTypes).catch(() => {});
     API.discount.list().then(setDiscounts).catch(() => {});
     if (API.config?.isReal?.()) {
-      API.product.list().then((r: any) => setProds(r.items || [])).catch(() => {});
+      // Active products only — DELETE /products soft-deletes (isActive=false),
+      // and archived products must not appear on the sell grid.
+      API.product.list({ is_active: 'true' }).then((r: any) => setProds(r.items || [])).catch(() => {});
       API.category.list().then((cs: any) => setCats([{ id: 'all', name: 'All Items' }, ...(cs || [])])).catch(() => {});
     }
   }, []);
@@ -313,16 +315,18 @@ export function POS({ T, tweaks }: { T: any; tweaks: any }) {
     const inCart = inCartQty > 0;
     return (
       <button key={p.id} onClick={() => add(p)} style={{
-        position: 'relative', textAlign: 'left', cursor: 'pointer', fontFamily: T.fBody,
+        position: 'relative', textAlign: 'left', cursor: p.not_for_selling ? 'not-allowed' : 'pointer', fontFamily: T.fBody,
+        opacity: p.not_for_selling ? 0.5 : 1,
         background: D.tile, border: `1px solid ${inCart ? T.accent.base : D.tileLine}`, borderRadius: T.rLg,
         padding: 0, overflow: 'hidden', transition: 'transform .12s, box-shadow .12s, border-color .12s',
         boxShadow: dark ? 'none' : T.sh1, display: 'flex', flexDirection: 'column',
       } as React.CSSProperties}
-        onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = dark ? '0 6px 18px rgba(0,0,0,0.4)' : T.sh2; }}
+        onMouseEnter={e => { if (p.not_for_selling) return; e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = dark ? '0 6px 18px rgba(0,0,0,0.4)' : T.sh2; }}
         onMouseLeave={e => { e.currentTarget.style.transform = ''; e.currentTarget.style.boxShadow = dark ? 'none' : T.sh1; }}
       >
         {/* swatch header */}
         <div style={{ height: 58, background: swatchBg(p), position: 'relative', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', padding: 8 } as React.CSSProperties}>
+          {p.not_for_selling && <span style={{ fontSize: 9, fontWeight: 800, color: '#fff', background: T.red, padding: '2px 6px', borderRadius: 5, letterSpacing: 0.4 }}>ARCHIVED</span>}
           {p.rx && <span style={{ fontSize: 9, fontWeight: 800, color: '#fff', background: 'rgba(0,0,0,0.28)', padding: '2px 6px', borderRadius: 5, letterSpacing: 0.4 }}>Rx</span>}
           {(p.enable_stock !== false && p.stock !== Infinity) && <span style={{ fontSize: 9, fontWeight: 800, color: '#fff', background: avail <= 0 ? T.red : low ? T.amber : 'rgba(0,0,0,0.32)', padding: '2px 6px', borderRadius: 5, letterSpacing: 0.3, marginLeft: 'auto' }}>{avail <= 0 ? 'Out' : `${avail} in stock`}{inCart ? ` · ${p.stock}−${inCartQty}` : ''}</span>}
           {inCart && (
@@ -349,7 +353,8 @@ export function POS({ T, tweaks }: { T: any; tweaks: any }) {
     const low = avail <= 12;
     return (
       <button key={p.id} onClick={() => add(p)} style={{
-        width: '100%', textAlign: 'left', cursor: 'pointer', fontFamily: T.fBody,
+        width: '100%', textAlign: 'left', cursor: p.not_for_selling ? 'not-allowed' : 'pointer', fontFamily: T.fBody,
+        opacity: p.not_for_selling ? 0.5 : 1,
         display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px',
         background: inCart ? (dark ? '#16243a' : T.accent.soft) : D.tile,
         border: `1px solid ${inCart ? T.accent.base : D.tileLine}`, borderRadius: T.r, transition: 'background .12s',
