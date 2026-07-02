@@ -128,7 +128,10 @@ function LocationEditor({ T, loc, refs, onClose, onSaved, onNewScheme }: { T: an
     invoice_scheme_id: loc.invoice_scheme_id || '', invoice_layout_id: loc.invoice_layout_id || '', price_group_id: loc.price_group_id || '',
     custom_field1: loc.custom_field1 || '', custom_field2: loc.custom_field2 || '', custom_field3: loc.custom_field3 || '', custom_field4: loc.custom_field4 || '',
     featured_product_ids: Array.isArray(loc.featured_product_ids) ? [...loc.featured_product_ids] : [],
-    payment_methods: loc.payment_methods ? [...loc.payment_methods] : ['cash'], default_payment: loc.default_payment || 'cash',
+    // NB: [] is truthy — locations saved before this feature have an empty list
+    // and must still fall back to cash, or the save guard blocks them.
+    payment_methods: loc.payment_methods && loc.payment_methods.length ? [...loc.payment_methods] : ['cash'],
+    default_payment: loc.default_payment || 'cash',
     payment_accounts: loc.payment_accounts ? { ...loc.payment_accounts } : {},
   });
   const [busy, setBusy] = useStateLo(false);

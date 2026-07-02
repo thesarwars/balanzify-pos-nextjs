@@ -3222,7 +3222,16 @@ const API: any = {
       return (await transport('DELETE', '/connector/api/selling-price-group/' + id)).data;
     },
   },
-  paymentMethod: { async list() { return (await transport('GET', '/connector/api/payment-method')).data; } },
+  paymentMethod: {
+    async list() {
+      if (REAL_MODE) {
+        // Real backend: the payment-provider registry (cash, zaad, evc, edahab, …).
+        const res = await realReq('GET', '/payments/methods');
+        return ((res && res.methods) || []).map((m: any) => ({ key: m.key, label: m.name || m.key, hint: m.description || '', type: m.type }));
+      }
+      return (await transport('GET', '/connector/api/payment-method')).data;
+    },
+  },
   upload: {
     // Multipart upload — realReq only does JSON, so post FormData directly.
     async image(file: any): Promise<{ url: string; key: string }> {
