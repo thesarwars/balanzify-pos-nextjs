@@ -585,6 +585,7 @@ model Business {
   priceGroups        PriceGroup[]
   invoiceLayouts     InvoiceLayout[]
   invoiceSchemes     InvoiceScheme[]
+  roles              Role[]
   employees          Employee[]
   orgUnits           OrgUnit[]
   hrmSettings        HrmSettings?
@@ -1231,6 +1232,21 @@ model User {
   managedLocations Location[]  @relation("location_manager")
 
   @@map("users")
+}
+
+model Role {
+  id           String   @id @default(uuid()) @db.Uuid
+  businessId   String   @map("business_id") @db.Uuid
+  name         String   @db.VarChar(100)
+  permissions  String[] // keys from lib/permissions.js
+  locationIds  String[] @map("location_ids") @db.Uuid // access locations; empty = all
+  isPredefined Boolean  @default(false) @map("is_predefined") // seeded roles: locked from edit/delete
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, name])
+  @@map("roles")
 }
 
 model ActivityLog {

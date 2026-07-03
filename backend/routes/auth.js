@@ -10,6 +10,7 @@ const { issueTokens, rotateRefreshToken, revokeAllSessions } = require('../lib/t
 const { audit, security } = require('../lib/logger');
 const { trackLogin } = require('../lib/metrics');
 const { isLockedOut, recordFailedAttempt, recordSuccess } = require('../lib/bruteforce');
+const { seedPredefinedRoles } = require('../lib/permissions');
 const {
   RegisterSchema, LoginSchema, PinLoginSchema,
   ChangePasswordSchema, RefreshTokenSchema, VerifyMfaSchema,
@@ -52,6 +53,8 @@ router.post('/register', validate(RegisterSchema), async (req, res, next) => {
       await tx.unit.create({
         data: { businessId: business.id, actualName: 'Pieces', shortName: 'Pc(s)', allowDecimal: false },
       });
+      // Seed the five predefined roles (Admin, Manager, Cashier, Accountant, Stock Keeper).
+      await seedPredefinedRoles(tx, business.id);
       return { business, user };
     });
 

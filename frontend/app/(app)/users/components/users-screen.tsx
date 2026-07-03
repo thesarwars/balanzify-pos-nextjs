@@ -7,29 +7,38 @@
 // Wired through API.user / API.role / API.permissions / API.location.
 // ─────────────────────────────────────────────────────────────────
 import React from 'react';
+import { useRouter } from 'next/navigation';
 import { Btn, Badge, Panel, Modal, Field, TextField, SelectField, FormGrid, useToast } from '@/components/kit';
 import { Topbar } from '@/components/shell';
 import { API } from '@/lib/api';
 
 const { useState: useStateUR, useEffect: useEffectUR } = React;
 
+// Login roles — the fixed access tiers a user signs in with (separate from the
+// custom permission roles managed on the Roles tab / role-editor page).
+const LOGIN_ROLES = [
+  { id: 1, name: 'Owner' },
+  { id: 2, name: 'Manager' },
+  { id: 3, name: 'Cashier' },
+  { id: 4, name: 'Warehouse' },
+];
+
 export function UsersRoles({ T }: { T: any }) {
+  const router = useRouter();
   const [tab, setTab] = useStateUR('users');
   const [users, setUsers] = useStateUR<any[]>([]);
   const [roles, setRoles] = useStateUR<any[]>([]);
-  const [perms, setPerms] = useStateUR<any[]>([]);
   const [locs, setLocs] = useStateUR<any[]>([]);
   const [loading, setLoading] = useStateUR(true);
   const [editUser, setEditUser] = useStateUR<any>(null);
-  const [editRole, setEditRole] = useStateUR<any>(null);
   const [confirm, setConfirm] = useStateUR<any>(null);   // {kind, item}
   const [toast, toastNode] = useToast();
 
   const reloadUsers = React.useCallback(() => API.user.list().then(setUsers).catch(() => {}), []);
   const reloadRoles = React.useCallback(() => API.role.list().then(setRoles).catch(() => {}), []);
   useEffectUR(() => {
-    Promise.all([API.user.list(), API.role.list(), API.permissions.list(), API.location.list()])
-      .then(([u, r, p, l]: any) => { setUsers(u); setRoles(r); setPerms(p); setLocs(l); })
+    Promise.all([API.user.list(), API.role.list(), API.location.list()])
+      .then(([u, r, l]: any) => { setUsers(u); setRoles(r); setLocs(l); })
       .catch(() => {}).finally(() => setLoading(false));
   }, []);
 
@@ -46,7 +55,7 @@ export function UsersRoles({ T }: { T: any }) {
       <Topbar T={T} title="User Management" subtitle="Team members, roles & permissions"
         right={tab === 'users'
           ? <Btn T={T} kind="accent" onClick={() => setEditUser({})}>+ Add User</Btn>
-          : <Btn T={T} kind="accent" onClick={() => setEditRole({ permissions: [], location_access: 'all' })}>+ Add Role</Btn>} />
+          : <Btn T={T} kind="accent" onClick={() => router.push('/role-editor')}>+ Add Role</Btn>} />
       <div style={{ flex: 1, overflowY: 'auto', padding: 28 }}>
         <div style={{ maxWidth: 1200, margin: '0 auto' }}>
           {/* tabs */}
@@ -102,12 +111,12 @@ export function UsersRoles({ T }: { T: any }) {
                     <span style={{ width: 38, height: 38, borderRadius: 10, background: r.name === 'Admin' ? T.accent.soft : T.paperAlt, color: r.name === 'Admin' ? T.accent.text : T.inkMid, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>{r.name === 'Admin' ? '★' : r.name === 'Cashier' ? '◎' : '◆'}</span>
                   </div>
                   <div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, color: T.inkSub, marginBottom: 5 }}><span>Permissions</span><span style={{ fontFamily: T.fMono, color: T.ink }}>{r.permission_count}/{r.total_permissions}</span></div>
-                    <div style={{ height: 6, background: T.paperSink, borderRadius: 99, overflow: 'hidden' }}><div style={{ height: '100%', width: Math.round((r.permission_count / r.total_permissions) * 100) + '%', background: T.accent.base }} /></div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, color: T.inkSub, marginBottom: 5 }}><span>Permissions</span><span style={{ fontFamily: T.fMono, color: T.ink }}>{r.permission_count}{r.total_permissions ? `/${r.total_permissions}` : ''}</span></div>
+                    <div style={{ height: 6, background: T.paperSink, borderRadius: 99, overflow: 'hidden' }}><div style={{ height: '100%', width: (r.total_permissions ? Math.round((r.permission_count / r.total_permissions) * 100) : 0) + '%', background: T.accent.base }} /></div>
                   </div>
-                  <div style={{ fontSize: 12, color: T.inkSub }}>{r.user_count} user{r.user_count === 1 ? '' : 's'} assigned</div>
+                  {r.user_count != null && <div style={{ fontSize: 12, color: T.inkSub }}>{r.user_count} user{r.user_count === 1 ? '' : 's'} assigned</div>}
                   <div style={{ display: 'flex', gap: 8, marginTop: 'auto' }}>
-                    <Btn T={T} kind="ghost" style={{ flex: 1 }} onClick={() => setEditRole(r)} disabled={r.name === 'Admin'}>{r.name === 'Admin' ? 'All access' : 'Edit'}</Btn>
+                    <Btn T={T} kind="ghost" style={{ flex: 1 }} onClick={() => router.push('/role-editor?id=' + r.id)}>{r.is_default ? 'View' : 'Edit'}</Btn>
                     {!r.is_default && <Btn T={T} kind="ghost" onClick={() => setConfirm({ kind: 'role', item: r })} style={{ color: T.redText }}>🗑</Btn>}
                   </div>
                 </div>
@@ -117,8 +126,7 @@ export function UsersRoles({ T }: { T: any }) {
         </div>
       </div>
 
-      {editUser && <UserEditor T={T} user={editUser} roles={roles} locs={locs} onClose={() => setEditUser(null)} onSaved={() => { setEditUser(null); toast(editUser.id ? 'User updated' : 'User created'); reloadUsers(); }} />}
-      {editRole && <RoleEditor T={T} role={editRole} perms={perms} locs={locs} onClose={() => setEditRole(null)} onSaved={() => { setEditRole(null); toast(editRole.id ? 'Role updated' : 'Role created'); reloadRoles(); reloadUsers(); }} />}
+      {editUser && <UserEditor T={T} user={editUser} roles={LOGIN_ROLES} locs={locs} onClose={() => setEditUser(null)} onSaved={() => { setEditUser(null); toast(editUser.id ? 'User updated' : 'User created'); reloadUsers(); }} />}
       {confirm && (
         <Modal T={T} title={`Delete ${confirm.kind}?`} subtitle={confirm.item.name} width={420} onClose={() => setConfirm(null)} onSave={() => del(confirm.kind, confirm.item)} saveLabel="Delete">
           <div style={{ fontSize: 13.5, color: T.inkMid, lineHeight: 1.6 }}>{confirm.kind === 'role' ? 'Users on this role must be reassigned first.' : 'This removes the user and their login access.'}</div>
@@ -190,81 +198,6 @@ function UserEditor({ T, user, roles, locs, onClose, onSaved }: { T: any; user: 
           <URToggle T={T} on={f.is_active} onChange={(v: any) => set('is_active', v)} label="Is active" hint="Deactivated users can't be used" />
           <URToggle T={T} on={f.allow_login} onChange={(v: any) => set('allow_login', v)} label="Allow login" hint="Off = record-only, no sign in" />
         </div>
-      </div>
-      {err && <div style={{ marginTop: 16, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5, fontWeight: 500 }}>⚠ {err}</div>}
-    </Modal>
-  );
-}
-
-// ── Role editor (permission matrix) ─────────────────────────────────
-function RoleEditor({ T, role, perms, locs, onClose, onSaved }: { T: any; role: any; perms: any; locs: any; onClose: () => void; onSaved: () => void }) {
-  const editing = !!role.id;
-  const [name, setName] = useStateUR(role.name || '');
-  const [sel, setSel] = useStateUR<any>(null);   // Set of permission keys
-  const [allLoc, setAllLoc] = useStateUR(role.location_access ? role.location_access === 'all' : true);
-  const [locSel, setLocSel] = useStateUR<any[]>(Array.isArray(role.location_access) ? role.location_access : []);
-  const [busy, setBusy] = useStateUR(false);
-  const [err, setErr] = useStateUR<any>(null);
-
-  useEffectUR(() => {
-    if (editing) API.role.get(role.id).then((r: any) => setSel(new Set(r.permissions))).catch(() => setSel(new Set()));
-    else setSel(new Set(role.permissions || []));
-  }, []);
-
-  const allKeys = perms.flatMap((g: any) => g.items.map((i: any) => i.key));
-  const toggle = (k: any) => setSel((s: any) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
-  const toggleGroup = (g: any) => setSel((s: any) => { const n = new Set(s); const keys = g.items.map((i: any) => i.key); const allOn = keys.every((k: any) => n.has(k)); keys.forEach((k: any) => allOn ? n.delete(k) : n.add(k)); return n; });
-  const toggleLoc = (id: any) => setLocSel((l: any) => l.includes(id) ? l.filter((x: any) => x !== id) : [...l, id]);
-
-  async function save() {
-    if (!name.trim()) { setErr('Role name is required.'); return; }
-    setBusy(true); setErr(null);
-    const body = { name, permissions: [...(sel || [])], location_access: allLoc ? 'all' : locSel };
-    try { if (editing) await API.role.update(role.id, body); else await API.role.create(body); onSaved(); }
-    catch (ex: any) { setErr(ex.message || 'Could not save role.'); } finally { setBusy(false); }
-  }
-
-  return (
-    <Modal T={T} title={editing ? 'Edit role' : 'New role'} subtitle="Choose what this role can do" width={640} onClose={onClose}
-      footer={<><div style={{ flex: 1, fontSize: 12.5, color: T.inkSub, alignSelf: 'center' }}>{sel ? sel.size : 0} of {allKeys.length} permissions</div><Btn T={T} kind="ghost" onClick={onClose}>Cancel</Btn><Btn T={T} kind="accent" onClick={save} disabled={busy}>{busy ? 'Saving…' : editing ? 'Save changes' : 'Create role'}</Btn></>}>
-      <Field T={T} label="Role name" full><TextField T={T} value={name} onChange={setName} placeholder="e.g. Stock Keeper" /></Field>
-
-      <div style={{ marginTop: 18, fontSize: 12, fontWeight: 600, color: T.inkSub, marginBottom: 10 }}>Permissions</div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        {perms.map((g: any) => {
-          const keys = g.items.map((i: any) => i.key);
-          const allOn = sel && keys.every((k: any) => sel.has(k));
-          const someOn = sel && keys.some((k: any) => sel.has(k));
-          return (
-            <div key={g.group} style={{ border: `1px solid ${T.line}`, borderRadius: T.r, overflow: 'hidden' }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '9px 13px', background: T.paperAlt, borderBottom: `1px solid ${T.line}` }}>
-                <span style={{ fontSize: 12, fontWeight: 700, color: T.ink }}>{g.group}</span>
-                <button onClick={() => toggleGroup(g)} style={{ background: 'none', border: 'none', color: T.accent.text, fontSize: 11.5, fontWeight: 700, cursor: 'pointer' }}>{allOn ? 'Clear' : 'Select all'}</button>
-              </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, padding: 12 }}>
-                {g.items.map((it: any) => (
-                  <button key={it.key} onClick={() => toggle(it.key)} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '6px 12px', borderRadius: 99, cursor: 'pointer', fontFamily: T.fBody, fontSize: 12.5, fontWeight: 600, background: sel && sel.has(it.key) ? T.accent.soft : T.paper, border: `1.5px solid ${sel && sel.has(it.key) ? T.accent.base : T.line}`, color: sel && sel.has(it.key) ? T.accent.text : T.inkMid }}>
-                    <span style={{ fontSize: 11 }}>{sel && sel.has(it.key) ? '✓' : '+'}</span>{it.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      <div style={{ marginTop: 18 }}>
-        <div style={{ fontSize: 12, fontWeight: 600, color: T.inkSub, marginBottom: 8 }}>Access locations</div>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: T.inkMid, cursor: 'pointer', marginBottom: 8 }}>
-          <input type="checkbox" checked={allLoc} onChange={(e: any) => setAllLoc(e.target.checked)} style={{ accentColor: T.accent.base, width: 15, height: 15 }} />All locations
-        </label>
-        {!allLoc && (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, paddingLeft: 22 }}>
-            {locs.map((l: any) => (
-              <button key={l.id} onClick={() => toggleLoc(l.id)} style={{ padding: '6px 12px', borderRadius: 99, cursor: 'pointer', fontFamily: T.fBody, fontSize: 12.5, fontWeight: 600, background: locSel.includes(l.id) ? T.accent.soft : T.paper, border: `1.5px solid ${locSel.includes(l.id) ? T.accent.base : T.line}`, color: locSel.includes(l.id) ? T.accent.text : T.inkMid }}>{l.name}</button>
-            ))}
-          </div>
-        )}
       </div>
       {err && <div style={{ marginTop: 16, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5, fontWeight: 500 }}>⚠ {err}</div>}
     </Modal>

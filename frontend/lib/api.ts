@@ -2243,6 +2243,29 @@ const REAL_ROLES: any[] = [
 ];
 const roleKeyById = (id: any) => (REAL_ROLES.find((r: any) => r.id === Number(id)) || {}).key || 'cashier';
 const roleByKey = (key: any) => REAL_ROLES.find((r: any) => r.key === key) || REAL_ROLES[2];
+// Custom permission roles (the Role entity — distinct from the login-role enum above).
+function adaptRealRole(r: any, total: number): any {
+  if (!r) return r;
+  const permissions = Array.isArray(r.permissions) ? r.permissions : [];
+  const locationIds = Array.isArray(r.locationIds) ? r.locationIds : [];
+  return {
+    id: r.id, name: r.name,
+    permissions,
+    location_ids: locationIds,
+    location_access: locationIds.length ? locationIds : 'all',
+    is_default: !!r.isPredefined,
+    permission_count: permissions.length,
+    total_permissions: total || undefined,
+    _real: r,
+  };
+}
+function toRealRoleBody(b: any): any {
+  return {
+    name: b.name,
+    permissions: Array.isArray(b.permissions) ? b.permissions : [],
+    location_ids: b.location_access === 'all' ? [] : (Array.isArray(b.location_access) ? b.location_access : (b.location_ids || [])),
+  };
+}
 function adaptRealUser(u: any): any {
   if (!u) return u;
   const r = roleByKey(u.role);
@@ -3157,21 +3180,38 @@ const API: any = {
     },
   },
   role: {
-    // The backend has fixed enum roles, not editable Role entities. Read works;
-    // create/update/remove aren't supported (kept honest rather than silently failing).
     async list() {
-      if (REAL_MODE) return REAL_ROLES.map((r: any) => ({ id: r.id, name: r.name, location_access: 'all', permissions: [] }));
+      if (REAL_MODE) {
+        const res = await realReq('GET', '/roles');
+        const total = (res && res.total_permissions) || 0;
+        return ((res && res.roles) || []).map((r: any) => adaptRealRole(r, total));
+      }
       return (await transport('GET', '/connector/api/role')).data;
     },
     async get(id: any) {
-      if (REAL_MODE) { const r = REAL_ROLES.find((x: any) => x.id === Number(id)) || {}; return { ...r, location_access: 'all', permissions: [] }; }
+      if (REAL_MODE) return adaptRealRole(await realReq('GET', '/roles/' + id), 0);
       return (await transport('GET', '/connector/api/role/' + id)).data[0];
     },
-    async create(_body: any) { if (REAL_MODE) throw new ApiError(501, 'Custom roles aren’t supported yet — users use built-in roles.'); return (await transport('POST', '/connector/api/role', { body: _body })).data; },
-    async update(id: any, _body: any) { if (REAL_MODE) throw new ApiError(501, 'Built-in roles can’t be edited.'); return (await transport('PUT', '/connector/api/role/' + id, { body: _body })).data; },
-    async remove(id: any) { if (REAL_MODE) throw new ApiError(501, 'Built-in roles can’t be deleted.'); return (await transport('DELETE', '/connector/api/role/' + id)).data; },
+    async create(body: any) {
+      if (REAL_MODE) return adaptRealRole(await realReq('POST', '/roles', { body: toRealRoleBody(body) }), 0);
+      return (await transport('POST', '/connector/api/role', { body })).data;
+    },
+    async update(id: any, body: any) {
+      if (REAL_MODE) return adaptRealRole(await realReq('PUT', '/roles/' + id, { body: toRealRoleBody(body) }), 0);
+      return (await transport('PUT', '/connector/api/role/' + id, { body })).data;
+    },
+    async remove(id: any) {
+      if (REAL_MODE) return await realReq('DELETE', '/roles/' + id);
+      return (await transport('DELETE', '/connector/api/role/' + id)).data;
+    },
   },
-  permissions: { async list() { if (REAL_MODE) return []; return (await transport('GET', '/connector/api/permission-list')).data; } },
+  permissions: {
+    // Grouped catalog: [{ group, perms: [{ key, label }] }]
+    async list() {
+      if (REAL_MODE) { const r = await realReq('GET', '/permissions'); return (r && r.groups) || []; }
+      return (await transport('GET', '/connector/api/permission-list')).data;
+    },
+  },
   location: {
     async list(opts: any = {}) {
       if (REAL_MODE) {

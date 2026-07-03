@@ -236,6 +236,9 @@ try {
   app.use('/api/v1/projects', apiLimiter, projectsRouter);
   app.use('/api/v1/reports', apiLimiter, reportsRouter);
   app.use('/api/v1/users', apiLimiter, usersRouter);
+  const { rolesRouter, permissionsRouter } = require('./routes/roles');
+  app.use('/api/v1/roles', apiLimiter, rolesRouter);
+  app.use('/api/v1/permissions', apiLimiter, permissionsRouter);
   app.use('/api/v1/categories', apiLimiter, categoriesRouter);
   app.use('/api/v1/locations', apiLimiter, locationsRouter);
   app.use('/api/v1/customers', apiLimiter, customersRouter);
