@@ -202,6 +202,7 @@ const SupplierSchema = z.object({
   blacklist_reason: optStr(500),
   contact_kind: z.enum(['individual', 'business']).optional(),
   assigned_to_id: uuid.optional().nullable(),
+  opening_balance: money.optional(),
   notes: optStr(2000),
 });
 
@@ -500,6 +501,7 @@ const CustomerSchema = z.object({
   wholesale_terms_days: z.coerce.number().int().min(0).max(365).optional(),
   contact_kind: z.enum(['individual', 'business']).optional(),
   assigned_to_id: uuid.optional().nullable(),
+  opening_balance: money.optional(),
   notes: optStr(2000),
 });
 

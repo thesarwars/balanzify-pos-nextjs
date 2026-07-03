@@ -162,8 +162,13 @@ function ContactEditor({ T, contact, groups, onClose, onSaved, toast }: { T: The
           ))}
         </div>
         <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-          {[['individual', '◉ Individual'], ['business', '▢ Business']].map(([id, lbl]) => (
-            <button key={id} onClick={() => set('contact_kind', id)} style={{ padding: '6px 14px', borderRadius: 99, cursor: 'pointer', fontFamily: T.fBody, fontSize: 12.5, fontWeight: 600, background: f.contact_kind === id ? T.accent.soft : T.paper, border: `1.5px solid ${f.contact_kind === id ? T.accent.base : T.line}`, color: f.contact_kind === id ? T.accent.text : T.inkMid }}>{lbl}</button>
+          {[['individual', 'Individual'], ['business', 'Business']].map(([id, lbl]) => (
+            <button key={id} onClick={() => set('contact_kind', id)} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '6px 14px', borderRadius: 99, cursor: 'pointer', fontFamily: T.fBody, fontSize: 12.5, fontWeight: 600, background: f.contact_kind === id ? T.accent.soft : T.paper, border: `1.5px solid ${f.contact_kind === id ? T.accent.base : T.line}`, color: f.contact_kind === id ? T.accent.text : T.inkMid }}>
+              <span style={{ width: 14, height: 14, borderRadius: 99, flexShrink: 0, border: `1.5px solid ${f.contact_kind === id ? T.accent.base : T.lineMid}`, background: T.paper, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                {f.contact_kind === id && <span style={{ width: 7, height: 7, borderRadius: 99, background: T.accent.base }} />}
+              </span>
+              {lbl}
+            </button>
           ))}
         </div>
       </div>

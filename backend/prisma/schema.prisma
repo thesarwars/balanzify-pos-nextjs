@@ -1672,6 +1672,7 @@ model Supplier {
   paymentTerms       Int      @default(0) @map("payment_terms")
   creditLimit        Decimal  @default(0) @map("credit_limit") @db.Decimal(12, 2)
   outstandingBalance Decimal  @default(0) @map("outstanding_balance") @db.Decimal(12, 2)
+  openingBalance     Decimal  @default(0) @map("opening_balance") @db.Decimal(12, 2) // seeded into outstanding at creation
   currency           String   @default("USD") @db.VarChar(10)
   rating             Int      @default(0)
   isBlacklisted      Boolean  @default(false) @map("is_blacklisted")
@@ -1910,6 +1911,7 @@ model Customer {
   address            String?
   creditLimit        Decimal  @default(0) @map("credit_limit") @db.Decimal(12, 2)
   outstandingBalance Decimal  @default(0) @map("outstanding_balance") @db.Decimal(12, 2)
+  openingBalance     Decimal  @default(0) @map("opening_balance") @db.Decimal(12, 2) // seeded into outstanding at creation
   totalPurchases     Decimal  @default(0) @map("total_purchases") @db.Decimal(12, 2)
   loyaltyPoints      Int      @default(0) @map("loyalty_points")
   segment            String?  @db.VarChar(50)

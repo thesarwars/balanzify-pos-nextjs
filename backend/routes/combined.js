@@ -37,7 +37,12 @@ suppliersRouter.post('/', auth, requireRole('owner', 'manager'), validate(Suppli
     const bad = await badAssignee(req.body, req.user.business_id);
     if (bad) return res.status(400).json({ title: bad, status: 400 });
     const supplier = await prisma.supplier.create({
-      data: { businessId: req.user.business_id, ...mapSupplier(req.body) },
+      data: {
+        businessId: req.user.business_id,
+        ...mapSupplier(req.body),
+        // Opening balance = what we already owe this supplier; it seeds the payable.
+        ...(req.body.opening_balance !== undefined && { openingBalance: req.body.opening_balance, outstandingBalance: req.body.opening_balance }),
+      },
     });
     res.status(201).json(supplier);
   } catch (err) { next(err); }
@@ -45,11 +50,20 @@ suppliersRouter.post('/', auth, requireRole('owner', 'manager'), validate(Suppli
 
 suppliersRouter.put('/:id', auth, requireRole('owner', 'manager'), validate(SupplierSchema.partial()), async (req, res, next) => {
   try {
+    // Tenant isolation: the row must belong to the caller's business.
+    const existing = await prisma.supplier.findFirst({ where: { id: req.params.id, businessId: req.user.business_id } });
+    if (!existing) return res.status(404).json({ title: 'Not found', status: 404 });
     const bad = await badAssignee(req.body, req.user.business_id);
     if (bad) return res.status(400).json({ title: bad, status: 400 });
+    // Editing the opening balance shifts the outstanding payable by the delta,
+    // so payments/receipts already on the ledger stay intact.
+    const obDelta = req.body.opening_balance !== undefined ? req.body.opening_balance - parseFloat(existing.openingBalance || 0) : 0;
     const supplier = await prisma.supplier.update({
       where: { id: req.params.id },
-      data: mapSupplier(req.body),
+      data: {
+        ...mapSupplier(req.body),
+        ...(req.body.opening_balance !== undefined && { openingBalance: req.body.opening_balance, outstandingBalance: { increment: obDelta } }),
+      },
     });
     res.json(supplier);
   } catch (err) { next(err); }
@@ -1208,7 +1222,7 @@ customersRouter.post('/', auth, validate(CustomerSchema), async (req, res, next)
   try {
     const bad = await badAssignee(req.body, req.user.business_id);
     if (bad) return res.status(400).json({ title: bad, status: 400 });
-    const customer = await prisma.customer.create({ data: { businessId: req.user.business_id, name: req.body.name, phone: req.body.phone, whatsapp: req.body.whatsapp, email: req.body.email, address: req.body.address, creditLimit: req.body.credit_limit || 0, customerGroupId: req.body.customer_group_id || null, priceGroupId: req.body.price_group_id || null, ...(req.body.wholesale_terms_days !== undefined && { wholesaleTermsDays: req.body.wholesale_terms_days }), ...(req.body.contact_kind && { contactKind: req.body.contact_kind }), assignedToId: req.body.assigned_to_id || null, notes: req.body.notes } });
+    const customer = await prisma.customer.create({ data: { businessId: req.user.business_id, name: req.body.name, phone: req.body.phone, whatsapp: req.body.whatsapp, email: req.body.email, address: req.body.address, creditLimit: req.body.credit_limit || 0, customerGroupId: req.body.customer_group_id || null, priceGroupId: req.body.price_group_id || null, ...(req.body.wholesale_terms_days !== undefined && { wholesaleTermsDays: req.body.wholesale_terms_days }), ...(req.body.contact_kind && { contactKind: req.body.contact_kind }), assignedToId: req.body.assigned_to_id || null, ...(req.body.opening_balance !== undefined && { openingBalance: req.body.opening_balance, outstandingBalance: req.body.opening_balance }), notes: req.body.notes } });
     res.status(201).json(customer);
   } catch (err) { next(err); }
 });
@@ -1217,10 +1231,18 @@ customersRouter.put('/:id', auth, validate(CustomerSchema.partial()), async (req
   try {
     const bad = await badAssignee(req.body, req.user.business_id);
     if (bad) return res.status(400).json({ title: bad, status: 400 });
+    // Editing the opening balance shifts the outstanding by the delta so the
+    // existing deyn/credit ledger stays intact.
+    let obPatch = {};
+    if (req.body.opening_balance !== undefined) {
+      const existing = await prisma.customer.findFirst({ where: { id: req.params.id, businessId: req.user.business_id }, select: { openingBalance: true } });
+      if (!existing) return res.status(404).json({ title: 'Customer not found', status: 404 });
+      obPatch = { openingBalance: req.body.opening_balance, outstandingBalance: { increment: req.body.opening_balance - parseFloat(existing.openingBalance || 0) } };
+    }
     // Tenant isolation: scope the update to the caller's business.
     const result = await prisma.customer.updateMany({
       where: { id: req.params.id, businessId: req.user.business_id },
-      data: { name: req.body.name, phone: req.body.phone, whatsapp: req.body.whatsapp, email: req.body.email, address: req.body.address, creditLimit: req.body.credit_limit, customerGroupId: req.body.customer_group_id, ...(req.body.price_group_id !== undefined && { priceGroupId: req.body.price_group_id }), ...(req.body.wholesale_terms_days !== undefined && { wholesaleTermsDays: req.body.wholesale_terms_days }), ...(req.body.contact_kind !== undefined && { contactKind: req.body.contact_kind }), ...(req.body.assigned_to_id !== undefined && { assignedToId: req.body.assigned_to_id || null }), notes: req.body.notes },
+      data: { name: req.body.name, phone: req.body.phone, whatsapp: req.body.whatsapp, email: req.body.email, address: req.body.address, creditLimit: req.body.credit_limit, customerGroupId: req.body.customer_group_id, ...(req.body.price_group_id !== undefined && { priceGroupId: req.body.price_group_id }), ...(req.body.wholesale_terms_days !== undefined && { wholesaleTermsDays: req.body.wholesale_terms_days }), ...(req.body.contact_kind !== undefined && { contactKind: req.body.contact_kind }), ...(req.body.assigned_to_id !== undefined && { assignedToId: req.body.assigned_to_id || null }), ...obPatch, notes: req.body.notes },
     });
     if (result.count === 0) return res.status(404).json({ title: 'Customer not found', status: 404 });
     const customer = await prisma.customer.findUnique({ where: { id: req.params.id } });

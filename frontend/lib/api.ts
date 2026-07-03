@@ -2189,7 +2189,8 @@ function adaptRealCustomer(c: any): any {
     loyalty_points: c.loyaltyPoints || 0,
     credit_limit: Number(c.creditLimit || 0),
     due: Number(c.outstandingBalance || 0),
-    total_sale: 0, total_purchase: 0, opening_balance: 0, advance_balance: 0,
+    total_sale: Number(c.totalPurchases || 0), total_purchase: 0,
+    opening_balance: Number(c.openingBalance || 0), advance_balance: 0,
     customer_group_id: c.customerGroupId || '1',                       // '1' = Retail / no group
     group_name: (c.customerGroup && c.customerGroup.name) || 'Retail',
     contact_kind: c.contactKind || 'individual',
@@ -2208,6 +2209,7 @@ function toRealCustomerBody(f: any): any {
     customer_group_id: isUuid(f.customer_group_id) ? f.customer_group_id : null,  // '1'/Retail → no group
     contact_kind: f.contact_kind === 'business' ? 'business' : 'individual',
     assigned_to_id: isUuid(f.assigned_to_id) ? f.assigned_to_id : null,
+    ...(f.opening_balance !== '' && f.opening_balance != null ? { opening_balance: Number(f.opening_balance) } : {}),
   };
 }
 function adaptRealSupplier(s: any): any {
@@ -2220,7 +2222,8 @@ function adaptRealSupplier(s: any): any {
     pay_term_number: s.paymentTerms || '', pay_term_type: 'days',
     credit_limit: Number(s.creditLimit || 0),
     due: Number(s.outstandingBalance || 0),
-    total_sale: 0, total_purchase: 0, opening_balance: 0, advance_balance: 0,
+    total_sale: 0, total_purchase: 0,
+    opening_balance: Number(s.openingBalance || 0), advance_balance: 0,
     po_count: (s._count && s._count.purchaseOrders) || 0,
     contact_kind: s.contactKind || 'business',
     assigned_to_id: s.assignedToId || '',
@@ -2238,6 +2241,7 @@ function toRealSupplierBody(f: any): any {
     credit_limit: f.credit_limit ? Number(f.credit_limit) : 0,
     contact_kind: f.contact_kind === 'individual' ? 'individual' : 'business',
     assigned_to_id: isUuid(f.assigned_to_id) ? f.assigned_to_id : null,
+    ...(f.opening_balance !== '' && f.opening_balance != null ? { opening_balance: Number(f.opening_balance) } : {}),
   };
 }
 
