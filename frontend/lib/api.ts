@@ -3126,6 +3126,15 @@ const API: any = {
       if (REAL_MODE) return { contact: null, ledger: [] };
       return (await transport('GET', '/connector/api/contact-ledger/' + id)).data;
     },
+    // Supplier partner ledger: opening balance + purchases (credit) + payments
+    // (debit), account summary, and AP aging buckets.
+    async supplierLedger(id: any, params: any = {}) {
+      return realReq('GET', '/suppliers/' + id + '/ledger', { query: params });
+    },
+    // Products this supplier has supplied, joined with current stock.
+    async supplierStockReport(id: any, params: any = {}) {
+      return realReq('GET', '/suppliers/' + id + '/stock-report', { query: params });
+    },
     async pay(body: any) {
       if (REAL_MODE) {
         // Customer repayments map to the credit endpoint; supplier payments are

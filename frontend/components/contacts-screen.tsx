@@ -235,8 +235,9 @@ function ContactDrawer({ T, contact, isCust, groups, onClose, onEdit, onPay, onD
           <MiniStat T={T} label="Advance balance" value={money(c.advance_balance || 0)} tone={T.green} />
         </div>
 
-        <div style={{ display: 'flex', gap: 8, marginBottom: 18 }}>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 18, flexWrap: 'wrap' }}>
           <Btn T={T} kind="accent" style={{ flex: 1 }} onClick={() => onPay(isCust ? 'receive' : 'pay')}>{isCust ? 'Receive payment' : 'Pay due'}</Btn>
+          {!isCust && <Btn T={T} kind="ghost" onClick={() => { if (typeof window !== 'undefined') window.location.href = '/contact-view?id=' + c.id + '&type=supplier'; }}>Full profile →</Btn>}
           <Btn T={T} kind="ghost" onClick={onEdit}>Edit</Btn>
           <Btn T={T} kind="ghost" onClick={onDelete} style={{ color: T.redText }}>🗑</Btn>
         </div>
