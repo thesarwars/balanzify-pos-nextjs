@@ -3212,6 +3212,20 @@ const API: any = {
       return (await transport('GET', '/connector/api/permission-list')).data;
     },
   },
+  commissionAgent: {
+    async list() {
+      const r = await realReq('GET', '/commission-agents');
+      return ((r && r.agents) || []).map((a: any) => ({
+        id: a.id, prefix: a.prefix || '', first_name: a.firstName, last_name: a.lastName || '',
+        name: [a.prefix, a.firstName, a.lastName].filter(Boolean).join(' '),
+        email: a.email || '', phone: a.phone || '', address: a.address || '',
+        commission_percent: Number(a.commissionPercent || 0), is_active: a.isActive !== false,
+      }));
+    },
+    async create(b: any) { return realReq('POST', '/commission-agents', { body: { prefix: b.prefix || undefined, first_name: b.first_name, last_name: b.last_name || undefined, email: b.email || undefined, phone: b.phone || undefined, address: b.address || undefined, commission_percent: Number(b.commission_percent || 0) } }); },
+    async update(id: any, b: any) { return realReq('PUT', '/commission-agents/' + id, { body: { prefix: b.prefix || undefined, first_name: b.first_name, last_name: b.last_name || undefined, email: b.email || undefined, phone: b.phone || undefined, address: b.address || undefined, commission_percent: Number(b.commission_percent || 0) } }); },
+    async remove(id: any) { return realReq('DELETE', '/commission-agents/' + id); },
+  },
   location: {
     async list(opts: any = {}) {
       if (REAL_MODE) {

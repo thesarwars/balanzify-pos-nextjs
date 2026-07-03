@@ -71,7 +71,7 @@ export function RoleEditorPage({ T }: { T: Theme }) {
       if (roleId) await API.role.update(roleId, body);
       else await API.role.create(body);
       toast(roleId ? 'Role updated' : 'Role created');
-      setTimeout(() => router.push('/users'), 350);
+      setTimeout(() => router.push('/users?tab=roles'), 350);
     } catch (ex: any) { setErr(ex.message || 'Could not save the role.'); setBusy(false); }
   }
 
@@ -86,7 +86,7 @@ export function RoleEditorPage({ T }: { T: Theme }) {
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: T.paperAlt }}>
       <Topbar T={T} title={roleId ? (predefined ? 'View role' : 'Edit role') : 'New role'} subtitle="Choose what this role can do"
         right={<>
-          <Btn T={T} kind="ghost" onClick={() => router.push('/users')}>← Back to users</Btn>
+          <Btn T={T} kind="ghost" onClick={() => router.push('/users?tab=roles')}>← Back to users</Btn>
           {!predefined && <Btn T={T} kind="accent" onClick={save} disabled={busy || !loaded}>{busy ? 'Saving…' : roleId ? 'Save changes' : 'Create role'}</Btn>}
         </>} />
       <div style={{ flex: 1, overflowY: 'auto', padding: 28 }}>
@@ -135,7 +135,7 @@ export function RoleEditorPage({ T }: { T: Theme }) {
           {err && <div style={{ padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5, fontWeight: 500 }}>⚠ {err}</div>}
           {!predefined && (
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, paddingBottom: 20 }}>
-              <Btn T={T} kind="ghost" onClick={() => router.push('/users')}>Cancel</Btn>
+              <Btn T={T} kind="ghost" onClick={() => router.push('/users?tab=roles')}>Cancel</Btn>
               <Btn T={T} kind="accent" onClick={save} disabled={busy}>{busy ? 'Saving…' : roleId ? 'Save changes' : 'Create role'}</Btn>
             </div>
           )}

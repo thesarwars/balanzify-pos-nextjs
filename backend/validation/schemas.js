@@ -504,6 +504,17 @@ const CustomerGroupSchema = z.object({
   amount: z.coerce.number().min(-100).max(1000).default(0),  // pricing %: negative = discount
 });
 
+const CommissionAgentSchema = z.object({
+  prefix:             optStr(10),
+  first_name:         shortStr(100),
+  last_name:          optStr(100),
+  email:              optStr(255),
+  phone:              optStr(40),
+  address:            optStr(1000),
+  commission_percent: z.coerce.number().min(0).max(100).default(0),
+  is_active:          z.boolean().optional(),
+});
+
 const UnitSchema = z.object({
   actual_name:   shortStr(100),
   short_name:    shortStr(20),
@@ -800,6 +811,7 @@ module.exports = {
   ExpenseSchema, ExpenseCategorySchema,
   PaymentAccountSchema, AccountTransferSchema, AccountDepositSchema,
   CustomerGroupSchema, UnitSchema, BrandSchema, VariationTemplateSchema, DiscountSchema,
+  CommissionAgentSchema,
   PriceGroupSchema, InvoiceLayoutSchema, InvoiceSchemeSchema, CommissionSettingsSchema,
   EmployeeSchema, OrgUnitSchema, HrmSettingsSchema, EmployeeShiftSchema, AttendanceClockSchema,
   LeaveTypeSchema, LeaveTypeUpdateSchema, LeaveSchema, LeaveStatusSchema, LeaveOverrideSchema,

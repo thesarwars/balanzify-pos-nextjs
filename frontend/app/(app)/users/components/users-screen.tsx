@@ -23,30 +23,45 @@ const LOGIN_ROLES = [
   { id: 4, name: 'Warehouse' },
 ];
 
+const TAB_IDS = ['users', 'roles', 'agents'];
+
 export function UsersRoles({ T }: { T: any }) {
   const router = useRouter();
   const [tab, setTab] = useStateUR('users');
   const [users, setUsers] = useStateUR<any[]>([]);
   const [roles, setRoles] = useStateUR<any[]>([]);
+  const [agents, setAgents] = useStateUR<any[]>([]);
   const [locs, setLocs] = useStateUR<any[]>([]);
   const [loading, setLoading] = useStateUR(true);
   const [editUser, setEditUser] = useStateUR<any>(null);
+  const [editAgent, setEditAgent] = useStateUR<any>(null);
   const [confirm, setConfirm] = useStateUR<any>(null);   // {kind, item}
   const [toast, toastNode] = useToast();
 
+  // The active tab lives in the URL (?tab=roles) so refresh, back and links
+  // from the role editor land on the right tab.
+  useEffectUR(() => {
+    const t = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('tab') : null;
+    if (t && TAB_IDS.includes(t)) setTab(t);
+  }, []);
+  const switchTab = (id: string) => { setTab(id); router.replace('/users' + (id === 'users' ? '' : '?tab=' + id), { scroll: false }); };
+
   const reloadUsers = React.useCallback(() => API.user.list().then(setUsers).catch(() => {}), []);
   const reloadRoles = React.useCallback(() => API.role.list().then(setRoles).catch(() => {}), []);
+  const reloadAgents = React.useCallback(() => API.commissionAgent.list().then(setAgents).catch(() => {}), []);
   useEffectUR(() => {
-    Promise.all([API.user.list(), API.role.list(), API.location.list()])
-      .then(([u, r, l]: any) => { setUsers(u); setRoles(r); setLocs(l); })
+    Promise.all([API.user.list(), API.role.list(), API.commissionAgent.list().catch(() => []), API.location.list()])
+      .then(([u, r, a, l]: any) => { setUsers(u); setRoles(r); setAgents(a); setLocs(l); })
       .catch(() => {}).finally(() => setLoading(false));
   }, []);
 
   async function del(kind: any, item: any) {
     try {
-      if (kind === 'user') await API.user.remove(item.id, item); else await API.role.remove(item.id);
-      setConfirm(null); toast(kind === 'user' ? 'User deleted' : 'Role deleted');
-      kind === 'user' ? reloadUsers() : reloadRoles();
+      if (kind === 'user') await API.user.remove(item.id, item);
+      else if (kind === 'agent') await API.commissionAgent.remove(item.id);
+      else await API.role.remove(item.id);
+      setConfirm(null); toast(kind === 'user' ? 'User deleted' : kind === 'agent' ? 'Agent deleted' : 'Role deleted');
+      kind === 'user' ? reloadUsers() : kind === 'agent' ? reloadAgents() : reloadRoles();
     } catch (ex: any) { setConfirm(null); toast(ex.message || 'Delete failed'); }
   }
 
@@ -55,13 +70,15 @@ export function UsersRoles({ T }: { T: any }) {
       <Topbar T={T} title="User Management" subtitle="Team members, roles & permissions"
         right={tab === 'users'
           ? <Btn T={T} kind="accent" onClick={() => setEditUser({})}>+ Add User</Btn>
+          : tab === 'agents'
+          ? <Btn T={T} kind="accent" onClick={() => setEditAgent({})}>+ Add Agent</Btn>
           : <Btn T={T} kind="accent" onClick={() => router.push('/role-editor')}>+ Add Role</Btn>} />
       <div style={{ flex: 1, overflowY: 'auto', padding: 28 }}>
         <div style={{ maxWidth: 1200, margin: '0 auto' }}>
           {/* tabs */}
           <div style={{ display: 'flex', gap: 4, marginBottom: 18, background: T.paper, padding: 4, borderRadius: 10, width: 'fit-content', border: `1px solid ${T.line}` }}>
-            {[['users', 'Users', users.length], ['roles', 'Roles', roles.length]].map(([id, lbl, n]: any) => (
-              <button key={id} onClick={() => setTab(id)} style={{ padding: '8px 18px', borderRadius: 7, border: 'none', cursor: 'pointer', fontFamily: T.fBody, fontSize: 13, fontWeight: tab === id ? 700 : 500, background: tab === id ? T.accent.base : 'transparent', color: tab === id ? T.accent.on : T.inkMid }}>{lbl} <span style={{ opacity: 0.7 }}>· {n}</span></button>
+            {[['users', 'Users', users.length], ['roles', 'Roles', roles.length], ['agents', 'Commission Agents', agents.length]].map(([id, lbl, n]: any) => (
+              <button key={id} onClick={() => switchTab(id)} style={{ padding: '8px 18px', borderRadius: 7, border: 'none', cursor: 'pointer', fontFamily: T.fBody, fontSize: 13, fontWeight: tab === id ? 700 : 500, background: tab === id ? T.accent.base : 'transparent', color: tab === id ? T.accent.on : T.inkMid }}>{lbl} <span style={{ opacity: 0.7 }}>· {n}</span></button>
             ))}
           </div>
 
@@ -123,13 +140,42 @@ export function UsersRoles({ T }: { T: any }) {
               ))}
             </div>
           )}
+
+          {tab === 'agents' && (
+            <Panel T={T} pad={false}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead><tr>{[['Agent', 'l'], ['Email', 'l'], ['Contact', 'l'], ['Commission %', 'r'], ['Status', 'r'], ['', 'r']].map(([h, a]: any, i: number) => (
+                  <th key={i} style={{ textAlign: a === 'r' ? 'right' : 'left', padding: '11px 18px', fontSize: 10, fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', color: T.inkSub, background: T.paperAlt, borderBottom: `1px solid ${T.line}` } as React.CSSProperties}>{h}</th>
+                ))}</tr></thead>
+                <tbody>
+                  {agents.map((a: any) => (
+                    <tr key={a.id} style={{ transition: 'background .12s' }} onMouseEnter={(e: any) => e.currentTarget.style.background = T.paperAlt} onMouseLeave={(e: any) => e.currentTarget.style.background = 'transparent'}>
+                      <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 13, fontWeight: 600, color: T.ink }}>{a.name}</td>
+                      <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 12.5, color: T.inkSub }}>{a.email || '—'}</td>
+                      <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 12.5, color: T.inkSub, fontFamily: T.fMono }}>{a.phone || '—'}</td>
+                      <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right', fontFamily: T.fMono, fontSize: 12.5, color: T.ink } as React.CSSProperties}>{a.commission_percent}%</td>
+                      <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right' } as React.CSSProperties}><Badge T={T} tone={a.is_active ? 'green' : 'gray'}>{a.is_active ? 'Active' : 'Inactive'}</Badge></td>
+                      <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right' } as React.CSSProperties}>
+                        <span style={{ display: 'inline-flex', gap: 6, justifyContent: 'flex-end' }}>
+                          <button onClick={() => setEditAgent(a)} style={urMini(T)}>Edit</button>
+                          <button onClick={() => setConfirm({ kind: 'agent', item: a })} style={urMini(T, true)}>Delete</button>
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {!loading && agents.length === 0 && <div style={{ padding: 44, textAlign: 'center', color: T.inkMute, fontSize: 13 } as React.CSSProperties}>No commission agents yet.</div>}
+            </Panel>
+          )}
         </div>
       </div>
 
       {editUser && <UserEditor T={T} user={editUser} roles={LOGIN_ROLES} locs={locs} onClose={() => setEditUser(null)} onSaved={() => { setEditUser(null); toast(editUser.id ? 'User updated' : 'User created'); reloadUsers(); }} />}
+      {editAgent && <AgentEditor T={T} agent={editAgent} onClose={() => setEditAgent(null)} onSaved={() => { setEditAgent(null); toast(editAgent.id ? 'Agent updated' : 'Agent added'); reloadAgents(); }} />}
       {confirm && (
         <Modal T={T} title={`Delete ${confirm.kind}?`} subtitle={confirm.item.name} width={420} onClose={() => setConfirm(null)} onSave={() => del(confirm.kind, confirm.item)} saveLabel="Delete">
-          <div style={{ fontSize: 13.5, color: T.inkMid, lineHeight: 1.6 }}>{confirm.kind === 'role' ? 'Users on this role must be reassigned first.' : 'This removes the user and their login access.'}</div>
+          <div style={{ fontSize: 13.5, color: T.inkMid, lineHeight: 1.6 }}>{confirm.kind === 'role' ? 'Users on this role must be reassigned first.' : confirm.kind === 'agent' ? 'This removes the commission agent.' : 'This removes the user and their login access.'}</div>
         </Modal>
       )}
       {toastNode}
@@ -200,6 +246,47 @@ function UserEditor({ T, user, roles, locs, onClose, onSaved }: { T: any; user: 
         </div>
       </div>
       {err && <div style={{ marginTop: 16, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5, fontWeight: 500 }}>⚠ {err}</div>}
+    </Modal>
+  );
+}
+
+// ── Sales commission agent editor ───────────────────────────────────
+function AgentEditor({ T, agent, onClose, onSaved }: { T: any; agent: any; onClose: () => void; onSaved: () => void }) {
+  const editing = !!agent.id;
+  const [f, setF] = useStateUR<any>({
+    prefix: agent.prefix || '', first_name: agent.first_name || '', last_name: agent.last_name || '',
+    email: agent.email || '', phone: agent.phone || '', address: agent.address || '',
+    commission_percent: agent.commission_percent != null && agent.commission_percent !== '' ? String(agent.commission_percent) : '',
+  });
+  const [busy, setBusy] = useStateUR(false);
+  const [err, setErr] = useStateUR<any>(null);
+  const set = (k: any, v: any) => setF((s: any) => ({ ...s, [k]: v }));
+
+  async function save() {
+    if (!f.first_name.trim()) { setErr('First name is required.'); return; }
+    setBusy(true); setErr(null);
+    try {
+      if (editing) await API.commissionAgent.update(agent.id, f); else await API.commissionAgent.create(f);
+      onSaved();
+    } catch (ex: any) { setErr(ex.message || 'Could not save the agent.'); } finally { setBusy(false); }
+  }
+
+  return (
+    <Modal T={T} title={editing ? 'Edit commission agent' : 'Add sales commission agent'} subtitle="Earns a percentage on sales they broker" width={560} onClose={onClose}
+      footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Cancel</Btn><Btn T={T} kind="accent" onClick={save} disabled={busy}>{busy ? 'Saving…' : editing ? 'Save changes' : 'Add agent'}</Btn></>}>
+      <FormGrid>
+        <Field T={T} label="Prefix"><TextField T={T} value={f.prefix} onChange={(v: any) => set('prefix', v)} placeholder="Mr / Mrs" /></Field>
+        <Field T={T} label="First name"><TextField T={T} value={f.first_name} onChange={(v: any) => set('first_name', v)} placeholder="First name" /></Field>
+        <Field T={T} label="Last name"><TextField T={T} value={f.last_name} onChange={(v: any) => set('last_name', v)} placeholder="Last name" /></Field>
+        <Field T={T} label="Email"><TextField T={T} type="email" value={f.email} onChange={(v: any) => set('email', v)} placeholder="agent@business.com" /></Field>
+        <Field T={T} label="Contact number"><TextField T={T} value={f.phone} onChange={(v: any) => set('phone', v)} placeholder="+252 …" /></Field>
+        <Field T={T} label="Sales commission (%)"><TextField T={T} type="number" value={f.commission_percent} onChange={(v: any) => set('commission_percent', v)} placeholder="e.g. 2.5" /></Field>
+        <Field T={T} label="Address" full>
+          <textarea value={f.address} onChange={e => set('address', e.target.value)} placeholder="Address" rows={2}
+            style={{ width: '100%', padding: '10px 13px', fontSize: 13.5, fontFamily: T.fBody, color: T.ink, background: T.paper, border: `1.5px solid ${T.line}`, borderRadius: T.r, outline: 'none', resize: 'vertical', boxSizing: 'border-box' }} />
+        </Field>
+      </FormGrid>
+      {err && <div style={{ marginTop: 14, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5, fontWeight: 500 }}>⚠ {err}</div>}
     </Modal>
   );
 }

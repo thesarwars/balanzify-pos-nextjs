@@ -17,9 +17,11 @@ const prisma = require('../lib/prisma');
 const { auth, requireRole } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { PERMISSION_GROUPS, ALL_PERMISSION_KEYS } = require('../lib/permissions');
+const { CommissionAgentSchema } = require('../validation/schemas');
 
 const rolesRouter = express.Router();
 const permissionsRouter = express.Router();
+const commissionAgentsRouter = express.Router();
 
 const RoleSchema = z.object({
   name: z.string().trim().min(1).max(100),
@@ -106,4 +108,57 @@ rolesRouter.delete('/:id', auth, requireRole('owner', 'manager'), async (req, re
   } catch (err) { next(err); }
 });
 
-module.exports = { rolesRouter, permissionsRouter };
+// ── Sales commission agents (User Management ▸ Commission Agents) ─────────────
+
+commissionAgentsRouter.get('/', auth, async (req, res, next) => {
+  try {
+    const agents = await prisma.commissionAgent.findMany({
+      where: { businessId: req.user.business_id },
+      orderBy: { createdAt: 'asc' },
+    });
+    res.json({ agents });
+  } catch (err) { next(err); }
+});
+
+commissionAgentsRouter.post('/', auth, requireRole('owner', 'manager'), validate(CommissionAgentSchema), async (req, res, next) => {
+  try {
+    const b = req.body;
+    const agent = await prisma.commissionAgent.create({ data: {
+      businessId: req.user.business_id,
+      prefix: b.prefix || null, firstName: b.first_name, lastName: b.last_name || null,
+      email: b.email || null, phone: b.phone || null, address: b.address || null,
+      commissionPercent: b.commission_percent || 0,
+    } });
+    res.status(201).json(agent);
+  } catch (err) { next(err); }
+});
+
+commissionAgentsRouter.put('/:id', auth, requireRole('owner', 'manager'), validate(CommissionAgentSchema.partial()), async (req, res, next) => {
+  try {
+    const existing = await prisma.commissionAgent.findFirst({ where: { id: req.params.id, businessId: req.user.business_id } });
+    if (!existing) return res.status(404).json({ title: 'Not found', status: 404 });
+    const b = req.body;
+    const agent = await prisma.commissionAgent.update({ where: { id: req.params.id }, data: {
+      ...(b.prefix             !== undefined && { prefix: b.prefix || null }),
+      ...(b.first_name         !== undefined && { firstName: b.first_name }),
+      ...(b.last_name          !== undefined && { lastName: b.last_name || null }),
+      ...(b.email              !== undefined && { email: b.email || null }),
+      ...(b.phone              !== undefined && { phone: b.phone || null }),
+      ...(b.address            !== undefined && { address: b.address || null }),
+      ...(b.commission_percent !== undefined && { commissionPercent: b.commission_percent }),
+      ...(b.is_active          !== undefined && { isActive: b.is_active }),
+    } });
+    res.json(agent);
+  } catch (err) { next(err); }
+});
+
+commissionAgentsRouter.delete('/:id', auth, requireRole('owner', 'manager'), async (req, res, next) => {
+  try {
+    const existing = await prisma.commissionAgent.findFirst({ where: { id: req.params.id, businessId: req.user.business_id } });
+    if (!existing) return res.status(404).json({ title: 'Not found', status: 404 });
+    await prisma.commissionAgent.delete({ where: { id: req.params.id } });
+    res.json({ message: 'Agent deleted.' });
+  } catch (err) { next(err); }
+});
+
+module.exports = { rolesRouter, permissionsRouter, commissionAgentsRouter };
