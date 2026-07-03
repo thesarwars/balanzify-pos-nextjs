@@ -130,10 +130,14 @@ function ContactEditor({ T, contact, groups, onClose, onSaved, toast }: { T: The
     address: contact.address || '', tax_number: contact.tax_number || '',
     customer_group_id: contact.customer_group_id ?? 1, pay_term_number: contact.pay_term_number || '', pay_term_type: contact.pay_term_type || 'days',
     credit_limit: contact.credit_limit ?? '', opening_balance: contact.opening_balance || '',
+    contact_kind: contact.contact_kind || (contact.type === 'supplier' ? 'business' : 'individual'),
+    assigned_to_id: contact.assigned_to_id || '',
   });
   const [more, setMore] = useStateC(editing && (contact.credit_limit != null || contact.opening_balance));
   const [busy, setBusy] = useStateC(false);
   const [err, setErr] = useStateC<string | null>(null);
+  const [team, setTeam] = useStateC<any[]>([]);
+  useEffectC(() => { API.user.list().then((us: any) => setTeam(Array.isArray(us) ? us : [])).catch(() => {}); }, []);
   const set = (k: string, v: any) => setF((s: any) => ({ ...s, [k]: v }));
   const isCust = f.type !== 'supplier';
 
@@ -157,12 +161,20 @@ function ContactEditor({ T, contact, groups, onClose, onSaved, toast }: { T: The
             <button key={id} onClick={() => set('type', id)} style={{ padding: '9px', borderRadius: T.r, cursor: 'pointer', fontFamily: T.fBody, fontSize: 13, fontWeight: 700, background: f.type === id ? T.accent.soft : T.paper, border: `1.5px solid ${f.type === id ? T.accent.base : T.line}`, color: f.type === id ? T.accent.text : T.ink }}>{lbl}</button>
           ))}
         </div>
+        <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+          {[['individual', '◉ Individual'], ['business', '▢ Business']].map(([id, lbl]) => (
+            <button key={id} onClick={() => set('contact_kind', id)} style={{ padding: '6px 14px', borderRadius: 99, cursor: 'pointer', fontFamily: T.fBody, fontSize: 12.5, fontWeight: 600, background: f.contact_kind === id ? T.accent.soft : T.paper, border: `1.5px solid ${f.contact_kind === id ? T.accent.base : T.line}`, color: f.contact_kind === id ? T.accent.text : T.inkMid }}>{lbl}</button>
+          ))}
+        </div>
       </div>
       <FormGrid>
         <Field T={T} label="Name" full><TextField T={T} value={f.name} onChange={v => set('name', v)} placeholder="Contact name" /></Field>
         <Field T={T} label="Mobile"><TextField T={T} value={f.mobile} onChange={v => set('mobile', v)} placeholder="+252 …" /></Field>
         <Field T={T} label="Email"><TextField T={T} type="email" value={f.email} onChange={v => set('email', v)} placeholder="optional" /></Field>
-        <Field T={T} label="Address" full><TextField T={T} value={f.address} onChange={v => set('address', v)} placeholder="Street, district, city" /></Field>
+        <Field T={T} label="Assigned to" hint="Team member who owns this relationship">
+          <SelectField T={T} value={f.assigned_to_id} options={['', ...team.map((u: any) => u.id)]} onChange={v => set('assigned_to_id', v)} render={(v: any) => (v ? ((team.find((u: any) => u.id === v) || {}).name || v) : '— Unassigned —')} />
+        </Field>
+        <Field T={T} label="Address"><TextField T={T} value={f.address} onChange={v => set('address', v)} placeholder="Street, district, city" /></Field>
         {isCust && <Field T={T} label="Customer group"><SelectField T={T} value={String(f.customer_group_id)} options={['1', ...groups.filter((g: any) => g.id !== 1).map((g: any) => String(g.id))]} onChange={v => set('customer_group_id', v)} render={(v: any) => { const g = (groups.find((x: any) => String(x.id) === v) || { name: 'Retail', amount: 0 }); return g.name + (g.amount ? ` (${g.amount > 0 ? '+' : ''}${g.amount}%)` : ''); }} /></Field>}
         <Field T={T} label="Tax number"><TextField T={T} value={f.tax_number} onChange={v => set('tax_number', v)} placeholder="VAT / GST no." /></Field>
       </FormGrid>

@@ -2192,6 +2192,9 @@ function adaptRealCustomer(c: any): any {
     total_sale: 0, total_purchase: 0, opening_balance: 0, advance_balance: 0,
     customer_group_id: c.customerGroupId || '1',                       // '1' = Retail / no group
     group_name: (c.customerGroup && c.customerGroup.name) || 'Retail',
+    contact_kind: c.contactKind || 'individual',
+    assigned_to_id: c.assignedToId || '',
+    assigned_to_name: (c.assignedTo && c.assignedTo.name) || '',
     _real: c,
   };
 }
@@ -2203,6 +2206,8 @@ function toRealCustomerBody(f: any): any {
     address: f.address || undefined,
     credit_limit: f.credit_limit ? Number(f.credit_limit) : 0,
     customer_group_id: isUuid(f.customer_group_id) ? f.customer_group_id : null,  // '1'/Retail → no group
+    contact_kind: f.contact_kind === 'business' ? 'business' : 'individual',
+    assigned_to_id: isUuid(f.assigned_to_id) ? f.assigned_to_id : null,
   };
 }
 function adaptRealSupplier(s: any): any {
@@ -2217,6 +2222,9 @@ function adaptRealSupplier(s: any): any {
     due: Number(s.outstandingBalance || 0),
     total_sale: 0, total_purchase: 0, opening_balance: 0, advance_balance: 0,
     po_count: (s._count && s._count.purchaseOrders) || 0,
+    contact_kind: s.contactKind || 'business',
+    assigned_to_id: s.assignedToId || '',
+    assigned_to_name: (s.assignedTo && s.assignedTo.name) || '',
     _real: s,
   };
 }
@@ -2228,6 +2236,8 @@ function toRealSupplierBody(f: any): any {
     address: f.address || undefined,
     payment_terms: f.pay_term_number ? Number(f.pay_term_number) : 0,
     credit_limit: f.credit_limit ? Number(f.credit_limit) : 0,
+    contact_kind: f.contact_kind === 'individual' ? 'individual' : 'business',
+    assigned_to_id: isUuid(f.assigned_to_id) ? f.assigned_to_id : null,
   };
 }
 

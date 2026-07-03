@@ -1231,6 +1231,8 @@ model User {
   lostFoundFound  LostFound[]  @relation("lost_found_finder")
   waitedTables    RestaurantTable[] @relation("table_waiter")
   managedLocations Location[]  @relation("location_manager")
+  assignedCustomers Customer[] @relation("customer_assignee")
+  assignedSuppliers Supplier[] @relation("supplier_assignee")
 
   @@map("users")
 }
@@ -1675,11 +1677,14 @@ model Supplier {
   isBlacklisted      Boolean  @default(false) @map("is_blacklisted")
   blacklistReason    String?  @map("blacklist_reason")
   isActive           Boolean  @default(true) @map("is_active")
+  contactKind        String   @default("business") @map("contact_kind") @db.VarChar(10) // individual | business
+  assignedToId       String?  @map("assigned_to_id") @db.Uuid // team member who owns this relationship
   notes              String?
   createdAt          DateTime @default(now()) @map("created_at")
   updatedAt          DateTime @default(now()) @updatedAt @map("updated_at")
 
   business           Business                @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  assignedTo         User?                   @relation("supplier_assignee", fields: [assignedToId], references: [id], onDelete: SetNull)
   products           SupplierProduct[]
   communications     SupplierCommunication[]
   purchaseOrders     PurchaseOrder[]
@@ -1908,6 +1913,8 @@ model Customer {
   totalPurchases     Decimal  @default(0) @map("total_purchases") @db.Decimal(12, 2)
   loyaltyPoints      Int      @default(0) @map("loyalty_points")
   segment            String?  @db.VarChar(50)
+  contactKind        String   @default("individual") @map("contact_kind") @db.VarChar(10) // individual | business
+  assignedToId       String?  @map("assigned_to_id") @db.Uuid // team member who owns this relationship
   customerGroupId    String?  @map("customer_group_id") @db.Uuid
   priceGroupId       String?  @map("price_group_id") @db.Uuid // wholesale per-customer pricing tier
   wholesaleTermsDays Int      @default(0) @map("wholesale_terms_days") // 0 = due on delivery (COD)
@@ -1921,6 +1928,7 @@ model Customer {
   business         Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
   customerGroup    CustomerGroup?    @relation(fields: [customerGroupId], references: [id])
   priceGroup       PriceGroup?       @relation(fields: [priceGroupId], references: [id])
+  assignedTo       User?             @relation("customer_assignee", fields: [assignedToId], references: [id], onDelete: SetNull)
   sales            Sale[]
   loyaltyLedger    LoyaltyLedger[]
   reservations     Reservation[]

@@ -25,7 +25,7 @@ suppliersRouter.get('/', auth, async (req, res, next) => {
   try {
     const suppliers = await prisma.supplier.findMany({
       where: { businessId: req.user.business_id, isActive: true },
-      include: { _count: { select: { purchaseOrders: true, products: true } } },
+      include: { _count: { select: { purchaseOrders: true, products: true } }, assignedTo: { select: { name: true } } },
       orderBy: { name: 'asc' },
     });
     res.json({ suppliers });
@@ -34,6 +34,8 @@ suppliersRouter.get('/', auth, async (req, res, next) => {
 
 suppliersRouter.post('/', auth, requireRole('owner', 'manager'), validate(SupplierSchema), async (req, res, next) => {
   try {
+    const bad = await badAssignee(req.body, req.user.business_id);
+    if (bad) return res.status(400).json({ title: bad, status: 400 });
     const supplier = await prisma.supplier.create({
       data: { businessId: req.user.business_id, ...mapSupplier(req.body) },
     });
@@ -43,6 +45,8 @@ suppliersRouter.post('/', auth, requireRole('owner', 'manager'), validate(Suppli
 
 suppliersRouter.put('/:id', auth, requireRole('owner', 'manager'), validate(SupplierSchema.partial()), async (req, res, next) => {
   try {
+    const bad = await badAssignee(req.body, req.user.business_id);
+    if (bad) return res.status(400).json({ title: bad, status: 400 });
     const supplier = await prisma.supplier.update({
       where: { id: req.params.id },
       data: mapSupplier(req.body),
@@ -105,8 +109,16 @@ function mapSupplier(b) {
   if (b.is_blacklisted !== undefined) m.isBlacklisted = b.is_blacklisted;
   if (b.blacklist_reason !== undefined) m.blacklistReason = b.blacklist_reason;
   if (b.is_active      !== undefined) m.isActive = b.is_active;
+  if (b.contact_kind   !== undefined) m.contactKind = b.contact_kind;
+  if (b.assigned_to_id !== undefined) m.assignedToId = b.assigned_to_id || null;
   if (b.notes          !== undefined) m.notes = b.notes;
   return m;
+}
+
+// The assignee must be a user of this business.
+async function badAssignee(b, businessId) {
+  if (!b.assigned_to_id) return null;
+  return (await prisma.user.count({ where: { id: b.assigned_to_id, businessId } })) ? null : 'Assigned user not found';
 }
 
 // ── STOCK (adjustments, transfers) ───────────────────────────────────────────
@@ -1185,7 +1197,7 @@ customersRouter.get('/', auth, async (req, res, next) => {
   try {
     const customers = await prisma.customer.findMany({
       where: { businessId: req.user.business_id, isActive: true },
-      include: { customerGroup: { select: { name: true, discountPct: true } } },
+      include: { customerGroup: { select: { name: true, discountPct: true } }, assignedTo: { select: { name: true } } },
       orderBy: { name: 'asc' },
     });
     res.json({ customers });
@@ -1194,17 +1206,21 @@ customersRouter.get('/', auth, async (req, res, next) => {
 
 customersRouter.post('/', auth, validate(CustomerSchema), async (req, res, next) => {
   try {
-    const customer = await prisma.customer.create({ data: { businessId: req.user.business_id, name: req.body.name, phone: req.body.phone, whatsapp: req.body.whatsapp, email: req.body.email, address: req.body.address, creditLimit: req.body.credit_limit || 0, customerGroupId: req.body.customer_group_id || null, priceGroupId: req.body.price_group_id || null, ...(req.body.wholesale_terms_days !== undefined && { wholesaleTermsDays: req.body.wholesale_terms_days }), notes: req.body.notes } });
+    const bad = await badAssignee(req.body, req.user.business_id);
+    if (bad) return res.status(400).json({ title: bad, status: 400 });
+    const customer = await prisma.customer.create({ data: { businessId: req.user.business_id, name: req.body.name, phone: req.body.phone, whatsapp: req.body.whatsapp, email: req.body.email, address: req.body.address, creditLimit: req.body.credit_limit || 0, customerGroupId: req.body.customer_group_id || null, priceGroupId: req.body.price_group_id || null, ...(req.body.wholesale_terms_days !== undefined && { wholesaleTermsDays: req.body.wholesale_terms_days }), ...(req.body.contact_kind && { contactKind: req.body.contact_kind }), assignedToId: req.body.assigned_to_id || null, notes: req.body.notes } });
     res.status(201).json(customer);
   } catch (err) { next(err); }
 });
 
 customersRouter.put('/:id', auth, validate(CustomerSchema.partial()), async (req, res, next) => {
   try {
+    const bad = await badAssignee(req.body, req.user.business_id);
+    if (bad) return res.status(400).json({ title: bad, status: 400 });
     // Tenant isolation: scope the update to the caller's business.
     const result = await prisma.customer.updateMany({
       where: { id: req.params.id, businessId: req.user.business_id },
-      data: { name: req.body.name, phone: req.body.phone, whatsapp: req.body.whatsapp, email: req.body.email, address: req.body.address, creditLimit: req.body.credit_limit, customerGroupId: req.body.customer_group_id, ...(req.body.price_group_id !== undefined && { priceGroupId: req.body.price_group_id }), ...(req.body.wholesale_terms_days !== undefined && { wholesaleTermsDays: req.body.wholesale_terms_days }), notes: req.body.notes },
+      data: { name: req.body.name, phone: req.body.phone, whatsapp: req.body.whatsapp, email: req.body.email, address: req.body.address, creditLimit: req.body.credit_limit, customerGroupId: req.body.customer_group_id, ...(req.body.price_group_id !== undefined && { priceGroupId: req.body.price_group_id }), ...(req.body.wholesale_terms_days !== undefined && { wholesaleTermsDays: req.body.wholesale_terms_days }), ...(req.body.contact_kind !== undefined && { contactKind: req.body.contact_kind }), ...(req.body.assigned_to_id !== undefined && { assignedToId: req.body.assigned_to_id || null }), notes: req.body.notes },
     });
     if (result.count === 0) return res.status(404).json({ title: 'Customer not found', status: 404 });
     const customer = await prisma.customer.findUnique({ where: { id: req.params.id } });

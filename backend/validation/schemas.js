@@ -200,6 +200,8 @@ const SupplierSchema = z.object({
   rating: z.coerce.number().int().min(0).max(5).default(0),
   is_blacklisted: z.boolean().default(false),
   blacklist_reason: optStr(500),
+  contact_kind: z.enum(['individual', 'business']).optional(),
+  assigned_to_id: uuid.optional().nullable(),
   notes: optStr(2000),
 });
 
@@ -496,6 +498,8 @@ const CustomerSchema = z.object({
   customer_group_id: uuid.optional().nullable(),
   price_group_id: uuid.optional().nullable(),
   wholesale_terms_days: z.coerce.number().int().min(0).max(365).optional(),
+  contact_kind: z.enum(['individual', 'business']).optional(),
+  assigned_to_id: uuid.optional().nullable(),
   notes: optStr(2000),
 });
 
