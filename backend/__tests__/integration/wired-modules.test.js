@@ -1562,7 +1562,9 @@ describe('restaurant checkout (in-process sale service — no HTTP self-call)', 
   beforeAll(async () => {
     token = await register();
     await enableModule(token, 'restaurant');
-    loc = await location(token);
+    // Every business is seeded a primary location; checkout (no explicit
+    // location_id) resolves to it, so stock the product there.
+    loc = (await request(app).get('/api/v1/locations').set(auth(token))).body.locations[0].id;
     prod = await stockedProduct(token, loc, 10, 100);
     // configure a 10% service charge for this business
     const { businessId } = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
@@ -3280,7 +3282,8 @@ describe('restaurant completeness — control & reporting', () => {
   let token, loc, prod, prod2;
   beforeAll(async () => {
     token = await register(); await enableModule(token, 'restaurant');
-    loc = await location(token);
+    // Every business is seeded a primary location; checkout resolves to it.
+    loc = (await request(app).get('/api/v1/locations').set(auth(token))).body.locations[0].id;
     prod  = await stockedProduct(token, loc, 10, 100); // gets a required modifier
     prod2 = await stockedProduct(token, loc, 10, 100); // plain, for comp/report tests
   });

@@ -31,6 +31,7 @@ router.get('/', auth, async (req, res, next) => {
       where,
       include: {
         category: { select: { name: true, color: true } },
+        brand: { select: { name: true } },
         stockLevels: { include: { location: { select: { name: true } } } },
         variants: { where: { isActive: true }, select: { id: true, attributes: true, sellingPrice: true } },
       },
@@ -67,6 +68,7 @@ router.get('/:id', auth, async (req, res, next) => {
       where: { id: req.params.id },
       include: {
         category: true,
+        brand: { select: { name: true } },
         stockLevels: { include: { location: true } },
         variants: { where: { isActive: true } },
         stockBatches: { orderBy: { expiryDate: 'asc' } },

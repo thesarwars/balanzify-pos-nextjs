@@ -81,7 +81,9 @@ export function Products({ T }: { T: any }) {
   if (lowOnly) rows = rows.filter((p: any) => p.stock <= 12);
 
   // Live categories in real mode; seed list is the mock fallback.
-  const cats = (refs.cats && refs.cats.length) ? refs.cats : CATEGORIES.filter((c: any) => c.id !== 'all');
+  // Real mode: show only real categories (mock seed categories silently drop on
+  // save because they have no backend UUID). Mock mode keeps the seed list.
+  const cats = (refs.cats && refs.cats.length) ? refs.cats : (API.config?.isReal?.() ? [] : CATEGORIES.filter((c: any) => c.id !== 'all'));
   const stockTone = (n: number) => n <= 0 ? 'red' : n <= 12 ? 'amber' : 'green';
   const setF = (k: string, v: any) => setForm((f: any) => ({ ...f, [k]: v }));
 
@@ -253,7 +255,7 @@ export function Products({ T }: { T: any }) {
                           </div>
                         </td>
                         <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}`, fontFamily: T.fMono, fontSize: 12, color: T.inkSub }}>{p.sku}</td>
-                        <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}` }}><Badge T={T} tone="gray">{cats.find((c: any) => c.id === p.cat)?.name}</Badge></td>
+                        <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}` }}>{(p.category_name || cats.find((c: any) => c.id === p.cat)?.name) ? <Badge T={T} tone="gray">{p.category_name || cats.find((c: any) => c.id === p.cat)?.name}</Badge> : <span style={{ color: T.inkMute }}>—</span>}</td>
                         <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right', fontFamily: T.fMono, fontSize: 13, fontWeight: 600, color: T.ink }}>{money(p.price)}</td>
                         <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right', fontFamily: T.fMono, fontSize: 12.5, color: margin >= 50 ? T.greenText : T.inkSub }}>{margin}%</td>
                         <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right' }}>{p.stock === Infinity || p.enable_stock === false ? <Badge T={T} tone="gray">∞</Badge> : <Badge T={T} tone={stockTone(p.stock) as any}>{p.stock} {p.unit}</Badge>}</td>
@@ -321,7 +323,7 @@ export function Products({ T }: { T: any }) {
               </div>
             )}
 
-            {([['Type', ({ single: 'Single', variable: 'Variable', combo: 'Combo' } as any)[sel.type || 'single']], ['Category', cats.find((c: any) => c.id === sel.cat)?.name], ['Brand', (refs.brands.find((b: any) => b.id === sel.brand_id) || {}).name || '—'], ['Unit of measure', sel.unit], ['Tax', (refs.taxRates.find((t: any) => t.id === (sel.tax_id || 0)) || {}).name || 'None'], ['Alert quantity', (sel.alert_quantity || 0) + ' ' + sel.unit], ['Stock managed', sel.enable_stock === false ? 'No' : 'Yes'], ['For selling', sel.not_for_selling ? 'No' : 'Yes']] as any[]).map(([k, v]: any) => (
+            {([['Type', ({ single: 'Single', variable: 'Variable', combo: 'Combo' } as any)[sel.type || 'single']], ['Category', sel.category_name || cats.find((c: any) => c.id === sel.cat)?.name || '—'], ['Brand', sel.brand_name || (refs.brands.find((b: any) => b.id === sel.brand_id) || {}).name || '—'], ['Unit of measure', sel.unit], ['Tax', (refs.taxRates.find((t: any) => t.id === (sel.tax_id || 0)) || {}).name || 'None'], ['Alert quantity', (sel.alert_quantity || 0) + ' ' + sel.unit], ['Stock managed', sel.enable_stock === false ? 'No' : 'Yes'], ['For selling', sel.not_for_selling ? 'No' : 'Yes']] as any[]).map(([k, v]: any) => (
               <div key={k} style={{ display: 'flex', justifyContent: 'space-between', padding: '9px 0', borderBottom: `1px solid ${T.line}`, fontSize: 12.5 }}>
                 <span style={{ color: T.inkSub }}>{k}</span>
                 <span style={{ fontWeight: 600, color: T.ink }}>{v}</span>
@@ -400,7 +402,7 @@ export function Products({ T }: { T: any }) {
             </Field>
 
             {/* per-location availability */}
-            {refs.locations.length > 1 && (
+            {refs.locations.length >= 1 && (
               <Field T={T} label="Business locations" hint="Which locations sell this — none selected = all" full>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                   {refs.locations.map((l: any) => {

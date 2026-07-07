@@ -24,6 +24,7 @@ export const NAV = [
   { sect: 'Inventory', items: [
     { id: 'locations', label: 'Locations', icon: '☖' },
     { id: 'categories', label: 'Categories', icon: '⊞' },
+    { id: 'brands', label: 'Brands', icon: '◭' },
     { id: 'products', label: 'Products', icon: '◫' },
     { id: 'stock', label: 'Stock', icon: '◱' },
     { id: 'stocktake', label: 'Stocktake', icon: '☑' },

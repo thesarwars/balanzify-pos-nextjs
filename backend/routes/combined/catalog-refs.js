@@ -83,7 +83,11 @@ const brandsRouter = express.Router();
 
 brandsRouter.get('/', auth, async (req, res, next) => {
   try {
-    const brands = await prisma.brand.findMany({ where: { businessId: req.user.business_id }, orderBy: { name: 'asc' } });
+    const brands = await prisma.brand.findMany({
+      where: { businessId: req.user.business_id },
+      include: { _count: { select: { products: true } } },
+      orderBy: { name: 'asc' },
+    });
     res.json({ brands });
   } catch (err) { next(err); }
 });
@@ -91,11 +95,29 @@ brandsRouter.post('/', auth, requireRole('owner', 'manager'), validate(BrandSche
   try {
     const brand = await prisma.brand.upsert({
       where: { businessId_name: { businessId: req.user.business_id, name: req.body.name } },
-      create: { businessId: req.user.business_id, name: req.body.name },
-      update: {},
+      create: { businessId: req.user.business_id, name: req.body.name, description: req.body.description || null, useForRepair: req.body.use_for_repair || false },
+      update: { description: req.body.description || null, ...(req.body.use_for_repair !== undefined && { useForRepair: req.body.use_for_repair }) },
     });
     res.status(201).json(brand);
   } catch (err) { next(err); }
+});
+brandsRouter.put('/:id', auth, requireRole('owner', 'manager'), validate(BrandSchema.partial()), async (req, res, next) => {
+  try {
+    const existing = await prisma.brand.findFirst({ where: { id: req.params.id, businessId: req.user.business_id }, select: { id: true } });
+    if (!existing) return res.status(404).json({ title: 'Not found', status: 404 });
+    const brand = await prisma.brand.update({
+      where: { id: req.params.id },
+      data: {
+        ...(req.body.name !== undefined && { name: req.body.name }),
+        ...(req.body.description !== undefined && { description: req.body.description || null }),
+        ...(req.body.use_for_repair !== undefined && { useForRepair: req.body.use_for_repair }),
+      },
+    });
+    res.json(brand);
+  } catch (err) {
+    if (err.code === 'P2002') return res.status(409).json({ title: 'A brand with that name already exists', status: 409 });
+    next(err);
+  }
 });
 brandsRouter.delete('/:id', auth, requireRole('owner', 'manager'), async (req, res, next) => {
   try {

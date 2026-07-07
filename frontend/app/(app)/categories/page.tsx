@@ -1,7 +1,7 @@
 'use client';
 import { useTheme } from '@/components/shell';
-import { DataScreen } from '@/components/data-screen';
+import { Categories } from './components/categories-screen';
 export default function CategoriesPage() {
   const T = useTheme();
-  return <DataScreen T={T} id="categories" />;
+  return <Categories T={T} />;
 }

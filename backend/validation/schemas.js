@@ -452,8 +452,10 @@ const SettingsSchema = z.object({
 
 const CategorySchema = z.object({
   name: shortStr(100),
+  code: optStr(50),           // category / HSN code
   description: optStr(500),
   color: z.string().regex(/^#[0-9A-Fa-f]{6}$/, 'Color must be a hex code').optional().nullable(),
+  parent_id: uuid.optional().nullable(), // sub-taxonomy parent
 });
 
 const LocationSchema = z.object({
@@ -530,7 +532,11 @@ const UnitSchema = z.object({
   base_multiplier: z.coerce.number().positive().max(1000000).optional().nullable(),
 });
 
-const BrandSchema = z.object({ name: shortStr(255) });
+const BrandSchema = z.object({
+  name: shortStr(255),
+  description: optStr(500),         // short description
+  use_for_repair: z.boolean().optional(),
+});
 
 const PriceGroupSchema = z.object({
   name:    shortStr(255),

@@ -53,6 +53,11 @@ router.post('/register', validate(RegisterSchema), async (req, res, next) => {
       await tx.unit.create({
         data: { businessId: business.id, actualName: 'Pieces', shortName: 'Pc(s)', allowDecimal: false },
       });
+      // Seed a default business location — every business needs at least one so
+      // products can hold stock and the location picker/POS have something to use.
+      await tx.location.create({
+        data: { businessId: business.id, name: 'Main Store', type: 'store', isActive: true },
+      });
       // Seed the five predefined roles (Admin, Manager, Cashier, Accountant, Stock Keeper).
       await seedPredefinedRoles(tx, business.id);
       return { business, user };

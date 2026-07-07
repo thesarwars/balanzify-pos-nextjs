@@ -1966,6 +1966,16 @@ function attrsToName(attrs: any): string {
 }
 // Categories cache (name → uuid) so the product editor can send category_id.
 const REAL_CAT_BY_NAME: Record<string, string> = {};
+// Category editor view-model → backend CategorySchema body.
+function toRealCategoryBody(vm: any): any {
+  return {
+    name: vm.name,
+    code: vm.code || undefined,
+    description: vm.description || undefined,
+    color: /^#[0-9A-Fa-f]{6}$/.test(vm.color || '') ? vm.color : undefined,
+    parent_id: isUuid(vm.parent_id) ? vm.parent_id : null,
+  };
+}
 function adaptRealProduct(p: any): any {
   if (!p) return p;
   const catName = (p.category && p.category.name) || '';
@@ -1974,7 +1984,9 @@ function adaptRealProduct(p: any): any {
     name: p.name,
     sku: p.sku || '',
     cat: catName || (p.categoryId || ''),       // grouping key = category name (matches category.list ids)
+    category_name: catName,                     // display-safe (from included relation)
     brand_id: p.brandId || '',
+    brand_name: (p.brand && p.brand.name) || '',
     price: Number(p.sellingPrice ?? p.selling_price ?? 0),
     cost: Number(p.costPrice ?? p.cost_price ?? 0),
     stock: p.total_stock ?? (Array.isArray(p.stockLevels) ? p.stockLevels.reduce((s: number, sl: any) => s + (sl.quantity || 0), 0) : 0),
@@ -2009,7 +2021,8 @@ function toRealProductBody(vm: any): any {
     name: vm.name,
     sku: vm.sku || undefined,
     barcode: vm.barcode || undefined,
-    category_id: (vm.cat && REAL_CAT_BY_NAME[vm.cat]) || vm.category_id || undefined,
+    // Resolve to a real category UUID: by-name map, then a raw uuid, then explicit id.
+    category_id: (vm.cat && REAL_CAT_BY_NAME[vm.cat]) || (isUuid(vm.cat) ? vm.cat : undefined) || (isUuid(vm.category_id) ? vm.category_id : undefined) || undefined,
     brand_id: isUuid(vm.brand_id) ? vm.brand_id : undefined,
     unit_of_measure: vm.unit || 'unit',
     cost_price: Number(vm.cost || 0),
@@ -2751,10 +2764,28 @@ const API: any = {
         const res = await realReq('GET', '/categories');
         const arr = (res && (res.categories || res.data)) || (Array.isArray(res) ? res : []);
         (Array.isArray(arr) ? arr : []).forEach((c: any) => { if (c && c.name) REAL_CAT_BY_NAME[c.name] = c.id; });
-        // id = name so screens' `category.id === product.cat` grouping holds.
-        return (Array.isArray(arr) ? arr : []).map((c: any) => ({ id: c.name, name: c.name, color: c.color || '#D9C9A3', uid: c.id, count: c.product_count ?? c._count?.products }));
+        // id = name so screens' `category.id === product.cat` grouping holds; uid is the real UUID.
+        return (Array.isArray(arr) ? arr : []).map((c: any) => ({
+          id: c.name, name: c.name, uid: c.id,
+          code: c.code || '', description: c.description || '', color: c.color || '#D9C9A3',
+          parent_id: c.parentId || '', parent_name: (c.parent && c.parent.name) || '',
+          count: c.product_count ?? c._count?.products ?? 0,
+          child_count: c._count?.children ?? 0,
+        }));
       }
       return [];
+    },
+    async create(body: any) {
+      if (REAL_MODE) return await realReq('POST', '/categories', { body: toRealCategoryBody(body) });
+      return (await transport('POST', '/connector/api/category', { body })).data;
+    },
+    async update(id: any, body: any) {
+      if (REAL_MODE) return await realReq('PUT', '/categories/' + id, { body: toRealCategoryBody(body) });
+      return (await transport('PUT', '/connector/api/category/' + id, { body })).data;
+    },
+    async remove(id: any) {
+      if (REAL_MODE) return await realReq('DELETE', '/categories/' + id);
+      return (await transport('DELETE', '/connector/api/category/' + id)).data;
     },
   },
 
@@ -2789,13 +2820,20 @@ const API: any = {
     async list() {
       if (REAL_MODE) {
         const res = await realReq('GET', '/brands');
-        return ((res && (res.brands || res.data)) || []).map((b: any) => ({ id: b.id, name: b.name }));
+        return ((res && (res.brands || res.data)) || []).map((b: any) => ({
+          id: b.id, name: b.name, description: b.description || '', use_for_repair: !!b.useForRepair,
+          count: b._count?.products ?? 0,
+        }));
       }
       return (await transport('GET', '/connector/api/brand')).data;
     },
     async create(body: any) {
-      if (REAL_MODE) return await realReq('POST', '/brands', { body: { name: body.name } });
+      if (REAL_MODE) return await realReq('POST', '/brands', { body: { name: body.name, description: body.description || undefined, use_for_repair: !!body.use_for_repair } });
       return (await transport('POST', '/connector/api/brand', { body })).data;
+    },
+    async update(id: any, body: any) {
+      if (REAL_MODE) return await realReq('PUT', '/brands/' + id, { body: { name: body.name, description: body.description || undefined, use_for_repair: !!body.use_for_repair } });
+      return (await transport('PUT', '/connector/api/brand/' + id, { body })).data;
     },
     async remove(id: any) {
       if (REAL_MODE) return await realReq('DELETE', '/brands/' + id);

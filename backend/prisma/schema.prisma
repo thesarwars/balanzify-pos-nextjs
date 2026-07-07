@@ -694,10 +694,12 @@ model Unit {
 }
 
 model Brand {
-  id         String    @id @default(uuid()) @db.Uuid
-  businessId String    @map("business_id") @db.Uuid
-  name       String    @db.VarChar(255)
-  createdAt  DateTime  @default(now()) @map("created_at")
+  id           String    @id @default(uuid()) @db.Uuid
+  businessId   String    @map("business_id") @db.Uuid
+  name         String    @db.VarChar(255)
+  description  String?   // short description
+  useForRepair Boolean   @default(false) @map("use_for_repair")
+  createdAt    DateTime  @default(now()) @map("created_at")
 
   business  Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
   products  Product[]
@@ -1296,11 +1298,15 @@ model Category {
   id          String   @id @default(uuid()) @db.Uuid
   businessId  String   @map("business_id") @db.Uuid
   name        String   @db.VarChar(255)
+  code        String?  @db.VarChar(50) // category / HSN code
   description String?
   color       String?  @db.VarChar(20)
+  parentId    String?  @map("parent_id") @db.Uuid // sub-taxonomy: null = top-level
   createdAt   DateTime @default(now()) @map("created_at")
 
-  business Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  business Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  parent   Category?  @relation("category_tree", fields: [parentId], references: [id], onDelete: SetNull)
+  children Category[] @relation("category_tree")
   products Product[]
 
   @@map("categories")
