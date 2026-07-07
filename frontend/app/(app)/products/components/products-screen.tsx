@@ -90,7 +90,7 @@ export function Products({ T }: { T: any }) {
   const SWATCHES = ['#E7B85C', '#7FB7D6', '#C0504D', '#5B8A4C', '#D9C9A3', '#9AC0CB', '#B5793F', '#7A4A2B'];
 
   const blankForm = () => ({
-    type: 'single', name: '', sku: '', sku_prefix: '', cat: cats[0].id,
+    type: 'single', name: '', sku: '', sku_prefix: '', cat: '',
     unit: (refs.units[0] || {}).short_name || 'Pc(s)', brand_id: '', tax_id: 0,
     alert_quantity: '', enable_stock: true, not_for_selling: false,
     price: '', cost: '', stock: '',
@@ -380,7 +380,7 @@ export function Products({ T }: { T: any }) {
             <Field T={T} label={form.sku ? 'SKU' : 'SKU (auto-generated if blank)'}><TextField T={T} value={form.sku} onChange={(v: any) => setF('sku', v)} placeholder="Leave blank to auto-generate" /></Field>
             <Field T={T} label="Barcode"><TextField T={T} value={form.barcode} onChange={(v: any) => setF('barcode', v)} placeholder="Scan or type barcode" /></Field>
             <Field T={T} label="Barcode type"><SelectField T={T} value={form.barcode_type} options={['C128', 'C39', 'EAN13', 'EAN8', 'UPCA', 'UPCE']} onChange={(v: any) => setF('barcode_type', v)} render={(v: any) => (({ C128: 'Code 128 (C128)', C39: 'Code 39 (C39)', EAN13: 'EAN-13', EAN8: 'EAN-8', UPCA: 'UPC-A', UPCE: 'UPC-E' } as any)[v] || v)} /></Field>
-            <Field T={T} label="Category"><SelectField T={T} value={form.cat} options={cats.map((c: any) => c.id)} onChange={(v: any) => setF('cat', v)} /></Field>
+            <Field T={T} label="Category"><SelectField T={T} value={form.cat} options={['', ...cats.map((c: any) => c.id)]} onChange={(v: any) => setF('cat', v)} render={(v: any) => (v ? ((cats.find((c: any) => c.id === v) || {}).name || v) : '— None —')} /></Field>
             <Field T={T} label="Brand">
               <SelectField T={T} value={String(form.brand_id)} options={[{ v: '', l: '— None —' }, ...refs.brands.map((b: any) => ({ v: String(b.id), l: b.name }))].map((o: any) => o.v)} onChange={(v: any) => setF('brand_id', v)}
                 render={(v: any) => (refs.brands.find((b: any) => String(b.id) === v) || {}).name || '— None —'} />
