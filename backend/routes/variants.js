@@ -10,7 +10,7 @@ router.get('/', auth, async (req, res, next) => {
     const product = await prisma.product.findUnique({ where: { id: req.params.productId }, select: { businessId: true } });
     if (!product || product.businessId !== req.user.business_id) return res.status(404).json({ title: 'Product not found', status: 404 });
     const variants = await prisma.productVariant.findMany({
-      where: { productId: req.params.productId },
+      where: { productId: req.params.productId, isActive: true }, // exclude soft-deleted
       include: { stockLevels: true },
       orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
     });

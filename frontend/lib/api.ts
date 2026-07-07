@@ -2774,6 +2774,35 @@ const API: any = {
       return null;
     },
   },
+  // Per-product variants (variable products) — /products/:productId/variants.
+  productVariant: {
+    async list(productId: any) {
+      if (!REAL_MODE) return [];
+      const res = await realReq('GET', '/products/' + productId + '/variants');
+      return ((res && res.variants) || []).map((v: any) => ({
+        id: v.id, sku: v.sku || '', barcode: v.barcode || '', attributes: v.attributes || {},
+        cost: Number(v.costPrice || 0), price: Number(v.sellingPrice || 0), stock: v.total_stock || 0,
+      }));
+    },
+    async create(productId: any, body: any) {
+      return realReq('POST', '/products/' + productId + '/variants', { body: {
+        sku: body.sku || undefined, attributes: body.attributes || {},
+        cost_price: Number(body.cost || 0), selling_price: Number(body.price || 0),
+        ...(body.opening_stock ? { opening_stock: Number(body.opening_stock), location_id: body.location_id } : {}),
+      } });
+    },
+    async update(productId: any, variantId: any, body: any) {
+      return realReq('PUT', '/products/' + productId + '/variants/' + variantId, { body: {
+        ...(body.sku !== undefined && { sku: body.sku || null }),
+        ...(body.attributes !== undefined && { attributes: body.attributes }),
+        ...(body.cost !== undefined && { cost_price: Number(body.cost || 0) }),
+        ...(body.price !== undefined && { selling_price: Number(body.price || 0) }),
+      } });
+    },
+    async remove(productId: any, variantId: any) {
+      return realReq('DELETE', '/products/' + productId + '/variants/' + variantId);
+    },
+  },
 
   // Categories — real backend has /api/v1/categories; the mock screens read the
   // seed CATEGORIES directly, so the mock branch just returns an empty list.

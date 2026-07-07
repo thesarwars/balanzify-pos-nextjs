@@ -129,7 +129,7 @@ export function Products({ T }: { T: any }) {
     unit: (refs.units[0] || {}).short_name || 'Pc(s)', brand_id: '', tax_id: 0,
     alert_quantity: '', enable_stock: true, not_for_selling: false,
     price: '', cost: '', stock: '',
-    var_template_id: '', variations: [], combo: [],
+    var_sku_format: 'number', varGroups: [], combo: [],
     sw: SWATCHES[Math.floor(Math.random() * SWATCHES.length)], img: null, _imgFile: null,
     barcode: '', barcode_type: 'C128', weight: '', prep_time_minutes: '',
     is_serialized: false, selling_price_tax_type: 'exclusive',
@@ -140,7 +140,7 @@ export function Products({ T }: { T: any }) {
     setForm(blankForm());
     setOpen(true);
   }
-  function openEdit(p: any) {
+  async function openEdit(p: any) {
     setEditing(p); setFormErr(null);
     setForm({
       type: p.type || 'single', name: p.name, sku: p.sku, sku_prefix: '', cat: p.cat,
@@ -148,7 +148,7 @@ export function Products({ T }: { T: any }) {
       alert_quantity: p.alert_quantity ? String(p.alert_quantity) : '',
       enable_stock: p.enable_stock !== false, not_for_selling: !!p.not_for_selling,
       price: String(p.price ?? ''), cost: String(p.cost ?? ''), stock: p.stock === Infinity ? '' : String(p.stock ?? ''),
-      var_template_id: '', variations: (p.variations || []).map((v: any) => ({ ...v, cost: String(v.cost), price: String(v.price), stock: String(v.stock) })),
+      var_sku_format: 'number', varGroups: [],
       combo: (p.combo || []).map((c: any) => ({ ...c })), sw: p.sw, img: p.img || null, _imgFile: null,
       barcode: p.barcode || '', barcode_type: p.barcode_type || 'C128',
       weight: p.weight != null && p.weight !== '' ? String(p.weight) : '',
@@ -158,15 +158,51 @@ export function Products({ T }: { T: any }) {
       description: p.description || '', brochure_url: p.brochure_url || '', brochure_key: p.brochure_key || '',
     });
     setOpen(true);
+    // Rebuild variation groups from the product's real variants (grouped by attribute key).
+    if (p.type === 'variable' && API.config?.isReal?.()) {
+      try {
+        const variants = await API.productVariant.list(p.id);
+        const byKey: Record<string, any[]> = {};
+        for (const v of variants) {
+          const key = Object.keys(v.attributes || {})[0] || 'Variation';
+          const value = (v.attributes || {})[key] || '';
+          (byKey[key] = byKey[key] || []).push({ id: v.id, value, sku: v.sku || '', cost: String(v.cost || ''), price: String(v.price || ''), margin: recalcMargin(v.cost, v.price) });
+        }
+        const varGroups = Object.entries(byKey).map(([name, values]) => ({ name, template_id: '', values }));
+        setForm((f: any) => ({ ...f, varGroups }));
+      } catch {}
+    }
   }
 
-  // variable-product helpers
-  function applyTemplate(tid: any) {
-    const t = refs.variations.find((v: any) => v.id === Number(tid));
-    setForm((f: any) => ({ ...f, var_template_id: tid, variations: t ? t.values.map((val: any) => ({ name: val.name, sku: '', cost: '', price: '', stock: '' })) : [] }));
-  }
-  const setVarRow = (i: number, k: string, v: any) => setForm((f: any) => ({ ...f, variations: f.variations.map((row: any, j: number) => j === i ? { ...row, [k]: v } : row) }));
-  const fillDown = (k: string) => setForm((f: any) => { const v0 = f.variations[0] ? f.variations[0][k] : ''; return { ...f, variations: f.variations.map((row: any) => ({ ...row, [k]: v0 })) }; });
+  // variable-product helpers — reference-style multi-group variation editor.
+  // Each group is one attribute (Size / Colour); each value row → one variant.
+  const recalcPrice = (cost: any, margin: any) => { const c = parseFloat(cost), m = parseFloat(margin); return (isFinite(c) && isFinite(m)) ? String(+(c * (1 + m / 100)).toFixed(2)) : ''; };
+  const recalcMargin = (cost: any, price: any) => { const c = parseFloat(cost), p = parseFloat(price); return (isFinite(c) && c > 0 && isFinite(p)) ? String(+(((p - c) / c) * 100).toFixed(2)) : ''; };
+  const blankVal = () => ({ value: '', sku: '', cost: '', margin: '25', price: '' });
+  const addVarGroup = () => setForm((f: any) => ({ ...f, varGroups: [...f.varGroups, { name: '', template_id: '', values: [blankVal()] }] }));
+  const rmVarGroup = (gi: number) => setForm((f: any) => ({ ...f, varGroups: f.varGroups.filter((_: any, j: number) => j !== gi) }));
+  const pickGroupTemplate = (gi: number, tid: any) => setForm((f: any) => ({ ...f, varGroups: f.varGroups.map((g: any, j: number) => {
+    if (j !== gi) return g;
+    const t = refs.variations.find((v: any) => String(v.id) === String(tid));
+    return t ? { ...g, template_id: tid, name: t.name, values: t.values.map((val: any) => ({ ...blankVal(), value: val.name })) } : { ...g, template_id: '' };
+  }) }));
+  const setGroupName = (gi: number, name: any) => setForm((f: any) => ({ ...f, varGroups: f.varGroups.map((g: any, j: number) => j === gi ? { ...g, name } : g) }));
+  const addVarValue = (gi: number) => setForm((f: any) => ({ ...f, varGroups: f.varGroups.map((g: any, j: number) => j === gi ? { ...g, values: [...g.values, blankVal()] } : g) }));
+  const rmVarValue = (gi: number, vi: number) => setForm((f: any) => ({ ...f, varGroups: f.varGroups.map((g: any, j: number) => j === gi ? { ...g, values: g.values.filter((_: any, k: number) => k !== vi) } : g) }));
+  const setVarValue = (gi: number, vi: number, k: string, val: any) => setForm((f: any) => ({ ...f, varGroups: f.varGroups.map((g: any, j: number) => {
+    if (j !== gi) return g;
+    return { ...g, values: g.values.map((row: any, m: number) => {
+      if (m !== vi) return row;
+      const next: any = { ...row, [k]: val };
+      if (k === 'cost' || k === 'margin') next.price = recalcPrice(k === 'cost' ? val : next.cost, k === 'margin' ? val : next.margin);
+      else if (k === 'price') next.margin = recalcMargin(next.cost, val);
+      return next;
+    }) };
+  }) }));
+  // Auto-SKU for a value when left blank, honouring the chosen format.
+  const autoSku = (base: string, value: string, seq: number) => form.var_sku_format === 'variation'
+    ? `${base || 'SKU'}${String(value || '').trim().split(/\s+/).map((w: string) => w[0] || '').join('').toUpperCase()}`
+    : `${base || 'SKU'}-${seq}`;
   // combo helpers
   const addCombo = () => setForm((f: any) => ({ ...f, combo: [...f.combo, { product_id: (list[0] || {}).id, qty: 1 }] }));
   const setComboRow = (i: number, k: string, v: any) => setForm((f: any) => ({ ...f, combo: f.combo.map((row: any, j: number) => j === i ? { ...row, [k]: v } : row) }));
@@ -176,8 +212,11 @@ export function Products({ T }: { T: any }) {
     if (!form.name.trim()) return 'Product name is required.';
     if (form.type === 'single' && form.enable_stock && form.price === '') return 'Enter a selling price.';
     if (form.type === 'variable') {
-      if (!form.variations.length) return 'Add at least one variation.';
-      if (form.variations.some((v: any) => v.price === '')) return 'Each variation needs a selling price.';
+      const allValues = form.varGroups.flatMap((g: any) => g.values);
+      if (!form.varGroups.length || !allValues.length) return 'Add at least one variation value.';
+      if (form.varGroups.some((g: any) => !g.name.trim())) return 'Give each variation a name.';
+      if (allValues.some((v: any) => !String(v.value).trim())) return 'Each variation value needs a name.';
+      if (allValues.some((v: any) => v.price === '' || v.price == null)) return 'Each variation value needs a selling price.';
     }
     if (form.type === 'combo' && !form.combo.length) return 'Add at least one product to the combo.';
     return null;
@@ -192,8 +231,10 @@ export function Products({ T }: { T: any }) {
       brand_id: form.brand_id ? (/^\d+$/.test(String(form.brand_id)) ? Number(form.brand_id) : form.brand_id) : null, tax_id: form.tax_id || 0,
       alert_quantity: Number(form.alert_quantity || 0),
       enable_stock: form.type === 'combo' ? true : form.enable_stock, not_for_selling: form.not_for_selling,
-      price: parseFloat(form.price || 0), cost: parseFloat(form.cost || 0), stock: parseInt(form.stock || 0),
-      variations: form.variations.map((v: any) => ({ name: v.name, sku: v.sku, cost: parseFloat(v.cost || 0), price: parseFloat(v.price || 0), stock: parseInt(v.stock || 0) })),
+      // For variable products the base price/cost mirror the first variant (variants carry the real prices).
+      price: form.type === 'variable' ? parseFloat(form.varGroups[0]?.values[0]?.price || 0) : parseFloat(form.price || 0),
+      cost: form.type === 'variable' ? parseFloat(form.varGroups[0]?.values[0]?.cost || 0) : parseFloat(form.cost || 0),
+      stock: parseInt(form.stock || 0),
       combo: form.combo,
       barcode: form.barcode, barcode_type: form.barcode_type,
       weight: form.weight, prep_time_minutes: form.prep_time_minutes,
@@ -211,6 +252,22 @@ export function Products({ T }: { T: any }) {
           if (form._imgFile) await API.upload.productImage(savedId, form._imgFile);
           else if (editing && editing.img && !form.img) await API.upload.removeProductImage(savedId);
         } catch { toast('Product saved, but the photo upload failed.'); }
+      }
+      // Sync variants for variable products (create / update / delete against the
+      // existing set), each value row → one variant with attributes { name: value }.
+      if (form.type === 'variable' && savedId && API.config?.isReal?.()) {
+        try {
+          const base = (form.sku || '').trim() || 'SKU';
+          let seq = 0;
+          const desired = form.varGroups.flatMap((g: any) => g.values.map((v: any) => {
+            seq++;
+            return { id: v.id, attributes: { [g.name.trim() || 'Variation']: String(v.value).trim() }, sku: (v.sku || '').trim() || autoSku(base, v.value, seq), cost: parseFloat(v.cost || 0), price: parseFloat(v.price || 0) };
+          }));
+          const existing = editing ? await API.productVariant.list(savedId).catch(() => []) : [];
+          const desiredIds = new Set(desired.filter((d: any) => d.id).map((d: any) => d.id));
+          for (const ex of existing) { if (!desiredIds.has(ex.id)) { try { await API.productVariant.remove(savedId, ex.id); } catch {} } }
+          for (const d of desired) { try { d.id ? await API.productVariant.update(savedId, d.id, d) : await API.productVariant.create(savedId, d); } catch {} }
+        } catch { toast('Product saved, but syncing variations failed.'); }
       }
       toast(editing ? 'Product updated' : 'Product created');
       if (andAnother) { setEditing(null); setForm(blankForm()); }
@@ -485,29 +542,62 @@ export function Products({ T }: { T: any }) {
           {/* VARIABLE */}
           {form.type === 'variable' && (
             <div style={{ marginTop: 16 }}>
-              <Field T={T} label="Variation template" full>
-                <SelectField T={T} value={form.var_template_id} options={['', ...refs.variations.map((v: any) => String(v.id))]} onChange={applyTemplate}
-                  render={(v: any) => v ? (refs.variations.find((t: any) => String(t.id) === v) || {}).name + ' — ' + ((refs.variations.find((t: any) => String(t.id) === v) || {}).values || []).map((x: any) => x.name).join(', ') : 'Choose a template…'} />
-              </Field>
-              {form.variations.length > 0 && (
-                <div style={{ marginTop: 12, border: `1px solid ${T.line}`, borderRadius: T.rLg, overflow: 'hidden' }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr 1fr 1fr', gap: 0, background: T.paperAlt, padding: '8px 12px', fontSize: 10, fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase', color: T.inkSub } as React.CSSProperties}>
-                    <span>Variation</span>
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>Cost <FillBtn T={T} onClick={() => fillDown('cost')} /></span>
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>Price <FillBtn T={T} onClick={() => fillDown('price')} /></span>
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>Stock <FillBtn T={T} onClick={() => fillDown('stock')} /></span>
-                  </div>
-                  {form.variations.map((v: any, i: number) => (
-                    <div key={i} style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr 1fr 1fr', gap: 8, padding: '8px 12px', borderTop: `1px solid ${T.line}`, alignItems: 'center' }}>
-                      <span style={{ fontSize: 13, fontWeight: 600, color: T.ink }}>{v.name}</span>
-                      <MiniInp T={T} value={v.cost} onChange={(e: any) => setVarRow(i, 'cost', e.target.value)} placeholder="0.00" />
-                      <MiniInp T={T} value={v.price} onChange={(e: any) => setVarRow(i, 'price', e.target.value)} placeholder="0.00" />
-                      <MiniInp T={T} value={v.stock} onChange={(e: any) => setVarRow(i, 'stock', e.target.value)} placeholder="0" />
-                    </div>
+              {/* SKU format */}
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 11.5, fontWeight: 700, color: T.inkSub, marginBottom: 8 }}>Variation SKU format</div>
+                <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap' }}>
+                  {[['number', 'SKU-Number', 'e.g. ABC-1, ABC-2'], ['variation', 'SKU + Variation', 'e.g. ABCS, ABCM']].map(([id, lbl, hint]: any) => (
+                    <label key={id} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                      <span style={{ width: 15, height: 15, borderRadius: 99, flexShrink: 0, border: `1.5px solid ${form.var_sku_format === id ? T.accent.base : T.lineMid}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{form.var_sku_format === id && <span style={{ width: 7, height: 7, borderRadius: 99, background: T.accent.base }} />}</span>
+                      <input type="radio" checked={form.var_sku_format === id} onChange={() => setF('var_sku_format', id)} style={{ display: 'none' }} />
+                      <span style={{ fontSize: 13, fontWeight: 600, color: T.ink }}>{lbl}</span>
+                      <span style={{ fontSize: 11, color: T.inkMute }}>{hint}</span>
+                    </label>
                   ))}
                 </div>
-              )}
-              <div style={{ fontSize: 11, color: T.inkMute, marginTop: 7 }}>Manage templates from the <b style={{ cursor: 'pointer', color: T.accent.text }} onClick={() => setVarMgr(true)}>Variations</b> button. The ⊕ icons copy the first row's value to all.</div>
+              </div>
+
+              {/* variation groups */}
+              {form.varGroups.map((g: any, gi: number) => (
+                <div key={gi} style={{ marginBottom: 14, border: `1px solid ${T.line}`, borderRadius: T.rLg, overflow: 'hidden' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', background: T.paperAlt, borderBottom: `1px solid ${T.line}` }}>
+                    <span style={{ fontSize: 11.5, fontWeight: 700, color: T.inkSub }}>Variation</span>
+                    <div style={{ minWidth: 180 }}>
+                      {refs.variations.length > 0
+                        ? <SelectField T={T} value={g.template_id} options={['', ...refs.variations.map((v: any) => String(v.id))]} onChange={(tid: any) => pickGroupTemplate(gi, tid)} render={(v: any) => v ? (refs.variations.find((t: any) => String(t.id) === v) || {}).name : 'Please select…'} />
+                        : <MiniInp T={T} value={g.name} onChange={(e: any) => setGroupName(gi, e.target.value)} placeholder="Variation name (e.g. Colour)" />}
+                    </div>
+                    {refs.variations.length > 0 && <MiniInp T={T} value={g.name} onChange={(e: any) => setGroupName(gi, e.target.value)} placeholder="or type a name" style={{ maxWidth: 160 }} />}
+                    <span style={{ flex: 1 }} />
+                    <button onClick={() => rmVarGroup(gi)} style={{ width: 28, height: 28, borderRadius: 7, border: `1px solid ${T.redSoft}`, background: T.redSoft, color: T.redText, cursor: 'pointer', fontSize: 13 }}>✕</button>
+                  </div>
+                  <div style={{ overflowX: 'auto' }}>
+                    <div style={{ minWidth: 620 }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 0.9fr 0.7fr 0.9fr 34px', gap: 8, padding: '7px 12px', fontSize: 9.5, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', color: T.inkSub } as React.CSSProperties}>
+                        <span>Value</span><span>SKU</span><span>Purchase (exc)</span><span>Margin %</span><span>Selling (exc)</span><span />
+                      </div>
+                      {g.values.map((v: any, vi: number) => (
+                        <div key={vi} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 0.9fr 0.7fr 0.9fr 34px', gap: 8, padding: '6px 12px', borderTop: `1px solid ${T.line}`, alignItems: 'center' }}>
+                          <MiniInp T={T} value={v.value} onChange={(e: any) => setVarValue(gi, vi, 'value', e.target.value)} placeholder="e.g. Small" />
+                          <MiniInp T={T} value={v.sku} onChange={(e: any) => setVarValue(gi, vi, 'sku', e.target.value)} placeholder="auto" />
+                          <MiniInp T={T} value={v.cost} onChange={(e: any) => setVarValue(gi, vi, 'cost', e.target.value)} placeholder="0.00" />
+                          <MiniInp T={T} value={v.margin} onChange={(e: any) => setVarValue(gi, vi, 'margin', e.target.value)} placeholder="0" />
+                          <MiniInp T={T} value={v.price} onChange={(e: any) => setVarValue(gi, vi, 'price', e.target.value)} placeholder="0.00" />
+                          <button onClick={() => rmVarValue(gi, vi)} disabled={g.values.length === 1} style={{ width: 26, height: 26, borderRadius: 6, border: `1px solid ${T.line}`, background: T.paper, color: T.redText, cursor: g.values.length === 1 ? 'not-allowed' : 'pointer', fontSize: 12, opacity: g.values.length === 1 ? 0.4 : 1 }}>✕</button>
+                        </div>
+                      ))}
+                      <div style={{ padding: '7px 12px', borderTop: `1px solid ${T.line}` }}>
+                        <button onClick={() => addVarValue(gi)} style={{ background: 'none', border: 'none', color: T.accent.text, fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: T.fBody }}>+ Add value</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                <Btn T={T} kind="ghost" onClick={addVarGroup}>+ Add Variation</Btn>
+                <span style={{ fontSize: 11, color: T.inkMute }}>Each value becomes a sellable variant. Manage reusable templates from the <b style={{ cursor: 'pointer', color: T.accent.text }} onClick={() => setVarMgr(true)}>Variations</b> button.</span>
+              </div>
             </div>
           )}
 
