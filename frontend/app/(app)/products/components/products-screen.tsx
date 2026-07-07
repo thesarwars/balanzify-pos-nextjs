@@ -565,9 +565,9 @@ export function Products({ T }: { T: any }) {
                     <div style={{ minWidth: 180 }}>
                       {refs.variations.length > 0
                         ? <SelectField T={T} value={g.template_id} options={['', ...refs.variations.map((v: any) => String(v.id))]} onChange={(tid: any) => pickGroupTemplate(gi, tid)} render={(v: any) => v ? (refs.variations.find((t: any) => String(t.id) === v) || {}).name : 'Please select…'} />
-                        : <MiniInp T={T} value={g.name} onChange={(e: any) => setGroupName(gi, e.target.value)} placeholder="Variation name (e.g. Colour)" />}
+                        : <MiniInp T={T} type="text" value={g.name} onChange={(e: any) => setGroupName(gi, e.target.value)} placeholder="Variation name (e.g. Colour)" />}
                     </div>
-                    {refs.variations.length > 0 && <MiniInp T={T} value={g.name} onChange={(e: any) => setGroupName(gi, e.target.value)} placeholder="or type a name" style={{ maxWidth: 160 }} />}
+                    {refs.variations.length > 0 && <MiniInp T={T} type="text" value={g.name} onChange={(e: any) => setGroupName(gi, e.target.value)} placeholder="or type a name" style={{ maxWidth: 160 }} />}
                     <span style={{ flex: 1 }} />
                     <button onClick={() => rmVarGroup(gi)} style={{ width: 28, height: 28, borderRadius: 7, border: `1px solid ${T.redSoft}`, background: T.redSoft, color: T.redText, cursor: 'pointer', fontSize: 13 }}>✕</button>
                   </div>
@@ -578,8 +578,8 @@ export function Products({ T }: { T: any }) {
                       </div>
                       {g.values.map((v: any, vi: number) => (
                         <div key={vi} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 0.9fr 0.7fr 0.9fr 34px', gap: 8, padding: '6px 12px', borderTop: `1px solid ${T.line}`, alignItems: 'center' }}>
-                          <MiniInp T={T} value={v.value} onChange={(e: any) => setVarValue(gi, vi, 'value', e.target.value)} placeholder="e.g. Small" />
-                          <MiniInp T={T} value={v.sku} onChange={(e: any) => setVarValue(gi, vi, 'sku', e.target.value)} placeholder="auto" />
+                          <MiniInp T={T} type="text" value={v.value} onChange={(e: any) => setVarValue(gi, vi, 'value', e.target.value)} placeholder="e.g. Small" />
+                          <MiniInp T={T} type="text" value={v.sku} onChange={(e: any) => setVarValue(gi, vi, 'sku', e.target.value)} placeholder="auto" />
                           <MiniInp T={T} value={v.cost} onChange={(e: any) => setVarValue(gi, vi, 'cost', e.target.value)} placeholder="0.00" />
                           <MiniInp T={T} value={v.margin} onChange={(e: any) => setVarValue(gi, vi, 'margin', e.target.value)} placeholder="0" />
                           <MiniInp T={T} value={v.price} onChange={(e: any) => setVarValue(gi, vi, 'price', e.target.value)} placeholder="0.00" />
@@ -666,8 +666,8 @@ function Toggle({ T, on, onChange, label, hint }: any) {
     </button>
   );
 }
-function MiniInp({ T, style, ...p }: any) {
-  return <input {...p} type="number" style={{ width: '100%', padding: '7px 9px', fontSize: 13, fontFamily: T.fMono, color: T.ink, background: T.paper, border: `1px solid ${T.line}`, borderRadius: 7, outline: 'none', boxSizing: 'border-box', ...style }} />;
+function MiniInp({ T, style, type = 'number', ...p }: any) {
+  return <input {...p} type={type} style={{ width: '100%', padding: '7px 9px', fontSize: 13, fontFamily: T.fMono, color: T.ink, background: T.paper, border: `1px solid ${T.line}`, borderRadius: 7, outline: 'none', boxSizing: 'border-box', ...style }} />;
 }
 function FillBtn({ T, onClick }: any) {
   return <button title="Copy first row to all" onClick={onClick} style={{ width: 18, height: 18, borderRadius: 5, border: `1px solid ${T.line}`, background: T.paper, color: T.accent.text, cursor: 'pointer', fontSize: 11, lineHeight: 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>⊕</button>;
