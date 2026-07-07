@@ -2754,6 +2754,25 @@ const API: any = {
       if (REAL_MODE) return await realReq('DELETE', '/products/' + id);
       return (await transport('DELETE', '/connector/api/product/' + numId(id))).data;
     },
+    // Stock movement history for a product (GET /products/:id/movements).
+    async movements(id: any) {
+      if (REAL_MODE) {
+        const res = await realReq('GET', '/products/' + id + '/movements');
+        return ((res && res.movements) || []).map((m: any) => ({
+          id: m.id, type: m.type, quantity: m.quantity, balance_after: m.balanceAfter,
+          reference_type: m.referenceType, reference_id: m.referenceId,
+          location_name: (m.location && m.location.name) || '',
+          by: (m.createdBy && m.createdBy.name) || '',
+          notes: m.notes || '', date: m.createdAt,
+        }));
+      }
+      return [];
+    },
+    // Add / edit opening stock — designed; posts once the opening-stock write path lands.
+    async setOpeningStock(_id: any, _body: any) {
+      if (REAL_MODE) throw new ApiError(501, 'Opening-stock editing isn’t wired yet.');
+      return null;
+    },
   },
 
   // Categories — real backend has /api/v1/categories; the mock screens read the

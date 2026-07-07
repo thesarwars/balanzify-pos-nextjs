@@ -33,6 +33,19 @@ export function Products({ T }: { T: any }) {
   const [impExp, setImpExp] = useStatePr(false);
   const [labels, setLabels] = useStatePr(false);
   const [confirmDel, setConfirmDel] = useStatePr<any>(null);
+  // Filters bar + row actions + detail modals (reference product list parity).
+  const [filtersOpen, setFiltersOpen] = useStatePr(true);
+  const [fType, setFType] = useStatePr('');
+  const [fBrand, setFBrand] = useStatePr('');
+  const [fUnit, setFUnit] = useStatePr('');
+  const [fTax, setFTax] = useStatePr('');
+  const [fLoc, setFLoc] = useStatePr('');
+  const [fNfs, setFNfs] = useStatePr(false);
+  const [menuFor, setMenuFor] = useStatePr<any>(null);   // row id whose Actions menu is open
+  const [viewProd, setViewProd] = useStatePr<any>(null);
+  const [historyProd, setHistoryProd] = useStatePr<any>(null);
+  const [openingProd, setOpeningProd] = useStatePr<any>(null);
+  const [picked, setPicked] = useStatePr<any>(() => new Set());
   const [toast, toastNode] = useToast();
   const fileRef = React.useRef<any>(null);
   const brochureRef = React.useRef<any>(null);
@@ -92,9 +105,15 @@ export function Products({ T }: { T: any }) {
   }
 
   let rows = list;
-  if (q.trim()) { const s = q.toLowerCase(); rows = rows.filter((p: any) => p.name.toLowerCase().includes(s) || p.sku.toLowerCase().includes(s)); }
+  if (q.trim()) { const s = q.toLowerCase(); rows = rows.filter((p: any) => p.name.toLowerCase().includes(s) || (p.sku || '').toLowerCase().includes(s)); }
   if (cat) rows = rows.filter((p: any) => p.cat === cat);
-  if (lowOnly) rows = rows.filter((p: any) => p.stock <= 12);
+  if (fType) rows = rows.filter((p: any) => (p.type || 'single') === fType);
+  if (fBrand) rows = rows.filter((p: any) => String(p.brand_id) === String(fBrand));
+  if (fUnit) rows = rows.filter((p: any) => p.unit === fUnit);
+  if (fTax) rows = rows.filter((p: any) => String(p.tax_id || '') === String(fTax));
+  if (fLoc) rows = rows.filter((p: any) => !Array.isArray(p.location_ids) || !p.location_ids.length || p.location_ids.some((id: any) => String(id) === String(fLoc)));
+  if (fNfs) rows = rows.filter((p: any) => p.not_for_selling === true);
+  if (lowOnly) rows = rows.filter((p: any) => p.stock <= (p.alert_quantity || 12));
 
   // Live categories in real mode; seed list is the mock fallback.
   // Real mode: show only real categories (mock seed categories silently drop on
@@ -201,8 +220,13 @@ export function Products({ T }: { T: any }) {
     finally { setSaving(false); }
   }
   async function doDelete(p: any) {
-    try { await API.product.remove(p.id); setConfirmDel(null); if (sel && sel.id === p.id) setSel(null); toast('Product deleted'); reload(); }
-    catch (ex: any) { setConfirmDel(null); toast(ex.message || 'Delete failed'); }
+    try {
+      if (p.bulk) {
+        for (const id of p.bulk) { try { await API.product.remove(id); } catch {} }
+        setConfirmDel(null); setPicked(new Set()); toast(`${p.bulk.length} product${p.bulk.length === 1 ? '' : 's'} deleted`); reload(); return;
+      }
+      await API.product.remove(p.id); setConfirmDel(null); if (sel && sel.id === p.id) setSel(null); toast('Product deleted'); reload();
+    } catch (ex: any) { setConfirmDel(null); toast(ex.message || 'Delete failed'); }
   }
   async function duplicate(p: any) {
     try {
@@ -227,8 +251,35 @@ export function Products({ T }: { T: any }) {
 
         <div style={{ flex: 1, overflowY: 'auto', padding: 28 }}>
           <div style={{ maxWidth: 1280, margin: '0 auto' }}>
+            {/* ── Filters ── */}
+            <Panel T={T} pad={false} style={{ marginBottom: 16 }}>
+              <button onClick={() => setFiltersOpen((o: boolean) => !o)} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 9, padding: '12px 16px', background: 'none', border: 'none', cursor: 'pointer', fontFamily: T.fBody } as React.CSSProperties}>
+                <span style={{ color: T.accent.text, fontSize: 14 }}>⛃</span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: T.ink }}>Filters</span>
+                <span style={{ flex: 1 }} />
+                {(fType || cat || fBrand || fUnit || fTax || fLoc || fNfs) && <Badge T={T} tone="brass">Active</Badge>}
+                <span style={{ fontSize: 11, color: T.inkSub, transition: 'transform .15s', transform: filtersOpen ? 'rotate(90deg)' : 'none' }}>▸</span>
+              </button>
+              {filtersOpen && (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, padding: '4px 16px 16px' }}>
+                  <FilterSel T={T} label="Product Type" value={fType} onChange={setFType} options={[['', 'All'], ['single', 'Single'], ['variable', 'Variable'], ['combo', 'Combo']]} />
+                  <FilterSel T={T} label="Category" value={cat} onChange={setCat} options={[['', 'All'], ...cats.map((c: any) => [c.id, c.name])]} />
+                  <FilterSel T={T} label="Brand" value={fBrand} onChange={setFBrand} options={[['', 'All'], ...refs.brands.map((b: any) => [String(b.id), b.name])]} />
+                  <FilterSel T={T} label="Unit" value={fUnit} onChange={setFUnit} options={[['', 'All'], ...refs.units.map((u: any) => [u.short_name, u.short_name])]} />
+                  <FilterSel T={T} label="Tax" value={fTax} onChange={setFTax} options={[['', 'All'], ...refs.taxRates.map((t: any) => [String(t.id), t.name])]} />
+                  <FilterSel T={T} label="Business Location" value={fLoc} onChange={setFLoc} options={[['', 'All'], ...refs.locations.map((l: any) => [String(l.id), l.name])]} />
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: T.inkMid, cursor: 'pointer', alignSelf: 'end', paddingBottom: 8 }}>
+                    <input type="checkbox" checked={fNfs} onChange={e => setFNfs(e.target.checked)} style={{ accentColor: T.accent.base, width: 15, height: 15 }} />Not for selling
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: T.inkMid, cursor: 'pointer', alignSelf: 'end', paddingBottom: 8 }}>
+                    <input type="checkbox" checked={lowOnly} onChange={e => setLowOnly(e.target.checked)} style={{ accentColor: T.accent.base, width: 15, height: 15 }} />Low stock only
+                  </label>
+                </div>
+              )}
+            </Panel>
+
             <Panel T={T} pad={false}>
-              {/* filter bar */}
+              {/* toolbar: search + bulk actions */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', borderBottom: `1px solid ${T.line}`, flexWrap: 'wrap' }}>
                 <div style={{ position: 'relative', flex: 1, minWidth: 200, maxWidth: 320 }}>
                   <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: T.inkMute, fontSize: 14 }}>⌕</span>
@@ -237,49 +288,78 @@ export function Products({ T }: { T: any }) {
                     background: T.paper, border: `1.5px solid ${T.line}`, borderRadius: T.r, outline: 'none', boxSizing: 'border-box',
                   }} />
                 </div>
-                <select value={cat} onChange={e => setCat(e.target.value)} style={{
-                  padding: '9px 12px', fontSize: 13, fontFamily: T.fBody, color: T.ink, background: T.paper,
-                  border: `1.5px solid ${T.line}`, borderRadius: T.r, outline: 'none', cursor: 'pointer',
-                }}>
-                  <option value="">All categories</option>
-                  {cats.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12.5, color: T.inkSub, cursor: 'pointer', fontWeight: 500 }}>
-                  <input type="checkbox" checked={lowOnly} onChange={e => setLowOnly(e.target.checked)} style={{ accentColor: T.accent.base, width: 15, height: 15 }} />
-                  Low stock only
-                </label>
+                <span style={{ flex: 1 }} />
+                {picked.size > 0 && <>
+                  <span style={{ fontSize: 12.5, color: T.inkSub }}>{picked.size} selected</span>
+                  <Btn T={T} kind="ghost" onClick={() => setLabels(true)}>⌗ Labels</Btn>
+                  <Btn T={T} kind="ghost" style={{ color: T.redText }} onClick={() => setConfirmDel({ bulk: [...picked] })}>Delete</Btn>
+                </>}
+                <span style={{ fontSize: 12, color: T.inkSub }}>{rows.length} of {list.length}</span>
               </div>
 
               {/* table */}
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead><tr>{([['Product', 'l'], ['SKU', 'l'], ['Category', 'l'], ['Price', 'r'], ['Margin', 'r'], ['Stock', 'r']] as any[]).map(([h, a]: any) => (
-                  <th key={h} style={{ textAlign: a === 'r' ? 'right' : 'left', padding: '11px 18px', fontSize: 10, fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', color: T.inkSub, background: T.paperAlt, borderBottom: `1px solid ${T.line}` } as React.CSSProperties}>{h}</th>
-                ))}</tr></thead>
+              <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
+                <thead><tr>
+                  <th style={thStyle(T, 'l', 40)}><input type="checkbox" checked={rows.length > 0 && rows.every((p: any) => picked.has(p.id))} onChange={e => { const n = new Set(picked); if (e.target.checked) rows.forEach((p: any) => n.add(p.id)); else rows.forEach((p: any) => n.delete(p.id)); setPicked(n); }} style={{ accentColor: T.accent.base }} /></th>
+                  <th style={thStyle(T, 'l')}>Image</th>
+                  <th style={thStyle(T, 'l')}>Action</th>
+                  <th style={thStyle(T, 'l')}>Product</th>
+                  <th style={thStyle(T, 'l')}>Location</th>
+                  <th style={thStyle(T, 'r')}>Purchase</th>
+                  <th style={thStyle(T, 'r')}>Selling</th>
+                  <th style={thStyle(T, 'r')}>Stock</th>
+                  <th style={thStyle(T, 'l')}>Type</th>
+                  <th style={thStyle(T, 'l')}>Category</th>
+                  <th style={thStyle(T, 'l')}>Brand</th>
+                  <th style={thStyle(T, 'l')}>Tax</th>
+                  <th style={thStyle(T, 'l')}>SKU</th>
+                </tr></thead>
                 <tbody>
                   {rows.map((p: any) => {
-                    const margin = p.price ? Math.round(((p.price - p.cost) / p.price) * 100) : 0;
-                    const active = sel?.id === p.id;
-                    const typeTag = p.type === 'variable' ? ['Variable', 'violet'] : p.type === 'combo' ? ['Combo', 'blue'] : null;
+                    const typeTag = p.type === 'variable' ? ['Variable', 'violet'] : p.type === 'combo' ? ['Combo', 'blue'] : ['Single', 'gray'];
+                    const locNames = (Array.isArray(p.location_ids) && p.location_ids.length)
+                      ? p.location_ids.map((id: any) => (refs.locations.find((l: any) => String(l.id) === String(id)) || {}).name).filter(Boolean).join(', ')
+                      : 'All locations';
+                    const taxName = (refs.taxRates.find((t: any) => String(t.id) === String(p.tax_id)) || {}).name || '—';
+                    const catName = p.category_name || cats.find((c: any) => c.id === p.cat)?.name;
                     return (
-                      <tr key={p.id} onClick={() => setSel(p)} style={{ cursor: 'pointer', background: active ? T.accent.soft : 'transparent', transition: 'background .12s' }}
-                        onMouseEnter={e => { if (!active) e.currentTarget.style.background = T.paperAlt; }}
-                        onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent'; }}>
-                        <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}` }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
-                            <span style={{ width: 32, height: 32, borderRadius: 8, flexShrink: 0, background: swatchBg(p), border: p.img ? `1px solid ${T.line}` : 'none' }} />
-                            <span style={{ fontSize: 13, fontWeight: 600, color: T.ink, display: 'inline-flex', alignItems: 'center', gap: 7 }}>{p.name}{typeTag && <Badge T={T} tone={typeTag[1] as any}>{typeTag[0]}</Badge>}{p.rx && <Badge T={T} tone="blue">Rx</Badge>}{p.not_for_selling && <Badge T={T} tone="gray">Not for sale</Badge>}</span>
-                          </div>
+                      <tr key={p.id} style={{ transition: 'background .12s' }}
+                        onMouseEnter={e => { e.currentTarget.style.background = T.paperAlt; }}
+                        onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
+                        <td style={tdStyle(T)}><input type="checkbox" checked={picked.has(p.id)} onChange={e => { const n = new Set(picked); e.target.checked ? n.add(p.id) : n.delete(p.id); setPicked(n); }} style={{ accentColor: T.accent.base }} /></td>
+                        <td style={tdStyle(T)}><span style={{ width: 34, height: 34, borderRadius: 8, display: 'block', background: swatchBg(p), border: p.img ? `1px solid ${T.line}` : 'none', backgroundSize: 'cover' } as React.CSSProperties} /></td>
+                        <td style={tdStyle(T)}>
+                          <ActionsMenu T={T} open={menuFor === p.id} onToggle={() => setMenuFor(menuFor === p.id ? null : p.id)}
+                            items={[
+                              { label: '⌗ Labels', on: () => { setSel(p); setLabels(true); } },
+                              { label: '◉ View', on: () => setViewProd(p) },
+                              { label: '✎ Edit', on: () => openEdit(p) },
+                              { label: '🗑 Delete', on: () => setConfirmDel(p), danger: true },
+                              { sep: true },
+                              { label: '▤ Add/edit opening stock', on: () => setOpeningProd(p) },
+                              { label: '↻ Product stock history', on: () => setHistoryProd(p) },
+                              { label: '⧉ Duplicate product', on: () => duplicate(p) },
+                            ]} />
                         </td>
-                        <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}`, fontFamily: T.fMono, fontSize: 12, color: T.inkSub }}>{p.sku}</td>
-                        <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}` }}>{(p.category_name || cats.find((c: any) => c.id === p.cat)?.name) ? <Badge T={T} tone="gray">{p.category_name || cats.find((c: any) => c.id === p.cat)?.name}</Badge> : <span style={{ color: T.inkMute }}>—</span>}</td>
-                        <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right', fontFamily: T.fMono, fontSize: 13, fontWeight: 600, color: T.ink }}>{money(p.price)}</td>
-                        <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right', fontFamily: T.fMono, fontSize: 12.5, color: margin >= 50 ? T.greenText : T.inkSub }}>{margin}%</td>
-                        <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right' }}>{p.stock === Infinity || p.enable_stock === false ? <Badge T={T} tone="gray">∞</Badge> : <Badge T={T} tone={stockTone(p.stock) as any}>{p.stock} {p.unit}</Badge>}</td>
+                        <td style={tdStyle(T)}>
+                          <span style={{ fontSize: 13, fontWeight: 600, color: T.ink, display: 'inline-flex', alignItems: 'center', gap: 7 }}>{p.name}{p.rx && <Badge T={T} tone="blue">Rx</Badge>}{p.not_for_selling && <Badge T={T} tone="gray">Not for sale</Badge>}</span>
+                        </td>
+                        <td style={{ ...tdStyle(T), fontSize: 12, color: T.inkMid, maxWidth: 160 }}>{locNames}</td>
+                        <td style={{ ...tdStyle(T), textAlign: 'right', fontFamily: T.fMono, fontSize: 12.5, color: T.inkSub }}>{money(p.cost)}</td>
+                        <td style={{ ...tdStyle(T), textAlign: 'right', fontFamily: T.fMono, fontSize: 13, fontWeight: 600, color: T.ink }}>{money(p.price)}</td>
+                        <td style={{ ...tdStyle(T), textAlign: 'right' }}>{p.stock === Infinity || p.enable_stock === false ? <Badge T={T} tone="gray">∞</Badge> : <Badge T={T} tone={stockTone(p.stock) as any}>{p.stock} {p.unit}</Badge>}</td>
+                        <td style={tdStyle(T)}><Badge T={T} tone={typeTag[1] as any}>{typeTag[0]}</Badge></td>
+                        <td style={tdStyle(T)}>{catName ? <Badge T={T} tone="gray">{catName}</Badge> : <span style={{ color: T.inkMute }}>—</span>}</td>
+                        <td style={{ ...tdStyle(T), fontSize: 12.5, color: T.inkMid }}>{p.brand_name || (refs.brands.find((b: any) => String(b.id) === String(p.brand_id)) || {}).name || '—'}</td>
+                        <td style={{ ...tdStyle(T), fontSize: 12, color: T.inkSub }}>{taxName}</td>
+                        <td style={{ ...tdStyle(T), fontFamily: T.fMono, fontSize: 12, color: T.inkSub }}>{p.sku}</td>
                       </tr>
                     );
                   })}
                 </tbody>
               </table>
+              </div>
               {rows.length === 0 && !loading && <div style={{ padding: '50px 20px', textAlign: 'center', color: T.inkMute, fontSize: 13 }}>No products match your filters.</div>}
               {loading && (
                 <div style={{ padding: '50px 20px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, color: T.inkSub }}>
@@ -292,67 +372,10 @@ export function Products({ T }: { T: any }) {
         </div>
       </div>
 
-      {/* detail drawer */}
-      {sel && (
-        <div style={(isMobile
-          ? { position: 'fixed', inset: 0, zIndex: 200, background: T.paper, display: 'flex', flexDirection: 'column', overflow: 'hidden' }
-          : { width: 340, minWidth: 340, borderLeft: `1px solid ${T.line}`, background: T.paper, display: 'flex', flexDirection: 'column', overflow: 'hidden', animation: 'slideLeft .2s ease' }) as React.CSSProperties}>
-          <div style={{ height: 110, background: swatchBg(sel), position: 'relative', display: 'flex', alignItems: 'flex-end', padding: 18 }}>
-            {sel.img && <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to top, rgba(0,0,0,0.55), rgba(0,0,0,0.05) 60%)' }} />}
-            <button onClick={() => setSel(null)} style={{ position: 'absolute', top: 14, right: 14, width: 28, height: 28, borderRadius: 8, background: 'rgba(0,0,0,0.25)', border: 'none', color: '#fff', cursor: 'pointer', fontSize: 13, zIndex: 2 }}>✕</button>
-            <div style={{ position: 'relative', zIndex: 2 }}>
-              <div style={{ fontFamily: T.fDisplay, fontSize: 19, fontWeight: T.dispWeight, color: '#fff', letterSpacing: T.dispTrack, textShadow: '0 1px 3px rgba(0,0,0,0.2)' }}>{sel.name}</div>
-              <div style={{ fontSize: 11.5, color: 'rgba(255,255,255,0.9)', fontFamily: T.fMono, marginTop: 2 }}>{sel.sku}</div>
-            </div>
-          </div>
-          <div style={{ flex: 1, overflowY: 'auto', padding: 18 }}>
-            {(sel.type === 'variable' || sel.type === 'combo') && (
-              <div style={{ marginBottom: 14 }}><Badge T={T} tone={sel.type === 'variable' ? 'violet' : 'blue'}>{sel.type === 'variable' ? 'Variable product' : 'Combo / bundle'}</Badge></div>
-            )}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 18 }}>
-              <MiniStat T={T} label={sel.type === 'variable' ? 'From' : 'Selling'} value={money(sel.price)} />
-              <MiniStat T={T} label="Cost" value={money(sel.cost)} />
-              <MiniStat T={T} label="Margin" value={sel.price ? `${Math.round(((sel.price - sel.cost) / sel.price) * 100)}%` : '—'} tone={T.green} />
-              <MiniStat T={T} label="In stock" value={sel.stock === Infinity || sel.enable_stock === false ? '∞' : `${sel.stock}`} tone={sel.stock <= (sel.alert_quantity || 12) ? T.amber : T.ink} />
-            </div>
-
-            {sel.type === 'variable' && sel.variations && sel.variations.length > 0 && (
-              <div style={{ marginBottom: 16, border: `1px solid ${T.line}`, borderRadius: T.r, overflow: 'hidden' }}>
-                <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 0.8fr', padding: '7px 11px', background: T.paperAlt, fontSize: 9.5, fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase', color: T.inkSub } as React.CSSProperties}><span>Variation</span><span style={{ textAlign: 'right' }}>Price</span><span style={{ textAlign: 'right' }}>Stock</span></div>
-                {sel.variations.map((v: any, i: number) => (
-                  <div key={i} style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 0.8fr', padding: '8px 11px', borderTop: `1px solid ${T.line}`, fontSize: 12 }}>
-                    <span style={{ fontWeight: 600, color: T.ink }}>{v.name}</span>
-                    <span style={{ textAlign: 'right', fontFamily: T.fMono, color: T.ink }}>{money(v.price)}</span>
-                    <span style={{ textAlign: 'right', fontFamily: T.fMono, color: T.inkSub }}>{v.stock}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {sel.type === 'combo' && sel.combo && sel.combo.length > 0 && (
-              <div style={{ marginBottom: 16, border: `1px solid ${T.line}`, borderRadius: T.r, overflow: 'hidden' }}>
-                <div style={{ padding: '7px 11px', background: T.paperAlt, fontSize: 9.5, fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase', color: T.inkSub }}>Includes</div>
-                {sel.combo.map((c: any, i: number) => {
-                  const cp = list.find((p: any) => p.id === c.product_id) || PRODUCTS.find((p: any) => parseInt(String(p.id).replace(/\D/g, ''), 10) === c.product_id) || PRODUCTS.find((p: any) => p.id === c.product_id);
-                  return <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 11px', borderTop: `1px solid ${T.line}`, fontSize: 12 }}><span style={{ color: T.ink, fontWeight: 600 }}>{cp ? cp.name : 'Product'}</span><span style={{ fontFamily: T.fMono, color: T.inkSub }}>×{c.qty}</span></div>;
-                })}
-              </div>
-            )}
-
-            {([['Type', ({ single: 'Single', variable: 'Variable', combo: 'Combo' } as any)[sel.type || 'single']], ['Category', sel.category_name || cats.find((c: any) => c.id === sel.cat)?.name || '—'], ['Brand', sel.brand_name || (refs.brands.find((b: any) => b.id === sel.brand_id) || {}).name || '—'], ['Unit of measure', sel.unit], ['Tax', (refs.taxRates.find((t: any) => t.id === (sel.tax_id || 0)) || {}).name || 'None'], ['Alert quantity', (sel.alert_quantity || 0) + ' ' + sel.unit], ['Stock managed', sel.enable_stock === false ? 'No' : 'Yes'], ['For selling', sel.not_for_selling ? 'No' : 'Yes']] as any[]).map(([k, v]: any) => (
-              <div key={k} style={{ display: 'flex', justifyContent: 'space-between', padding: '9px 0', borderBottom: `1px solid ${T.line}`, fontSize: 12.5 }}>
-                <span style={{ color: T.inkSub }}>{k}</span>
-                <span style={{ fontWeight: 600, color: T.ink }}>{v}</span>
-              </div>
-            ))}
-            <div style={{ display: 'flex', gap: 8, marginTop: 18 }}>
-              <Btn T={T} kind="primary" style={{ flex: 1 }} onClick={() => openEdit(sel)}>Edit product</Btn>
-              <Btn T={T} kind="ghost" onClick={() => duplicate(sel)}>Duplicate</Btn>
-              <Btn T={T} kind="danger" onClick={() => setConfirmDel(sel)}>Delete</Btn>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* View / stock history / opening stock */}
+      {viewProd && <ViewProductModal T={T} product={viewProd} refs={refs} cats={cats} onClose={() => setViewProd(null)} onEdit={() => { const p = viewProd; setViewProd(null); openEdit(p); }} />}
+      {historyProd && <StockHistoryModal T={T} product={historyProd} onClose={() => setHistoryProd(null)} />}
+      {openingProd && <OpeningStockModal T={T} product={openingProd} refs={refs} onClose={() => setOpeningProd(null)} toast={toast} />}
 
       {open && (
         <Modal T={T} title={editing ? 'Edit product' : 'New product'} subtitle={editing ? editing.sku : 'Add an item to your catalog'} onClose={() => setOpen(false)} width={680}
@@ -533,8 +556,8 @@ export function Products({ T }: { T: any }) {
       {impExp && <ImportExport T={T} onClose={() => setImpExp(false)} onImported={reload} toast={toast} />}
       {labels && <PrintLabels T={T} products={list} initial={sel ? [sel] : []} onClose={() => setLabels(false)} />}
       {confirmDel && (
-        <Modal T={T} title="Delete product?" subtitle={confirmDel.name} width={420} onClose={() => setConfirmDel(null)} onSave={() => doDelete(confirmDel)} saveLabel="Delete">
-          <div style={{ fontSize: 13.5, color: T.inkMid, lineHeight: 1.6 }}>This removes <b style={{ color: T.ink }}>{confirmDel.name}</b> from your catalog. Products with sales or stock history can't be deleted.</div>
+        <Modal T={T} title={confirmDel.bulk ? 'Delete products?' : 'Delete product?'} subtitle={confirmDel.bulk ? `${confirmDel.bulk.length} selected` : confirmDel.name} width={420} onClose={() => setConfirmDel(null)} onSave={() => doDelete(confirmDel)} saveLabel="Delete">
+          <div style={{ fontSize: 13.5, color: T.inkMid, lineHeight: 1.6 }}>{confirmDel.bulk ? <>This removes <b style={{ color: T.ink }}>{confirmDel.bulk.length} products</b> from your catalog.</> : <>This removes <b style={{ color: T.ink }}>{confirmDel.name}</b> from your catalog.</>} Products with sales or stock history can't be deleted.</div>
         </Modal>
       )}
       {toastNode}
@@ -687,6 +710,234 @@ function VariationManager({ T, templates, onClose, onChange, toast }: any) {
       </div>
     </Modal>
   );
+}
+
+// ── Product list helpers (filters, table cells, row actions) ──────────
+function thStyle(T: any, align: 'l' | 'r' = 'l', width?: number): React.CSSProperties {
+  return { textAlign: align === 'r' ? 'right' : 'left', padding: '10px 14px', fontSize: 9.5, fontWeight: 700, letterSpacing: 0.8, textTransform: 'uppercase', color: T.inkSub, background: T.paperAlt, borderBottom: `1px solid ${T.line}`, whiteSpace: 'nowrap', ...(width ? { width } : {}) } as React.CSSProperties;
+}
+function tdStyle(T: any): React.CSSProperties {
+  return { padding: '10px 14px', borderBottom: `1px solid ${T.line}`, verticalAlign: 'middle' } as React.CSSProperties;
+}
+function FilterSel({ T, label, value, onChange, options }: any) {
+  return (
+    <div>
+      <div style={{ fontSize: 11, fontWeight: 600, color: T.inkSub, marginBottom: 5 }}>{label}</div>
+      <select value={value} onChange={e => onChange(e.target.value)} style={{ width: '100%', padding: '9px 11px', fontSize: 13, fontFamily: T.fBody, color: T.ink, background: T.paper, border: `1.5px solid ${T.line}`, borderRadius: T.r, outline: 'none', cursor: 'pointer', boxSizing: 'border-box' } as React.CSSProperties}>
+        {options.map(([v, l]: any) => <option key={String(v)} value={v}>{l}</option>)}
+      </select>
+    </div>
+  );
+}
+function ActionsMenu({ T, open, onToggle, items }: any) {
+  const btnRef = React.useRef<any>(null);
+  const [pos, setPos] = React.useState<any>(null);
+  const click = () => {
+    if (!open && btnRef.current) { const r = btnRef.current.getBoundingClientRect(); setPos({ top: r.bottom + 4, left: r.left }); }
+    onToggle();
+  };
+  return (
+    <>
+      <button ref={btnRef} onClick={click} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '6px 11px', borderRadius: 7, border: `1px solid ${T.accent.base}`, background: T.accent.soft, color: T.accent.text, fontFamily: T.fBody, fontSize: 12, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' } as React.CSSProperties}>Actions ▾</button>
+      {open && pos && (
+        <>
+          <div onClick={onToggle} style={{ position: 'fixed', inset: 0, zIndex: 300 } as React.CSSProperties} />
+          <div style={{ position: 'fixed', top: pos.top, left: pos.left, minWidth: 220, background: T.paper, border: `1px solid ${T.line}`, borderRadius: 9, boxShadow: '0 10px 30px rgba(8,12,20,0.22)', zIndex: 301, padding: 5 } as React.CSSProperties}>
+            {items.map((it: any, i: number) => it.sep
+              ? <div key={i} style={{ height: 1, background: T.line, margin: '5px 4px' }} />
+              : <button key={i} onClick={() => { onToggle(); it.on(); }} style={{ width: '100%', textAlign: 'left', display: 'block', padding: '8px 11px', borderRadius: 6, border: 'none', background: 'transparent', color: it.danger ? T.redText : T.inkMid, fontFamily: T.fBody, fontSize: 12.5, fontWeight: 500, cursor: 'pointer' } as React.CSSProperties} onMouseEnter={e => (e.currentTarget.style.background = T.paperAlt)} onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>{it.label}</button>
+            )}
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
+// ── View product — full read-only detail (reference "View" modal) ─────
+function ViewProductModal({ T, product, refs, cats, onClose, onEdit }: any) {
+  const [full, setFull] = React.useState<any>(product);
+  const [loading, setLoading] = React.useState(true);
+  React.useEffect(() => {
+    API.product.get(product.id).then((p: any) => setFull(p)).catch(() => setFull(product)).finally(() => setLoading(false));
+  }, [product.id]);
+  const raw = (full && full._real) || {};
+  const variants: any[] = Array.isArray(raw.variants) ? raw.variants : [];
+  const stockLevels: any[] = Array.isArray(raw.stockLevels) ? raw.stockLevels : [];
+  const locName = (id: any) => (refs.locations.find((l: any) => String(l.id) === String(id)) || {}).name || '—';
+  const availLocs = (Array.isArray(full.location_ids) && full.location_ids.length) ? full.location_ids.map(locName).join(', ') : 'All locations';
+  const taxName = (refs.taxRates.find((t: any) => String(t.id) === String(full.tax_id)) || {}).name || 'None';
+  const catName = full.category_name || cats.find((c: any) => c.id === full.cat)?.name || '—';
+  const attrName = (a: any) => { try { return Object.values(a || {}).join(' / '); } catch { return ''; } };
+  const skuOf = (v: any) => v.sku || v.sub_sku || full.sku;
+
+  const info: [string, any][] = [
+    ['SKU', full.sku], ['Brand', full.brand_name || (refs.brands.find((b: any) => String(b.id) === String(full.brand_id)) || {}).name || '—'],
+    ['Unit', full.unit], ['Barcode Type', full.barcode_type || 'C128'],
+    ['Category', catName], ['Available in locations', availLocs],
+    ['Manage stock?', full.enable_stock === false ? 'No' : 'Yes'], ['Alert quantity', (full.alert_quantity || 0) + ' ' + full.unit],
+    ['Applicable Tax', taxName], ['Selling Price Tax Type', full.selling_price_tax_type === 'inclusive' ? 'Inclusive' : 'Exclusive'],
+    ['Product Type', ({ single: 'Single', variable: 'Variable', combo: 'Combo' } as any)[full.type || 'single']],
+  ];
+
+  return (
+    <Modal T={T} title={full.name} subtitle={full.sku} width={920} onClose={onClose}
+      footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Close</Btn><Btn T={T} kind="accent" onClick={onEdit}>Edit product</Btn></>}>
+      <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
+        <div style={{ flex: 1, minWidth: 300, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '9px 18px' }}>
+          {info.map(([k, v]) => (
+            <div key={k} style={{ fontSize: 12.5 }}><span style={{ color: T.inkSub }}>{k}: </span><b style={{ color: T.ink }}>{v}</b></div>
+          ))}
+        </div>
+        <div style={{ width: 180, height: 130, borderRadius: T.r, border: `1px solid ${T.line}`, background: swatchBg(full), flexShrink: 0, backgroundSize: 'cover' } as React.CSSProperties} />
+      </div>
+
+      {full.type === 'variable' && variants.length > 0 && (
+        <div style={{ marginTop: 20 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: T.ink, marginBottom: 8 }}>Variations</div>
+          <div style={{ overflowX: 'auto', border: `1px solid ${T.line}`, borderRadius: T.r }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 560 }}>
+              <thead><tr>{['Variation', 'SKU', 'Purchase', 'Margin %', 'Selling'].map((h, i) => <th key={h} style={thStyle(T, i > 1 ? 'r' : 'l')}>{h}</th>)}</tr></thead>
+              <tbody>
+                {variants.map((v: any) => {
+                  const cost = Number(v.costPrice || 0), price = Number(v.sellingPrice || 0);
+                  const margin = price ? Math.round(((price - cost) / price) * 100) : 0;
+                  return (
+                    <tr key={v.id}>
+                      <td style={tdStyle(T)}>{attrName(v.attributes) || '—'}</td>
+                      <td style={{ ...tdStyle(T), fontFamily: T.fMono, fontSize: 12, color: T.inkSub }}>{skuOf(v)}</td>
+                      <td style={{ ...tdStyle(T), textAlign: 'right', fontFamily: T.fMono }}>{money(cost)}</td>
+                      <td style={{ ...tdStyle(T), textAlign: 'right', fontFamily: T.fMono, color: T.inkSub }}>{margin}%</td>
+                      <td style={{ ...tdStyle(T), textAlign: 'right', fontFamily: T.fMono, fontWeight: 600 }}>{money(price)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      <div style={{ marginTop: 20 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: T.ink, marginBottom: 8 }}>Product stock details</div>
+        <div style={{ overflowX: 'auto', border: `1px solid ${T.line}`, borderRadius: T.r }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 620 }}>
+            <thead><tr>{['SKU', 'Location', 'Unit Price', 'Current stock', 'Stock value'].map((h, i) => <th key={h} style={thStyle(T, i > 1 ? 'r' : 'l')}>{h}</th>)}</tr></thead>
+            <tbody>
+              {stockLevels.length === 0 && <tr><td colSpan={5} style={{ padding: 22, textAlign: 'center', color: T.inkMute, fontSize: 12.5 }}>No stock recorded yet.</td></tr>}
+              {stockLevels.map((sl: any, i: number) => {
+                const v = variants.find((x: any) => x.id === sl.variantId);
+                const price = v ? Number(v.sellingPrice || 0) : full.price;
+                const cost = v ? Number(v.costPrice || 0) : full.cost;
+                return (
+                  <tr key={i}>
+                    <td style={{ ...tdStyle(T), fontFamily: T.fMono, fontSize: 12, color: T.inkSub }}>{v ? skuOf(v) : full.sku}{v && attrName(v.attributes) ? ` · ${attrName(v.attributes)}` : ''}</td>
+                    <td style={tdStyle(T)}>{(sl.location && sl.location.name) || locName(sl.locationId)}</td>
+                    <td style={{ ...tdStyle(T), textAlign: 'right', fontFamily: T.fMono }}>{money(price)}</td>
+                    <td style={{ ...tdStyle(T), textAlign: 'right', fontFamily: T.fMono }}>{sl.quantity} {full.unit}</td>
+                    <td style={{ ...tdStyle(T), textAlign: 'right', fontFamily: T.fMono, color: T.inkSub }}>{money((sl.quantity || 0) * cost)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        {loading && <div style={{ padding: 10, textAlign: 'center', fontSize: 11.5, color: T.inkMute }}>Loading latest stock…</div>}
+      </div>
+    </Modal>
+  );
+}
+
+// ── Product stock history — movement log + in/out summary (live) ───────
+function StockHistoryModal({ T, product, onClose }: any) {
+  const [rows, setRows] = React.useState<any[]>([]);
+  const [loading, setLoading] = React.useState(true);
+  React.useEffect(() => {
+    API.product.movements(product.id).then((m: any) => setRows(Array.isArray(m) ? m : [])).catch(() => setRows([])).finally(() => setLoading(false));
+  }, [product.id]);
+  const totalIn = rows.filter((r: any) => r.quantity > 0).reduce((s: number, r: any) => s + r.quantity, 0);
+  const totalOut = rows.filter((r: any) => r.quantity < 0).reduce((s: number, r: any) => s + Math.abs(r.quantity), 0);
+  const typeLabel = (t: any) => String(t || '').replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase());
+  const stat = (label: string, val: any) => (
+    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '7px 0', borderBottom: `1px solid ${T.line}`, fontSize: 12.5 }}><span style={{ color: T.inkSub }}>{label}</span><b style={{ fontFamily: T.fMono, color: T.ink }}>{val} {product.unit}</b></div>
+  );
+  return (
+    <Modal T={T} title="Product stock history" subtitle={product.name} width={880} onClose={onClose} footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Close</Btn></>}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 20, marginBottom: 18 }}>
+        <div><div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase', color: T.inkSub, marginBottom: 4 } as React.CSSProperties}>Quantities In</div>{stat('Total received', totalIn)}</div>
+        <div><div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase', color: T.inkSub, marginBottom: 4 } as React.CSSProperties}>Quantities Out</div>{stat('Total out', totalOut)}</div>
+        <div><div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase', color: T.inkSub, marginBottom: 4 } as React.CSSProperties}>Totals</div>{stat('Current stock', product.stock === Infinity ? '∞' : product.stock)}</div>
+      </div>
+      <div style={{ overflowX: 'auto', border: `1px solid ${T.line}`, borderRadius: T.r }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 640 }}>
+          <thead><tr>{['Type', 'Qty change', 'New qty', 'Date', 'Reference', 'By'].map((h, i) => <th key={h} style={thStyle(T, i === 1 || i === 2 ? 'r' : 'l')}>{h}</th>)}</tr></thead>
+          <tbody>
+            {rows.length === 0 && !loading && <tr><td colSpan={6} style={{ padding: 24, textAlign: 'center', color: T.inkMute, fontSize: 12.5 }}>No stock movements yet.</td></tr>}
+            {rows.map((r: any) => (
+              <tr key={r.id}>
+                <td style={tdStyle(T)}>{typeLabel(r.type)}</td>
+                <td style={{ ...tdStyle(T), textAlign: 'right', fontFamily: T.fMono, color: r.quantity >= 0 ? T.greenText : T.redText }}>{r.quantity >= 0 ? '+' : ''}{r.quantity}</td>
+                <td style={{ ...tdStyle(T), textAlign: 'right', fontFamily: T.fMono, color: T.inkSub }}>{r.balance_after ?? '—'}</td>
+                <td style={{ ...tdStyle(T), fontSize: 12, color: T.inkSub }}>{r.date ? String(r.date).slice(0, 16).replace('T', ' ') : ''}</td>
+                <td style={{ ...tdStyle(T), fontSize: 12, fontFamily: T.fMono, color: T.inkSub }}>{r.reference_type ? typeLabel(r.reference_type) : (r.notes || '—')}</td>
+                <td style={{ ...tdStyle(T), fontSize: 12, color: T.inkSub }}>{r.by || '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {loading && <div style={{ padding: 10, textAlign: 'center', fontSize: 11.5, color: T.inkMute }}>Loading movements…</div>}
+    </Modal>
+  );
+}
+
+// ── Add / edit opening stock — designed; connects when the opening-stock
+//    write path lands (variant POST accepts opening_stock; a bulk editor
+//    endpoint is pending). ────────────────────────────────────────────
+function OpeningStockModal({ T, product, refs, onClose, toast }: any) {
+  const loc0 = (refs.locations[0] || {});
+  const [locId, setLocId] = React.useState(loc0.id || '');
+  const lines = (product.variations && product.variations.length)
+    ? product.variations.map((v: any) => ({ key: v.id, name: `${product.name} (${v.name})`, cost: v.cost || product.cost }))
+    : [{ key: product.id, name: product.name, cost: product.cost }];
+  const [rowsState, setRowsState] = React.useState<any>(() => Object.fromEntries(lines.map((l: any) => [l.key, { qty: '', cost: String(l.cost || ''), note: '' }])));
+  const set = (k: any, field: string, v: any) => setRowsState((s: any) => ({ ...s, [k]: { ...s[k], [field]: v } }));
+  const total = lines.reduce((s: number, l: any) => s + (Number(rowsState[l.key]?.qty) || 0) * (Number(rowsState[l.key]?.cost) || 0), 0);
+
+  return (
+    <Modal T={T} title="Add opening stock" subtitle={product.name} width={780} onClose={onClose}
+      footer={<><div style={{ flex: 1, fontSize: 11.5, color: T.inkMute }}>Saving connects when the opening-stock write path lands.</div><Btn T={T} kind="ghost" onClick={onClose}>Close</Btn><Btn T={T} kind="accent" onClick={() => { onClose(); toast('Opening-stock editing is on the way — nothing saved yet.'); }}>Save</Btn></>}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+        <span style={{ fontSize: 12.5, fontWeight: 600, color: T.inkSub }}>Location</span>
+        <div style={{ minWidth: 200 }}>
+          <SelectField T={T} value={locId} options={refs.locations.map((l: any) => String(l.id))} onChange={setLocId} render={(v: any) => (refs.locations.find((l: any) => String(l.id) === v) || {}).name || v} />
+        </div>
+      </div>
+      <div style={{ overflowX: 'auto', border: `1px solid ${T.line}`, borderRadius: T.r }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 600 }}>
+          <thead><tr>{['Product', 'Qty remaining', 'Unit cost', 'Subtotal', 'Note'].map((h, i) => <th key={h} style={thStyle(T, i === 3 ? 'r' : 'l')}>{h}</th>)}</tr></thead>
+          <tbody>
+            {lines.map((l: any) => {
+              const r = rowsState[l.key] || {};
+              return (
+                <tr key={l.key}>
+                  <td style={{ ...tdStyle(T), fontSize: 12.5, fontWeight: 600, color: T.ink }}>{l.name}</td>
+                  <td style={tdStyle(T)}><input type="number" value={r.qty} onChange={e => set(l.key, 'qty', e.target.value)} placeholder="0" style={osInput(T)} /></td>
+                  <td style={tdStyle(T)}><input type="number" value={r.cost} onChange={e => set(l.key, 'cost', e.target.value)} placeholder="0.00" style={osInput(T)} /></td>
+                  <td style={{ ...tdStyle(T), textAlign: 'right', fontFamily: T.fMono, color: T.ink }}>{money((Number(r.qty) || 0) * (Number(r.cost) || 0))}</td>
+                  <td style={tdStyle(T)}><input value={r.note} onChange={e => set(l.key, 'note', e.target.value)} placeholder="optional" style={osInput(T)} /></td>
+                </tr>
+              );
+            })}
+          </tbody>
+          <tfoot><tr style={{ background: T.paperAlt }}><td style={{ ...tdStyle(T), fontWeight: 700 }} colSpan={3}>Total (before tax)</td><td style={{ ...tdStyle(T), textAlign: 'right', fontFamily: T.fMono, fontWeight: 700 }}>{money(total)}</td><td style={tdStyle(T)} /></tr></tfoot>
+        </table>
+      </div>
+    </Modal>
+  );
+}
+function osInput(T: any): React.CSSProperties {
+  return { width: '100%', padding: '7px 9px', fontSize: 12.5, fontFamily: T.fBody, color: T.ink, background: T.paper, border: `1px solid ${T.line}`, borderRadius: 6, outline: 'none', boxSizing: 'border-box' } as React.CSSProperties;
 }
 
 function MiniStat({ T, label, value, tone }: any) {
