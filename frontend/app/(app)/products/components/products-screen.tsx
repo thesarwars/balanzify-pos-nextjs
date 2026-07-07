@@ -1,5 +1,6 @@
 'use client';
 import React from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Btn, Badge, Panel, Modal, Field, TextField, SelectField, FormGrid, useToast, useViewport, swatchBg } from '@/components/kit';
 import { Topbar, useSession } from '@/components/shell';
 import { money } from '@/lib/theme';
@@ -54,6 +55,21 @@ export function Products({ T }: { T: any }) {
       .catch(() => {});
   }, []);
   React.useEffect(() => { loadRefs(); }, [loadRefs]);
+
+  // Open a catalog tool (Units / Price Groups / Variations / Labels / Import)
+  // when reached from the sidebar via /products?tool=…, then clear the param so
+  // the modal can be reopened and the URL stays clean.
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  React.useEffect(() => {
+    const tool = searchParams.get('tool');
+    if (!tool) return;
+    const openers: Record<string, (v: boolean) => void> = {
+      units: setUnitMgr, 'price-groups': setPgMgr, variations: setVarMgr, labels: setLabels, import: setImpExp,
+    };
+    openers[tool]?.(true);
+    router.replace('/products', { scroll: false });
+  }, [searchParams, router]);
 
   function onPickImage(e: any) {
     const f = e.target.files && e.target.files[0];

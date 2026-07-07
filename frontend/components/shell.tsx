@@ -23,9 +23,15 @@ export const NAV = [
   ]},
   { sect: 'Inventory', items: [
     { id: 'locations', label: 'Locations', icon: '☖' },
-    { id: 'categories', label: 'Categories', icon: '⊞' },
-    { id: 'brands', label: 'Brands', icon: '◭' },
-    { id: 'products', label: 'Products', icon: '◫' },
+    { id: 'products', label: 'Products', icon: '◫', children: [
+      { key: 'products',    activeId: 'products',   label: 'All Products',        route: '/products' },
+      { key: 'categories',  activeId: 'categories', label: 'Categories',          route: '/categories' },
+      { key: 'brands',      activeId: 'brands',     label: 'Brands',              route: '/brands' },
+      { key: 'labels',      activeId: '',           label: 'Print Labels',        route: '/products?tool=labels' },
+      { key: 'price-groups',activeId: '',           label: 'Selling Price Groups',route: '/products?tool=price-groups' },
+      { key: 'variations',  activeId: '',           label: 'Variations',          route: '/products?tool=variations' },
+      { key: 'units',       activeId: '',           label: 'Units',               route: '/products?tool=units' },
+    ]},
     { id: 'stock', label: 'Stock', icon: '◱' },
     { id: 'stocktake', label: 'Stocktake', icon: '☑' },
     { id: 'purchase-orders', label: 'Purchase Orders', icon: '◨' },
@@ -103,6 +109,9 @@ export function Sidebar({ T, screen, setScreen, collapsed, setCollapsed, onLogou
     return enabledMods.has(mod);
   };
   const groups = NAV.map((g) => ({ ...g, items: g.items.filter((it: any) => showItem(it.id)) })).filter((g) => g.items.length > 0);
+  // Expand/collapse state for parent nav items with children. Undefined = follow
+  // whether the active screen lives inside the group; a click overrides it.
+  const [openGroups, setOpenGroups] = React.useState<Record<string, boolean>>({});
   const session = useSession();
   const bizName = (session && session.business_name) || BUSINESS.name;
   const userName = (session && session.name) || CASHIER.name;
@@ -150,6 +159,60 @@ export function Sidebar({ T, screen, setScreen, collapsed, setCollapsed, onLogou
             )}
             {group.sect && collapsed && <div style={{ height: 1, background: S.line, margin: '8px 16px' }} />}
             {group.items.map((item: any) => {
+              // ── Parent item with a sub-menu (e.g. Products) ──
+              if (item.children) {
+                const inGroup = item.children.some((c: any) => c.activeId && c.activeId === screen);
+                const isOpen = openGroups[item.id] !== undefined ? openGroups[item.id] : inGroup;
+                const toggle = () => setOpenGroups((s) => ({ ...s, [item.id]: !(s[item.id] !== undefined ? s[item.id] : inGroup) }));
+                return (
+                  <div key={item.id}>
+                    <button onClick={() => collapsed ? setScreen(item.children[0].route) : toggle()} title={collapsed ? item.label : undefined}
+                      style={{
+                        width: collapsed ? 'auto' : 'calc(100% - 10px)', textAlign: 'left',
+                        display: 'flex', alignItems: 'center', gap: 11, cursor: 'pointer',
+                        padding: collapsed ? '10px 0' : '9px 14px',
+                        justifyContent: collapsed ? 'center' : 'flex-start',
+                        margin: collapsed ? '2px 8px' : '1px 5px 1px 0',
+                        border: 'none', borderRadius: collapsed ? 10 : '0 9px 9px 0',
+                        borderLeft: `3px solid ${inGroup ? S.activeRail : 'transparent'}`,
+                        background: inGroup ? S.activeBg : 'transparent',
+                        color: inGroup ? S.activeText : S.itemText,
+                        fontFamily: T.fBody, fontSize: 13.5, fontWeight: inGroup ? 600 : 450,
+                        transition: 'background .14s, color .14s',
+                      } as React.CSSProperties}
+                      onMouseEnter={e => { if (!inGroup) e.currentTarget.style.background = S.hover; }}
+                      onMouseLeave={e => { if (!inGroup) e.currentTarget.style.background = 'transparent'; }}
+                    >
+                      <span style={{ fontSize: 16, width: 20, textAlign: 'center', flexShrink: 0, opacity: inGroup ? 1 : 0.8 } as React.CSSProperties}>{item.icon}</span>
+                      {!collapsed && <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{navLabel(locale, item.id, item.label)}</span>}
+                      {!collapsed && <span style={{ fontSize: 10, color: S.chev, transition: 'transform .15s', transform: isOpen ? 'rotate(90deg)' : 'none' }}>▸</span>}
+                    </button>
+                    {!collapsed && isOpen && item.children.map((c: any) => {
+                      const cActive = c.activeId && c.activeId === screen;
+                      return (
+                        <button key={c.key} onClick={() => setScreen(c.route)}
+                          style={{
+                            width: 'calc(100% - 10px)', textAlign: 'left',
+                            display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer',
+                            padding: '7px 14px 7px 30px', margin: '1px 5px 1px 0',
+                            border: 'none', borderRadius: '0 9px 9px 0',
+                            borderLeft: `3px solid ${cActive ? S.activeRail : 'transparent'}`,
+                            background: cActive ? S.activeBg : 'transparent',
+                            color: cActive ? S.activeText : S.itemText,
+                            fontFamily: T.fBody, fontSize: 12.75, fontWeight: cActive ? 600 : 440,
+                            transition: 'background .14s, color .14s',
+                          } as React.CSSProperties}
+                          onMouseEnter={e => { if (!cActive) e.currentTarget.style.background = S.hover; }}
+                          onMouseLeave={e => { if (!cActive) e.currentTarget.style.background = 'transparent'; }}
+                        >
+                          <span style={{ fontSize: 6, width: 8, textAlign: 'center', flexShrink: 0, opacity: cActive ? 1 : 0.55 } as React.CSSProperties}>●</span>
+                          <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                );
+              }
               const active = screen === item.id;
               return (
                 <button key={item.id} onClick={() => setScreen(item.id)} title={collapsed ? item.label : undefined}
@@ -425,16 +488,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // active item = first path segment ( '/' → 'dashboard' )
   const active = (pathname && pathname.split('/')[1]) || 'dashboard';
   // If the current screen is dirty (isNavBlocked), defer to a confirm dialog instead of navigating.
-  const go = (id: string) => {
-    if (isNavBlocked()) { setPendingNav({ kind: 'route', id }); return; }
-    router.push('/' + id); setDrawerOpen(false);
+  // Accepts a bare screen id ('products') or a full path ('/products?tool=units').
+  const toPath = (idOrPath: string) => (idOrPath.startsWith('/') ? idOrPath : '/' + idOrPath);
+  const go = (idOrPath: string) => {
+    if (isNavBlocked()) { setPendingNav({ kind: 'route', id: idOrPath }); return; }
+    router.push(toPath(idOrPath)); setDrawerOpen(false);
   };
   function confirmPendingNav() {
     const p = pendingNav;
     setPendingNav(null);
     setNavBlock(false); // user chose to discard; release the guard
     if (p?.kind === 'logout') doLogout();
-    else if (p) { router.push('/' + p.id); setDrawerOpen(false); }
+    else if (p) { router.push(toPath(p.id)); setDrawerOpen(false); }
   }
 
   // While checking auth (or redirecting an unauthorized visitor), render nothing
