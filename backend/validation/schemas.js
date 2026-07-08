@@ -145,8 +145,10 @@ const HoldSaleSchema = z.object({
 const POItemSchema = z.object({
   product_id: uuid,
   ordered_qty: positiveInt,
-  unit_price: money, // per purchase unit (per dozen when unit_id is a dozen)
+  unit_price: money, // NET cost per purchase unit (after line discount)
   unit_id: uuid.optional().nullable(), // purchase unit; null = product's base unit
+  discount_percent: money.default(0),  // informational; unit_price is already net
+  selling_price: money.optional(),     // applied to the product at receipt
   expiry_date: isoDate,
   batch_number: optStr(100),
   notes: optStr(500),
@@ -156,7 +158,14 @@ const PurchaseOrderSchema = z.object({
   supplier_id: uuid,
   location_id: uuid.optional().nullable(),
   items: z.array(POItemSchema).min(1),
+  reference_no: optStr(50),
+  order_date: isoDate,
+  status: z.enum(['ordered', 'pending', 'received']).optional(),
   expected_delivery: isoDate,
+  discount_amount: money.default(0),      // order-level discount
+  tax_amount: money.default(0),           // purchase tax
+  shipping_charges: money.default(0),
+  additional_expenses: z.array(z.object({ name: optStr(100), amount: money.default(0) })).max(20).optional(),
   freight_cost: money.default(0),
   customs_duty: money.default(0),
   other_charges: money.default(0),

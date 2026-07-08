@@ -2147,16 +2147,33 @@ function adaptRealPO(o: any): any {
     _real: o,
   };
 }
+// UI payment method → PO payment enum (cash | bank_transfer | cheque | zaad | mobile).
+function realPoPayMethod(m: any): string {
+  return ({ cash: 'cash', bank: 'bank_transfer', bank_transfer: 'bank_transfer', card: 'bank_transfer', cheque: 'cheque', check: 'cheque', zaad: 'zaad', evc: 'mobile', mobile: 'mobile' } as any)[m] || 'cash';
+}
 function toRealPOBody(b: any): any {
   return {
     supplier_id: b.supplier_id,
     location_id: isUuid(b.location_id) ? b.location_id : undefined,
-    expected_delivery: (typeof b.expected_delivery === 'string' && b.expected_delivery) || (typeof b.date === 'string' && b.date) || undefined,
+    reference_no: b.reference_no || undefined,
+    order_date: (typeof b.date === 'string' && b.date) || undefined,
+    status: b.status || undefined,                     // ordered | pending | received
+    expected_delivery: (typeof b.expected_delivery === 'string' && b.expected_delivery) || undefined,
+    payment_terms: b.pay_term ? Number(b.pay_term) : undefined,
+    discount_amount: b.discount_amount ? Number(b.discount_amount) : 0,
+    tax_amount: b.tax_amount ? Number(b.tax_amount) : 0,
+    shipping_charges: b.shipping ? Number(b.shipping) : 0,
+    additional_expenses: Array.isArray(b.expenses)
+      ? b.expenses.filter((e: any) => e && e.name && Number(e.amount) > 0).map((e: any) => ({ name: e.name, amount: Number(e.amount) }))
+      : undefined,
     notes: b.notes || undefined,
     items: (b.lines || []).map((l: any) => ({
       product_id: l.product_id,
       ordered_qty: Number(l.qty || 1),
-      unit_price: Number(l.unit_cost || 0),
+      // net unit cost after the line discount
+      unit_price: +(Number(l.unit_cost || 0) * (1 - Number(l.discount_percent || 0) / 100)).toFixed(4),
+      discount_percent: Number(l.discount_percent || 0),
+      selling_price: l.selling_price !== '' && l.selling_price != null ? Number(l.selling_price) : undefined,
       unit_id: isUuid(l.unit_id) ? l.unit_id : undefined,
     })),
   };
@@ -4073,8 +4090,8 @@ const API: any = {
       if (REAL_MODE) return adaptRealPO(await realReq('PUT', '/purchase-orders/' + id + '/status', { body: { status, ...(received_items ? { received_items } : {}) } }));
       return (await transport('PUT', '/connector/api/purchase-order/' + id + '/status', { body: { status } })).data;
     },
-    async pay(id: any, amount: number, method = 'cash') {
-      if (REAL_MODE) return await realReq('POST', '/purchase-orders/' + id + '/payment', { body: { amount: Number(amount), payment_method: method } });
+    async pay(id: any, amount: number, method = 'cash', note?: string) {
+      if (REAL_MODE) return await realReq('POST', '/purchase-orders/' + id + '/payment', { body: { amount: Number(amount), payment_method: realPoPayMethod(method), notes: note || undefined } });
       return null;
     },
     async remove(id: any) {

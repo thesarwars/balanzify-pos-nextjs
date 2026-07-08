@@ -51,14 +51,34 @@ router.get('/:id', auth, async (req, res, next) => {
 
 router.post('/', auth, requireRole('owner', 'manager'), validate(PurchaseOrderSchema), async (req, res, next) => {
   try {
-    const { supplier_id, location_id, items, expected_delivery, freight_cost, customs_duty, other_charges, payment_terms, notes, currency } = req.body;
+    const {
+      supplier_id, location_id, items, expected_delivery, payment_terms, notes, currency,
+      reference_no, order_date, status, discount_amount, tax_amount, shipping_charges, additional_expenses,
+      freight_cost, customs_duty, other_charges,
+    } = req.body;
+
+    // unit_price is the NET cost per purchase unit (frontend applies line discounts).
     const subtotal = items.reduce((s, i) => s + i.unit_price * i.ordered_qty, 0);
-    const totalAmount = subtotal + (freight_cost || 0) + (customs_duty || 0) + (other_charges || 0);
+    // shipping_charges (Add Purchase) and freight_cost (legacy) are the same
+    // concept; only one is ever sent, so summing is safe and keeps both callers.
+    const shipping = (shipping_charges || 0) + (freight_cost || 0);
+    const expensesList = Array.isArray(additional_expenses) ? additional_expenses.filter((e) => (e.amount || 0) > 0) : [];
+    const expensesTotal = expensesList.reduce((s, e) => s + (e.amount || 0), 0) + (other_charges || 0);
+    const discount = discount_amount || 0;
+    const tax = tax_amount || 0;
+    const totalAmount = +(subtotal - discount + tax + shipping + (customs_duty || 0) + expensesTotal).toFixed(2);
+    // Fold named expenses into notes so they aren't lost (no dedicated table yet).
+    const expenseNote = expensesList.length ? 'Expenses: ' + expensesList.map((e) => `${e.name || 'expense'} ${e.amount}`).join(', ') : '';
+    const fullNotes = [notes, expenseNote].filter(Boolean).join(' | ') || null;
 
     // Purchase units must belong to this business.
     const unitIds = [...new Set(items.map(i => i.unit_id).filter(Boolean))];
     if (unitIds.length && (await prisma.unit.count({ where: { id: { in: unitIds }, businessId: req.user.business_id } })) !== unitIds.length) {
       return res.status(400).json({ title: 'One or more purchase units not found', status: 400 });
+    }
+    // Reference number, if given, must be unique.
+    if (reference_no && (await prisma.purchaseOrder.count({ where: { poNumber: reference_no } }))) {
+      return res.status(409).json({ title: 'That reference number is already in use', status: 409 });
     }
 
     const po = await prisma.purchaseOrder.create({
@@ -66,16 +86,20 @@ router.post('/', auth, requireRole('owner', 'manager'), validate(PurchaseOrderSc
         businessId: req.user.business_id,
         supplierId: supplier_id,
         locationId: location_id || null,
-        poNumber: `PO-${Date.now()}`,
+        poNumber: reference_no || `PO-${Date.now()}`,
+        status: status === 'received' ? 'approved' : status === 'ordered' ? 'sent' : 'draft',
+        orderDate: order_date ? new Date(order_date) : new Date(),
         expectedDelivery: expected_delivery ? new Date(expected_delivery) : null,
         subtotal,
-        freightCost: freight_cost || 0,
+        discountAmount: discount,
+        taxAmount: tax,
+        freightCost: shipping,
         customsDuty: customs_duty || 0,
-        otherCharges: other_charges || 0,
+        otherCharges: expensesTotal,
         totalAmount,
         currency: currency || 'USD',
         paymentTerms: payment_terms || 0,
-        notes: notes || null,
+        notes: fullNotes,
         createdById: req.user.id,
         items: {
           create: items.map(item => ({
@@ -83,7 +107,9 @@ router.post('/', auth, requireRole('owner', 'manager'), validate(PurchaseOrderSc
             unitId: item.unit_id || null,
             orderedQty: item.ordered_qty,
             unitPrice: item.unit_price,
-            totalPrice: item.unit_price * item.ordered_qty,
+            discountPercent: item.discount_percent || 0,
+            sellingPrice: item.selling_price != null ? item.selling_price : null,
+            totalPrice: +(item.unit_price * item.ordered_qty).toFixed(2),
             expiryDate: item.expiry_date ? new Date(item.expiry_date) : null,
             batchNumber: item.batch_number || null,
             notes: item.notes || null,
@@ -93,7 +119,10 @@ router.post('/', auth, requireRole('owner', 'manager'), validate(PurchaseOrderSc
       include: { items: true, supplier: { select: { name: true } } },
     });
     res.status(201).json(po);
-  } catch (err) { next(err); }
+  } catch (err) {
+    if (err.code === 'P2002') return res.status(409).json({ title: 'That reference number is already in use', status: 409 });
+    next(err);
+  }
 });
 
 // One-tap reorder: draft a PO to a supplier for everything at/below its reorder
@@ -247,11 +276,15 @@ router.put('/:id/status', auth, requireRole('owner', 'manager'), validate(POStat
               },
             });
 
-            // Update cost price on product to the landed per-base-unit cost.
-            if (ri.unit_price) {
+            // Update cost price on product to the landed per-base-unit cost, and
+            // the selling price if the purchase line set one (retail, per base unit).
+            if (ri.unit_price || orderLine.sellingPrice != null) {
               await tx.product.update({
                 where: { id: ri.product_id },
-                data: { costPrice: perBaseCost },
+                data: {
+                  ...(ri.unit_price ? { costPrice: perBaseCost } : {}),
+                  ...(orderLine.sellingPrice != null ? { sellingPrice: parseFloat(orderLine.sellingPrice) } : {}),
+                },
               });
             }
 
