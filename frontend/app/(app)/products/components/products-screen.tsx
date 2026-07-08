@@ -84,13 +84,19 @@ export function Products({ T }: { T: any }) {
   const searchParams = useSearchParams();
   React.useEffect(() => {
     const tool = searchParams.get('tool');
-    if (!tool) return;
-    const openers: Record<string, (v: boolean) => void> = {
-      units: setUnitMgr, 'price-groups': setPgMgr, variations: setVarMgr, labels: setLabels, import: setImpExp,
-    };
-    openers[tool]?.(true);
-    router.replace('/products', { scroll: false });
+    if (tool) {
+      const openers: Record<string, (v: boolean) => void> = {
+        units: setUnitMgr, 'price-groups': setPgMgr, variations: setVarMgr, labels: setLabels, import: setImpExp,
+      };
+      openers[tool]?.(true);
+      router.replace('/products', { scroll: false });
+      return;
+    }
+    // The active tab lives in the URL (?tab=stock) so refresh/links land right.
+    const qtab = searchParams.get('tab');
+    if (qtab === 'stock' || qtab === 'products') setTab(qtab);
   }, [searchParams, router]);
+  const switchTab = (id: string) => { setTab(id); router.replace('/products' + (id === 'products' ? '' : '?tab=' + id), { scroll: false }); };
 
   function onPickImage(e: any) {
     const f = e.target.files && e.target.files[0];
@@ -319,11 +325,11 @@ export function Products({ T }: { T: any }) {
             {/* tabs */}
             <div style={{ display: 'flex', gap: 4, marginBottom: 18, background: T.paper, padding: 4, borderRadius: 10, width: 'fit-content', border: `1px solid ${T.line}` }}>
               {[['products', '⊞ All Products'], ['stock', '◱ Stock Report']].map(([id, lbl]: any) => (
-                <button key={id} onClick={() => setTab(id)} style={{ padding: '8px 18px', borderRadius: 7, border: 'none', cursor: 'pointer', fontFamily: T.fBody, fontSize: 13, fontWeight: tab === id ? 700 : 500, background: tab === id ? T.accent.base : 'transparent', color: tab === id ? T.accent.on : T.inkMid } as React.CSSProperties}>{lbl}</button>
+                <button key={id} onClick={() => switchTab(id)} style={{ padding: '8px 18px', borderRadius: 7, border: 'none', cursor: 'pointer', fontFamily: T.fBody, fontSize: 13, fontWeight: tab === id ? 700 : 500, background: tab === id ? T.accent.base : 'transparent', color: tab === id ? T.accent.on : T.inkMid } as React.CSSProperties}>{lbl}</button>
               ))}
             </div>
 
-            {tab === 'stock' && <StockReport T={T} onHistory={(r: any) => setHistoryProd({ id: r.product_id, name: r.product, unit: r.unit, stock: r.current_stock })} />}
+            {tab === 'stock' && <StockReport T={T} list={list} onHistory={(r: any) => setHistoryProd({ id: r.product_id, name: r.product, unit: r.unit, stock: r.current_stock })} />}
 
             {tab === 'products' && <>
             {/* ── Filters ── */}

@@ -11,15 +11,45 @@ import { money } from '@/lib/theme';
 import { API } from '@/lib/api';
 import { thStyle, tdStyle } from './list-table';
 
-export function StockReport({ T, onHistory }: { T: any; onHistory: (row: any) => void }) {
+// Derive a report from the loaded catalog — used in mock/demo mode or when the
+// live endpoint has nothing, so the tab mirrors what "All Products" shows.
+function deriveFromList(list: any[]): any[] {
+  const out: any[] = [];
+  for (const p of list || []) {
+    const stock = p.stock === Infinity ? 0 : Number(p.stock || 0);
+    const cost = Number(p.cost || 0), price = Number(p.price || 0);
+    if (p.type === 'variable' && Array.isArray(p.variations) && p.variations.length) {
+      p.variations.forEach((v: any) => out.push({
+        product_id: p.id, sku: v.sub_sku || p.sku, product: p.name, variation: v.name,
+        category: p.category_name || '', location: '', unit_selling_price: v.price != null ? Number(v.price) : price,
+        current_stock: 0, stock_value_purchase: 0, stock_value_sale: 0, potential_profit: 0,
+        total_sold: 0, total_transferred: 0, total_adjusted: 0, unit: p.unit,
+      }));
+    } else {
+      out.push({
+        product_id: p.id, sku: p.sku, product: p.name, variation: '', category: p.category_name || '', location: '',
+        unit_selling_price: price, current_stock: stock,
+        stock_value_purchase: +(stock * cost).toFixed(2), stock_value_sale: +(stock * price).toFixed(2),
+        potential_profit: +(stock * (price - cost)).toFixed(2),
+        total_sold: 0, total_transferred: 0, total_adjusted: 0, unit: p.unit,
+      });
+    }
+  }
+  return out;
+}
+
+export function StockReport({ T, onHistory, list }: { T: any; onHistory: (row: any) => void; list?: any[] }) {
   const [rows, setRows] = React.useState<any[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [q, setQ] = React.useState('');
 
   React.useEffect(() => {
     setLoading(true);
-    API.product.stockReport().then((r: any) => setRows(Array.isArray(r) ? r : [])).catch(() => setRows([])).finally(() => setLoading(false));
-  }, []);
+    API.product.stockReport()
+      .then((r: any) => setRows(Array.isArray(r) && r.length ? r : deriveFromList(list || [])))
+      .catch(() => setRows(deriveFromList(list || [])))
+      .finally(() => setLoading(false));
+  }, [list]);
 
   const filtered = q.trim()
     ? rows.filter((r: any) => [r.product, r.sku, r.variation, r.category, r.location].some((f: any) => String(f || '').toLowerCase().includes(q.toLowerCase())))
