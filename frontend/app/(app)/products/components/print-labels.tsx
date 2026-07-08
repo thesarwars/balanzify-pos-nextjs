@@ -1,0 +1,136 @@
+'use client';
+import React from 'react';
+import { Modal, Btn, Field, TextField, SelectField } from '@/components/kit';
+import { useSession } from '@/components/shell';
+import { API } from '@/lib/api';
+import { BUSINESS, PRODUCTS } from '@/lib/data';
+
+// ─────────────────────────────────────────────────────────────────
+// Print Labels — the manual's barcode-label tool. Pick products and
+// quantities, choose which info to show, preview a label sheet, print.
+// Pure client-side (works on the live catalog); no API needed.
+// ─────────────────────────────────────────────────────────────────
+const { useState: useStateLb } = React;
+
+// deterministic Code128-ish bar pattern from a string (visual only)
+function barsFor(code: any) {
+  let seed = 0; const s = String(code || 'SKU');
+  for (let i = 0; i < s.length; i++) seed = (seed * 31 + s.charCodeAt(i)) >>> 0;
+  const bars = []; let x = seed;
+  for (let i = 0; i < 34; i++) { x = (x * 1103515245 + 12345) >>> 0; bars.push({ w: 1 + (x % 3), on: i % 2 === 0 }); }
+  return bars;
+}
+function Barcode({ code, height = 34, color = '#111' }: any) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 0, height }}>
+      {barsFor(code).map((b: any, i: number) => (
+        <span key={i} style={{ width: b.w, height: '100%', background: b.on ? color : 'transparent' }} />
+      ))}
+    </div>
+  );
+}
+
+export function PrintLabels({ T, onClose, initial, products }: any) {
+  const session = useSession();
+  const bizName = (session && session.business_name) || BUSINESS.name;
+  const catalog = (products && products.length) ? products : PRODUCTS;
+  const [items, setItems] = useStateLb(() => (initial || []).map((p: any) => ({ id: p.id, qty: 1 })));
+  const [q, setQ] = useStateLb('');
+  const [opts, setOpts] = useStateLb<any>({ business: true, name: true, price: true, sku: true });
+  const [perRow, setPerRow] = useStateLb(3);
+
+  const found = q.trim() ? catalog.filter((p: any) => p.name.toLowerCase().includes(q.toLowerCase()) || (p.sku || '').toLowerCase().includes(q.toLowerCase())).slice(0, 6) : [];
+  const add = (p: any) => { setItems((it: any) => it.find((x: any) => x.id === p.id) ? it : [...it, { id: p.id, qty: 1 }]); setQ(''); };
+  const setQty = (id: any, v: any) => setItems((it: any) => it.map((x: any) => x.id === id ? { ...x, qty: Math.max(1, v) } : x));
+  const rm = (id: any) => setItems((it: any) => it.filter((x: any) => x.id !== id));
+
+  const labels: any[] = [];
+  items.forEach((it: any) => { const p = catalog.find((p: any) => p.id === it.id); if (p) for (let i = 0; i < it.qty; i++) labels.push(p); });
+
+  function doPrint() {
+    const w = window.open('', '_blank', 'width=800,height=600');
+    if (!w) return;
+    const cell = (p: any) => `<div style="border:1px dashed #ccc;border-radius:6px;padding:8px 10px;display:flex;flex-direction:column;align-items:center;gap:3px;text-align:center;font-family:system-ui,sans-serif;">
+      ${opts.business ? `<div style="font-size:9px;color:#666;font-weight:600;letter-spacing:.3px">${bizName}</div>` : ''}
+      ${opts.name ? `<div style="font-size:11px;font-weight:700;color:#111;line-height:1.15">${p.name}</div>` : ''}
+      <div style="display:flex;align-items:flex-end;height:30px;margin:2px 0">${barsFor(p.sku).map((b: any) => `<span style="width:${b.w}px;height:100%;background:${b.on ? '#111' : 'transparent'}"></span>`).join('')}</div>
+      ${opts.sku ? `<div style="font-size:9px;font-family:monospace;color:#333;letter-spacing:1px">${p.sku}</div>` : ''}
+      ${opts.price ? `<div style="font-size:13px;font-weight:700;color:#111">$${p.price.toFixed(2)}</div>` : ''}
+    </div>`;
+    w.document.write(`<html><head><title>Labels — ${bizName}</title></head><body style="margin:14px;background:#fff">
+      <div style="display:grid;grid-template-columns:repeat(${perRow},1fr);gap:8px">${labels.map(cell).join('')}</div>
+      <script>window.onload=function(){setTimeout(function(){window.print()},250)}<\/script>
+      </body></html>`);
+    w.document.close();
+  }
+
+  return (
+    <Modal T={T} title="Print Labels" subtitle="Barcode labels for your products" width={720} onClose={onClose}
+      footer={<><div style={{ flex: 1, fontSize: 13, color: T.inkSub }}>{labels.length} label{labels.length === 1 ? '' : 's'}</div><Btn T={T} kind="ghost" onClick={onClose}>Close</Btn><Btn T={T} kind="accent" onClick={doPrint} disabled={!labels.length}>⎙ Print</Btn></>}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'min(100%, 280px) 1fr', gap: 18 }}>
+        {/* left: add products + options */}
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase', color: T.inkSub, marginBottom: 7 } as React.CSSProperties}>Products</div>
+          <div style={{ position: 'relative', marginBottom: 8 }}>
+            <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search name or SKU…" style={{ width: '100%', padding: '9px 11px', fontSize: 13, fontFamily: T.fBody, color: T.ink, background: T.paper, border: `1.5px solid ${T.line}`, borderRadius: T.r, outline: 'none', boxSizing: 'border-box' }} />
+            {found.length > 0 && (
+              <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 5, marginTop: 4, background: T.paper, border: `1px solid ${T.line}`, borderRadius: T.r, boxShadow: T.sh2, overflow: 'hidden' }}>
+                {found.map((p: any) => <button key={p.id} onClick={() => add(p)} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '8px 11px', border: 'none', borderBottom: `1px solid ${T.line}`, background: T.paper, cursor: 'pointer', fontSize: 12.5, color: T.ink, fontFamily: T.fBody } as React.CSSProperties}>{p.name} <span style={{ color: T.inkSub, fontFamily: T.fMono, fontSize: 11 }}>{p.sku}</span></button>)}
+              </div>
+            )}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 16 }}>
+            {items.length === 0 && <div style={{ fontSize: 12, color: T.inkMute, padding: '8px 0' }}>Search to add products.</div>}
+            {items.map((it: any) => { const p = PRODUCTS.find((p: any) => p.id === it.id); if (!p) return null; return (
+              <div key={it.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 10px', border: `1px solid ${T.line}`, borderRadius: T.r, background: T.paper }}>
+                <span style={{ flex: 1, fontSize: 12.5, fontWeight: 600, color: T.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.name}</span>
+                <input type="number" value={it.qty} onChange={e => setQty(it.id, Number(e.target.value))} style={{ width: 50, padding: '5px 7px', fontSize: 12.5, fontFamily: T.fMono, textAlign: 'right', color: T.ink, background: T.paper, border: `1px solid ${T.line}`, borderRadius: 6, outline: 'none', boxSizing: 'border-box' } as React.CSSProperties} />
+                <button onClick={() => rm(it.id)} style={{ width: 24, height: 24, borderRadius: 6, border: `1px solid ${T.line}`, background: T.paper, color: T.redText, cursor: 'pointer', fontSize: 11 }}>✕</button>
+              </div>
+            ); })}
+          </div>
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase', color: T.inkSub, marginBottom: 7 } as React.CSSProperties}>Show on label</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+            {([['business', 'Business name'], ['name', 'Product name'], ['price', 'Price'], ['sku', 'SKU / barcode']] as any[]).map(([k, lbl]: any) => (
+              <label key={k} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: T.inkMid, cursor: 'pointer' }}>
+                <input type="checkbox" checked={opts[k]} onChange={e => setOpts((o: any) => ({ ...o, [k]: e.target.checked }))} style={{ accentColor: T.accent.base, width: 15, height: 15 }} />{lbl}
+              </label>
+            ))}
+          </div>
+          <div style={{ marginTop: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 12.5, color: T.inkSub }}>Per row</span>
+            <SelectField T={T} value={String(perRow)} options={['2', '3', '4', '5']} onChange={(v: any) => setPerRow(Number(v))} />
+          </div>
+        </div>
+
+        {/* right: live preview */}
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase', color: T.inkSub, marginBottom: 7 } as React.CSSProperties}>Preview</div>
+          <div style={{ background: '#fff', border: `1px solid ${T.line}`, borderRadius: T.r, padding: 12, minHeight: 220, maxHeight: 320, overflowY: 'auto' }}>
+            {labels.length === 0 ? <div style={{ textAlign: 'center', color: T.inkMute, fontSize: 12.5, padding: '70px 0' }}>Add products to preview labels.</div> : (
+              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${perRow}, 1fr)`, gap: 8 }}>
+                {labels.slice(0, 24).map((p: any, i: number) => (
+                  <div key={i} style={{ border: '1px dashed #cbb', borderRadius: 6, padding: '8px 8px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, textAlign: 'center' } as React.CSSProperties}>
+                    {opts.business && <div style={{ fontSize: 8, color: '#888', fontWeight: 700 }}>{bizName}</div>}
+                    {opts.name && <div style={{ fontSize: 10, fontWeight: 700, color: '#111', lineHeight: 1.1 }}>{p.name}</div>}
+                    <Barcode code={p.sku} height={26} />
+                    {opts.sku && <div style={{ fontSize: 8, fontFamily: 'monospace', color: '#444', letterSpacing: 1 }}>{p.sku}</div>}
+                    {opts.price && <div style={{ fontSize: 12, fontWeight: 800, color: '#111' }}>${p.price.toFixed(2)}</div>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          {labels.length > 24 && <div style={{ fontSize: 11, color: T.inkMute, marginTop: 6 }}>Showing first 24 — all {labels.length} print.</div>}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Import / Export products — the manual's bulk product tools.
+// Export: download the catalog as CSV in the import-template format.
+// Import: upload/paste CSV → validate per row (unit/category checks,
+// like the manual's common errors) → create each via API.product.
+// ─────────────────────────────────────────────────────────────────
