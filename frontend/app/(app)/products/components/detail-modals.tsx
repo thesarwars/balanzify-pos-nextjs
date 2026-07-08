@@ -13,7 +13,10 @@ export function ViewProductModal({ T, product, refs, cats, onClose, onEdit }: an
   }, [product.id]);
   const raw = (full && full._real) || {};
   const variants: any[] = Array.isArray(raw.variants) ? raw.variants : [];
-  const stockLevels: any[] = Array.isArray(raw.stockLevels) ? raw.stockLevels : [];
+  // Per-variation × location stock, valued at the real cost basis (server aggregates cost layers).
+  const stockDetails: any[] = Array.isArray(raw.stock_details) ? raw.stock_details : [];
+  const totQty = stockDetails.reduce((s: number, r: any) => s + (r.quantity || 0), 0);
+  const totVal = stockDetails.reduce((s: number, r: any) => s + (r.value || 0), 0);
   const locName = (id: any) => (refs.locations.find((l: any) => String(l.id) === String(id)) || {}).name || '—';
   const availLocs = (Array.isArray(full.location_ids) && full.location_ids.length) ? full.location_ids.map(locName).join(', ') : 'All locations';
   const taxName = (refs.taxRates.find((t: any) => String(t.id) === String(full.tax_id)) || {}).name || 'None';
@@ -71,25 +74,32 @@ export function ViewProductModal({ T, product, refs, cats, onClose, onEdit }: an
       <div style={{ marginTop: 20 }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: T.ink, marginBottom: 8 }}>Product stock details</div>
         <div style={{ overflowX: 'auto', border: `1px solid ${T.line}`, borderRadius: T.r }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 620 }}>
-            <thead><tr>{['SKU', 'Location', 'Unit Price', 'Current stock', 'Stock value'].map((h, i) => <th key={h} style={thStyle(T, i > 1 ? 'r' : 'l')}>{h}</th>)}</tr></thead>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 660 }}>
+            <thead><tr>{['SKU', 'Variation', 'Location', 'Unit Price', 'Current stock', 'Stock value'].map((h, i) => <th key={h} style={thStyle(T, i > 2 ? 'r' : 'l')}>{h}</th>)}</tr></thead>
             <tbody>
-              {stockLevels.length === 0 && <tr><td colSpan={5} style={{ padding: 22, textAlign: 'center', color: T.inkMute, fontSize: 12.5 }}>No stock recorded yet.</td></tr>}
-              {stockLevels.map((sl: any, i: number) => {
-                const v = variants.find((x: any) => x.id === sl.variantId);
+              {stockDetails.length === 0 && <tr><td colSpan={6} style={{ padding: 22, textAlign: 'center', color: T.inkMute, fontSize: 12.5 }}>No stock recorded yet.</td></tr>}
+              {stockDetails.map((r: any, i: number) => {
+                const v = variants.find((x: any) => x.id === r.variant_id);
                 const price = v ? Number(v.sellingPrice || 0) : full.price;
-                const cost = v ? Number(v.costPrice || 0) : full.cost;
                 return (
                   <tr key={i}>
-                    <td style={{ ...tdStyle(T), fontFamily: T.fMono, fontSize: 12, color: T.inkSub }}>{v ? skuOf(v) : full.sku}{v && attrName(v.attributes) ? ` · ${attrName(v.attributes)}` : ''}</td>
-                    <td style={tdStyle(T)}>{(sl.location && sl.location.name) || locName(sl.locationId)}</td>
+                    <td style={{ ...tdStyle(T), fontFamily: T.fMono, fontSize: 12, color: T.inkSub }}>{v ? skuOf(v) : full.sku}</td>
+                    <td style={tdStyle(T)}>{v ? (attrName(v.attributes) || '—') : '—'}</td>
+                    <td style={tdStyle(T)}>{locName(r.location_id)}</td>
                     <td style={{ ...tdStyle(T), textAlign: 'right', fontFamily: T.fMono }}>{money(price)}</td>
-                    <td style={{ ...tdStyle(T), textAlign: 'right', fontFamily: T.fMono }}>{sl.quantity} {full.unit}</td>
-                    <td style={{ ...tdStyle(T), textAlign: 'right', fontFamily: T.fMono, color: T.inkSub }}>{money((sl.quantity || 0) * cost)}</td>
+                    <td style={{ ...tdStyle(T), textAlign: 'right', fontFamily: T.fMono }}>{r.quantity} {full.unit}</td>
+                    <td style={{ ...tdStyle(T), textAlign: 'right', fontFamily: T.fMono, color: T.inkSub }}>{money(r.value)}</td>
                   </tr>
                 );
               })}
             </tbody>
+            {stockDetails.length > 0 && (
+              <tfoot><tr style={{ background: T.paperAlt }}>
+                <td style={{ ...tdStyle(T), fontWeight: 700 }} colSpan={4}>Total</td>
+                <td style={{ ...tdStyle(T), textAlign: 'right', fontFamily: T.fMono, fontWeight: 700 }}>{totQty} {full.unit}</td>
+                <td style={{ ...tdStyle(T), textAlign: 'right', fontFamily: T.fMono, fontWeight: 700 }}>{money(totVal)}</td>
+              </tr></tfoot>
+            )}
           </table>
         </div>
         {loading && <div style={{ padding: 10, textAlign: 'center', fontSize: 11.5, color: T.inkMute }}>Loading latest stock…</div>}

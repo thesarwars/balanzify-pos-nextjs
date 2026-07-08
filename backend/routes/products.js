@@ -79,12 +79,38 @@ router.get('/:id', auth, async (req, res, next) => {
       return res.status(404).json({ title: 'Product not found', status: 404 });
     }
 
-    res.json({ 
-      ...product, 
-      total_stock: product.stockLevels.reduce((s, sl) => s + sl.quantity, 0) 
+    // Stock details broken down by variation × location, valued at the real cost
+    // basis (cost layers, which are per-variant). Falls back to the pooled stock
+    // level valued at the product cost for products with no cost layers.
+    const layers = await prisma.costLayer.findMany({
+      where: { productId: product.id, quantityRemaining: { gt: 0 } },
+      select: { variantId: true, locationId: true, quantityRemaining: true, unitCost: true },
     });
-  } catch (err) { 
-    next(err); 
+    let stockDetails;
+    if (layers.length) {
+      const map = new Map();
+      for (const l of layers) {
+        const key = `${l.variantId || ''}:${l.locationId || ''}`;
+        const row = map.get(key) || { variant_id: l.variantId, location_id: l.locationId, quantity: 0, value: 0 };
+        row.quantity += l.quantityRemaining;
+        row.value += l.quantityRemaining * Number(l.unitCost);
+        map.set(key, row);
+      }
+      stockDetails = [...map.values()].map((r) => ({ ...r, value: +r.value.toFixed(2) }));
+    } else {
+      const cost = Number(product.costPrice || 0);
+      stockDetails = product.stockLevels
+        .filter((sl) => sl.quantity > 0)
+        .map((sl) => ({ variant_id: sl.variantId || null, location_id: sl.locationId, quantity: sl.quantity, value: +(sl.quantity * cost).toFixed(2) }));
+    }
+
+    res.json({
+      ...product,
+      total_stock: product.stockLevels.reduce((s, sl) => s + sl.quantity, 0),
+      stock_details: stockDetails,
+    });
+  } catch (err) {
+    next(err);
   }
 });
 
