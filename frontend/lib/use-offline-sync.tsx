@@ -41,18 +41,36 @@ export function useOfflineSync() {
   }, [refresh]);
 
   useEffect(() => {
-    if (typeof navigator !== 'undefined') setOnline(navigator.onLine);
+    let cancelled = false;
+    // navigator.onLine only reliably reports the *no-connection* case, and it
+    // misfires (false while actually connected) in some browsers/VPN setups —
+    // which wrongly flips the UI to "Offline". Confirm with a real same-origin
+    // reachability probe before trusting an offline signal.
+    const probe = async (): Promise<boolean> => {
+      try {
+        const res = await fetch('/health', { method: 'GET', cache: 'no-store' });
+        const ok = res.ok;
+        if (!cancelled) setOnline(ok);
+        return ok;
+      } catch { if (!cancelled) setOnline(false); return false; }
+    };
+
+    // Trust a positive navigator signal; verify a negative one.
+    if (typeof navigator !== 'undefined' && navigator.onLine) setOnline(true);
+    else probe();
     refresh();
 
     const goOnline = () => { setOnline(true); flush(); };
-    const goOffline = () => setOnline(false);
+    const goOffline = () => { probe().then((ok) => { if (ok) flush(); }); };
     if (typeof window !== 'undefined') {
       window.addEventListener('online', goOnline);
       window.addEventListener('offline', goOffline);
     }
-    const iv = setInterval(() => { if (typeof navigator === 'undefined' || navigator.onLine) flush(); }, 60000);
+    // Safety-net: re-check reachability and flush the queue periodically.
+    const iv = setInterval(() => { probe().then((ok) => { if (ok) flush(); }); }, 60000);
 
     return () => {
+      cancelled = true;
       if (typeof window !== 'undefined') {
         window.removeEventListener('online', goOnline);
         window.removeEventListener('offline', goOffline);
