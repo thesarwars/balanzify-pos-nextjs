@@ -54,9 +54,95 @@ router.get('/', auth, async (req, res, next) => {
     }
 
     res.json({ products: enriched });
-  } catch (err) { 
-    next(err); 
+  } catch (err) {
+    next(err);
   }
+});
+
+// ==========================================
+// GET /stock-report - Per variation × location stock valuation
+// ==========================================
+// One row per (product, variation, location) that holds stock, valued at both
+// purchase (cost layers) and sale price, with potential profit and units
+// sold / transferred / adjusted from the movement log. Products with no stock
+// still appear as a single zero row. (Defined before /:id so it isn't captured
+// as an id.)
+router.get('/stock-report', auth, async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const [products, layers, moves, locations] = await Promise.all([
+      prisma.product.findMany({
+        where: { businessId, isActive: true },
+        include: {
+          category: { select: { name: true } },
+          variants: { where: { isActive: true }, select: { id: true, sku: true, attributes: true, sellingPrice: true, costPrice: true } },
+        },
+        orderBy: { name: 'asc' },
+      }),
+      prisma.costLayer.findMany({ where: { businessId, quantityRemaining: { gt: 0 } }, select: { productId: true, variantId: true, locationId: true, quantityRemaining: true, unitCost: true } }),
+      prisma.stockMovement.groupBy({ by: ['productId', 'variantId', 'locationId', 'type'], where: { businessId }, _sum: { quantity: true } }),
+      prisma.location.findMany({ where: { businessId }, select: { id: true, name: true } }),
+    ]);
+
+    const locName = (id) => (locations.find((l) => l.id === id) || {}).name || '';
+    const attrName = (a) => { try { return Object.values(a || {}).join(' / '); } catch { return ''; } };
+
+    // sold / transferred / adjusted per (product, variant, location)
+    const mvKey = (p, v, l) => `${p}:${v || ''}:${l || ''}`;
+    const mv = {};
+    for (const m of moves) {
+      const k = mvKey(m.productId, m.variantId, m.locationId);
+      const row = mv[k] || (mv[k] = { sold: 0, transferred: 0, adjusted: 0 });
+      const q = Math.abs(m._sum.quantity || 0);
+      if (m.type === 'sale') row.sold += q;
+      else if (m.type === 'transfer_in' || m.type === 'transfer_out') row.transferred += q;
+      else if (m.type === 'adjustment') row.adjusted += q;
+    }
+
+    // Stock rows from cost layers, grouped by product × variant × location.
+    const rows = {};
+    for (const cl of layers) {
+      const k = mvKey(cl.productId, cl.variantId, cl.locationId);
+      const r = rows[k] || (rows[k] = { productId: cl.productId, variantId: cl.variantId, locationId: cl.locationId, qty: 0, valuePurchase: 0 });
+      r.qty += cl.quantityRemaining;
+      r.valuePurchase += cl.quantityRemaining * Number(cl.unitCost);
+    }
+    const stockedProductIds = new Set(layers.map((l) => l.productId));
+
+    const out = [];
+    const pushRow = (p, variant, locationId, qty, valuePurchase) => {
+      const sellPrice = variant ? Number(variant.sellingPrice || 0) : Number(p.sellingPrice || 0);
+      const valueSale = +(qty * sellPrice).toFixed(2);
+      const m = mv[mvKey(p.id, variant ? variant.id : null, locationId)] || { sold: 0, transferred: 0, adjusted: 0 };
+      out.push({
+        product_id: p.id, variant_id: variant ? variant.id : null,
+        sku: (variant && variant.sku) || p.sku, product: p.name,
+        variation: variant ? attrName(variant.attributes) : '',
+        category: (p.category && p.category.name) || '',
+        location: locationId ? locName(locationId) : '', location_id: locationId || null,
+        unit_selling_price: sellPrice,
+        current_stock: qty,
+        stock_value_purchase: +valuePurchase.toFixed(2),
+        stock_value_sale: valueSale,
+        potential_profit: +(valueSale - valuePurchase).toFixed(2),
+        total_sold: m.sold, total_transferred: m.transferred, total_adjusted: m.adjusted,
+        unit: p.unitOfMeasure || 'unit',
+      });
+    };
+
+    for (const p of products) {
+      if (!stockedProductIds.has(p.id)) { pushRow(p, null, null, 0, 0); continue; }
+      // stocked: emit each (variant, location) group we have a layer for
+      for (const k of Object.keys(rows)) {
+        const r = rows[k];
+        if (r.productId !== p.id) continue;
+        const variant = r.variantId ? p.variants.find((v) => v.id === r.variantId) : null;
+        pushRow(p, variant, r.locationId, r.qty, r.valuePurchase);
+      }
+    }
+
+    res.json({ rows: out });
+  } catch (err) { next(err); }
 });
 
 // ==========================================

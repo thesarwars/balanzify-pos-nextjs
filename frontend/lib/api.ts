@@ -2773,6 +2773,11 @@ const API: any = {
       if (REAL_MODE) return await realReq('POST', '/products/' + id + '/opening-stock', { body });
       return null;
     },
+    // Stock report: per variation × location valuation + movement totals.
+    async stockReport() {
+      if (REAL_MODE) { const r = await realReq('GET', '/products/stock-report'); return (r && r.rows) || []; }
+      return [];
+    },
   },
   // Per-product variants (variable products) — /products/:productId/variants.
   productVariant: {

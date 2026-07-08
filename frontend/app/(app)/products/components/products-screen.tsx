@@ -12,6 +12,7 @@ import { thStyle, tdStyle, FilterSel, ActionsMenu } from './list-table';
 import { ViewProductModal, StockHistoryModal, OpeningStockModal } from './detail-modals';
 import { PrintLabels } from './print-labels';
 import { ImportExport } from './import-export';
+import { StockReport } from './stock-report';
 
 // ─────────────────────────────────────────────────────────────────
 // Products — the data screen. Filter bar + table + slide-in detail.
@@ -39,6 +40,7 @@ export function Products({ T }: { T: any }) {
   const [impExp, setImpExp] = useStatePr(false);
   const [labels, setLabels] = useStatePr(false);
   const [confirmDel, setConfirmDel] = useStatePr<any>(null);
+  const [tab, setTab] = useStatePr('products'); // products | stock (Stock Report)
   // Filters bar + row actions + detail modals (reference product list parity).
   const [filtersOpen, setFiltersOpen] = useStatePr(true);
   const [fType, setFType] = useStatePr('');
@@ -314,6 +316,16 @@ export function Products({ T }: { T: any }) {
 
         <div style={{ flex: 1, overflowY: 'auto', padding: 28 }}>
           <div style={{ maxWidth: 1280, margin: '0 auto' }}>
+            {/* tabs */}
+            <div style={{ display: 'flex', gap: 4, marginBottom: 18, background: T.paper, padding: 4, borderRadius: 10, width: 'fit-content', border: `1px solid ${T.line}` }}>
+              {[['products', '⊞ All Products'], ['stock', '◱ Stock Report']].map(([id, lbl]: any) => (
+                <button key={id} onClick={() => setTab(id)} style={{ padding: '8px 18px', borderRadius: 7, border: 'none', cursor: 'pointer', fontFamily: T.fBody, fontSize: 13, fontWeight: tab === id ? 700 : 500, background: tab === id ? T.accent.base : 'transparent', color: tab === id ? T.accent.on : T.inkMid } as React.CSSProperties}>{lbl}</button>
+              ))}
+            </div>
+
+            {tab === 'stock' && <StockReport T={T} onHistory={(r: any) => setHistoryProd({ id: r.product_id, name: r.product, unit: r.unit, stock: r.current_stock })} />}
+
+            {tab === 'products' && <>
             {/* ── Filters ── */}
             <Panel T={T} pad={false} style={{ marginBottom: 16 }}>
               <button onClick={() => setFiltersOpen((o: boolean) => !o)} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 9, padding: '12px 16px', background: 'none', border: 'none', cursor: 'pointer', fontFamily: T.fBody } as React.CSSProperties}>
@@ -431,6 +443,7 @@ export function Products({ T }: { T: any }) {
                 </div>
               )}
             </Panel>
+            </>}
           </div>
         </div>
       </div>
