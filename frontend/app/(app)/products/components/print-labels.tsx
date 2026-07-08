@@ -30,22 +30,38 @@ function Barcode({ code, height = 34, color = '#111' }: any) {
   );
 }
 
+// Expand a catalog product into label rows: a variable product yields one row
+// per variation (its own SKU / barcode / price); everything else is one row.
+function toLabelItems(p: any): any[] {
+  if (p.type === 'variable' && Array.isArray(p.variations) && p.variations.length) {
+    return p.variations.map((v: any) => ({
+      key: `${p.id}::${v.id}`,
+      name: `${p.name} — ${v.name}`,
+      sku: v.sub_sku || p.sku,
+      price: v.price != null ? Number(v.price) : Number(p.price || 0),
+      qty: 1,
+    }));
+  }
+  return [{ key: String(p.id), name: p.name, sku: p.sku, price: Number(p.price || 0), qty: 1 }];
+}
+
 export function PrintLabels({ T, onClose, initial, products }: any) {
   const session = useSession();
   const bizName = (session && session.business_name) || BUSINESS.name;
   const catalog = (products && products.length) ? products : PRODUCTS;
-  const [items, setItems] = useStateLb(() => (initial || []).map((p: any) => ({ id: p.id, qty: 1 })));
+  const [items, setItems] = useStateLb(() => (initial || []).flatMap((p: any) => toLabelItems(p)));
   const [q, setQ] = useStateLb('');
   const [opts, setOpts] = useStateLb<any>({ business: true, name: true, price: true, sku: true });
   const [perRow, setPerRow] = useStateLb(3);
 
   const found = q.trim() ? catalog.filter((p: any) => p.name.toLowerCase().includes(q.toLowerCase()) || (p.sku || '').toLowerCase().includes(q.toLowerCase())).slice(0, 6) : [];
-  const add = (p: any) => { setItems((it: any) => it.find((x: any) => x.id === p.id) ? it : [...it, { id: p.id, qty: 1 }]); setQ(''); };
-  const setQty = (id: any, v: any) => setItems((it: any) => it.map((x: any) => x.id === id ? { ...x, qty: Math.max(1, v) } : x));
-  const rm = (id: any) => setItems((it: any) => it.filter((x: any) => x.id !== id));
+  // Adding a product appends any of its label rows not already present (by key).
+  const add = (p: any) => { setItems((it: any) => { const have = new Set(it.map((x: any) => x.key)); return [...it, ...toLabelItems(p).filter((r: any) => !have.has(r.key))]; }); setQ(''); };
+  const setQty = (key: any, v: any) => setItems((it: any) => it.map((x: any) => x.key === key ? { ...x, qty: Math.max(1, v) } : x));
+  const rm = (key: any) => setItems((it: any) => it.filter((x: any) => x.key !== key));
 
   const labels: any[] = [];
-  items.forEach((it: any) => { const p = catalog.find((p: any) => p.id === it.id); if (p) for (let i = 0; i < it.qty; i++) labels.push(p); });
+  items.forEach((it: any) => { for (let i = 0; i < it.qty; i++) labels.push(it); });
 
   function doPrint() {
     const w = window.open('', '_blank', 'width=800,height=600');
@@ -81,13 +97,16 @@ export function PrintLabels({ T, onClose, initial, products }: any) {
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 16 }}>
             {items.length === 0 && <div style={{ fontSize: 12, color: T.inkMute, padding: '8px 0' }}>Search to add products.</div>}
-            {items.map((it: any) => { const p = PRODUCTS.find((p: any) => p.id === it.id); if (!p) return null; return (
-              <div key={it.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 10px', border: `1px solid ${T.line}`, borderRadius: T.r, background: T.paper }}>
-                <span style={{ flex: 1, fontSize: 12.5, fontWeight: 600, color: T.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.name}</span>
-                <input type="number" value={it.qty} onChange={e => setQty(it.id, Number(e.target.value))} style={{ width: 50, padding: '5px 7px', fontSize: 12.5, fontFamily: T.fMono, textAlign: 'right', color: T.ink, background: T.paper, border: `1px solid ${T.line}`, borderRadius: 6, outline: 'none', boxSizing: 'border-box' } as React.CSSProperties} />
-                <button onClick={() => rm(it.id)} style={{ width: 24, height: 24, borderRadius: 6, border: `1px solid ${T.line}`, background: T.paper, color: T.redText, cursor: 'pointer', fontSize: 11 }}>✕</button>
+            {items.map((it: any) => (
+              <div key={it.key} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 10px', border: `1px solid ${T.line}`, borderRadius: T.r, background: T.paper }}>
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <span style={{ display: 'block', fontSize: 12.5, fontWeight: 600, color: T.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{it.name}</span>
+                  <span style={{ display: 'block', fontSize: 10.5, fontFamily: T.fMono, color: T.inkSub }}>{it.sku}</span>
+                </span>
+                <input type="number" value={it.qty} onChange={e => setQty(it.key, Number(e.target.value))} style={{ width: 50, padding: '5px 7px', fontSize: 12.5, fontFamily: T.fMono, textAlign: 'right', color: T.ink, background: T.paper, border: `1px solid ${T.line}`, borderRadius: 6, outline: 'none', boxSizing: 'border-box' } as React.CSSProperties} />
+                <button onClick={() => rm(it.key)} style={{ width: 24, height: 24, borderRadius: 6, border: `1px solid ${T.line}`, background: T.paper, color: T.redText, cursor: 'pointer', fontSize: 11 }}>✕</button>
               </div>
-            ); })}
+            ))}
           </div>
           <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase', color: T.inkSub, marginBottom: 7 } as React.CSSProperties}>Show on label</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
