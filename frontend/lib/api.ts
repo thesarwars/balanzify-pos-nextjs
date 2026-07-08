@@ -2768,9 +2768,9 @@ const API: any = {
       }
       return [];
     },
-    // Add / edit opening stock — designed; posts once the opening-stock write path lands.
-    async setOpeningStock(_id: any, _body: any) {
-      if (REAL_MODE) throw new ApiError(501, 'Opening-stock editing isn’t wired yet.');
+    // Add opening stock at a location — body: { location_id, lines: [{ variant_id?, quantity, unit_cost, note? }] }.
+    async openingStock(id: any, body: any) {
+      if (REAL_MODE) return await realReq('POST', '/products/' + id + '/opening-stock', { body });
       return null;
     },
   },

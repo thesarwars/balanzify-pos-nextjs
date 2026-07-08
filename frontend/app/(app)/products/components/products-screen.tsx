@@ -438,7 +438,7 @@ export function Products({ T }: { T: any }) {
       {/* View / stock history / opening stock */}
       {viewProd && <ViewProductModal T={T} product={viewProd} refs={refs} cats={cats} onClose={() => setViewProd(null)} onEdit={() => { const p = viewProd; setViewProd(null); openEdit(p); }} />}
       {historyProd && <StockHistoryModal T={T} product={historyProd} onClose={() => setHistoryProd(null)} />}
-      {openingProd && <OpeningStockModal T={T} product={openingProd} refs={refs} onClose={() => setOpeningProd(null)} toast={toast} />}
+      {openingProd && <OpeningStockModal T={T} product={openingProd} refs={refs} onClose={() => setOpeningProd(null)} onSaved={reload} toast={toast} />}
 
       {open && (
         <Modal T={T} title={editing ? 'Edit product' : 'New product'} subtitle={editing ? editing.sku : 'Add an item to your catalog'} onClose={() => setOpen(false)} width={680}

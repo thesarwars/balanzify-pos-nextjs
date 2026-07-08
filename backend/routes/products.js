@@ -2,7 +2,7 @@ const express = require('express');
 const prisma = require('../lib/prisma');
 const { auth, requireRole } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
-const { ProductSchema } = require('../validation/schemas');
+const { ProductSchema, OpeningStockSchema } = require('../validation/schemas');
 const router = express.Router();
 
 // ==========================================
@@ -285,9 +285,65 @@ router.get('/:id/movements', auth, async (req, res, next) => {
     });
 
     res.json({ movements });
-  } catch (err) { 
-    next(err); 
+  } catch (err) {
+    next(err);
   }
+});
+
+// ==========================================
+// POST /:id/opening-stock - Add opening stock at a location
+// ==========================================
+// Stock is pooled per (product, location) — the app's inventory granularity —
+// so the line quantities sum into one stock level, while cost basis (cost
+// layers) and the audit trail (movements) are recorded per line, honouring the
+// variant when given. Additive: adding opening stock increases the balance.
+router.post('/:id/opening-stock', auth, requireRole('owner', 'manager'), validate(OpeningStockSchema), async (req, res, next) => {
+  try {
+    const { location_id, lines } = req.body;
+    const product = await prisma.product.findFirst({ where: { id: req.params.id, businessId: req.user.business_id } });
+    if (!product) return res.status(404).json({ title: 'Product not found', status: 404 });
+    if (!(await prisma.location.count({ where: { id: location_id, businessId: req.user.business_id } }))) {
+      return res.status(400).json({ title: 'Location not found', status: 400 });
+    }
+    // Variant lines must belong to this product.
+    const variantIds = [...new Set(lines.map((l) => l.variant_id).filter(Boolean))];
+    if (variantIds.length && (await prisma.productVariant.count({ where: { id: { in: variantIds }, productId: product.id } })) !== variantIds.length) {
+      return res.status(400).json({ title: 'One or more variations do not belong to this product', status: 400 });
+    }
+
+    const totalQty = lines.reduce((s, l) => s + (l.quantity || 0), 0);
+    const costSum = lines.reduce((s, l) => s + (l.quantity || 0) * (l.unit_cost || 0), 0);
+    const wtCost = totalQty > 0 ? +(costSum / totalQty).toFixed(4) : 0;
+
+    const result = await prisma.$transaction(async (tx) => {
+      // 1. Pooled stock level (product, location) — additive.
+      const level = await tx.stockLevel.upsert({
+        where: { productId_locationId: { productId: product.id, locationId: location_id } },
+        update: { quantity: { increment: totalQty } },
+        create: { productId: product.id, locationId: location_id, quantity: totalQty },
+      });
+      // 2. Per-line cost layer + audit movement (keeps the variant where given).
+      for (const l of lines) {
+        if (!l.quantity || l.quantity <= 0) continue;
+        await tx.costLayer.create({ data: {
+          businessId: req.user.business_id, productId: product.id, variantId: l.variant_id || null,
+          locationId: location_id, quantityReceived: l.quantity, quantityRemaining: l.quantity, unitCost: l.unit_cost || 0,
+        } });
+        await tx.stockMovement.create({ data: {
+          businessId: req.user.business_id, productId: product.id, variantId: l.variant_id || null,
+          locationId: location_id, type: 'opening', quantity: l.quantity, balanceAfter: level.quantity,
+          notes: l.note || 'Opening stock', createdById: req.user.id,
+        } });
+      }
+      // 3. Seed the product's cost price if it had none.
+      if (wtCost > 0 && Number(product.costPrice) === 0) {
+        await tx.product.update({ where: { id: product.id }, data: { costPrice: wtCost } });
+      }
+      return level;
+    });
+
+    res.status(201).json({ message: 'Opening stock added.', quantity_added: totalQty, total_quantity: result.quantity });
+  } catch (err) { next(err); }
 });
 
 module.exports = router;

@@ -144,19 +144,34 @@ export function StockHistoryModal({ T, product, onClose }: any) {
 // ── Add / edit opening stock — designed; connects when the opening-stock
 //    write path lands (variant POST accepts opening_stock; a bulk editor
 //    endpoint is pending). ────────────────────────────────────────────
-export function OpeningStockModal({ T, product, refs, onClose, toast }: any) {
+export function OpeningStockModal({ T, product, refs, onClose, onSaved, toast }: any) {
   const loc0 = (refs.locations[0] || {});
   const [locId, setLocId] = React.useState(loc0.id || '');
+  const [busy, setBusy] = React.useState(false);
+  // Variable products: one line per variation (carries its variant_id); else one line.
   const lines = (product.variations && product.variations.length)
-    ? product.variations.map((v: any) => ({ key: v.id, name: `${product.name} (${v.name})`, cost: v.cost || product.cost }))
-    : [{ key: product.id, name: product.name, cost: product.cost }];
+    ? product.variations.map((v: any) => ({ key: v.id, variant_id: v.id, name: `${product.name} (${v.name})`, cost: v.cost || product.cost }))
+    : [{ key: product.id, variant_id: null, name: product.name, cost: product.cost }];
   const [rowsState, setRowsState] = React.useState<any>(() => Object.fromEntries(lines.map((l: any) => [l.key, { qty: '', cost: String(l.cost || ''), note: '' }])));
   const set = (k: any, field: string, v: any) => setRowsState((s: any) => ({ ...s, [k]: { ...s[k], [field]: v } }));
   const total = lines.reduce((s: number, l: any) => s + (Number(rowsState[l.key]?.qty) || 0) * (Number(rowsState[l.key]?.cost) || 0), 0);
 
+  async function save() {
+    if (!locId) { toast('Pick a location.'); return; }
+    const payloadLines = lines
+      .map((l: any) => ({ variant_id: l.variant_id || undefined, quantity: Math.max(0, parseInt(rowsState[l.key]?.qty || '0', 10) || 0), unit_cost: Number(rowsState[l.key]?.cost || 0), note: rowsState[l.key]?.note || undefined }))
+      .filter((l: any) => l.quantity > 0);
+    if (!payloadLines.length) { toast('Enter a quantity for at least one row.'); return; }
+    setBusy(true);
+    try {
+      await API.product.openingStock(product.id, { location_id: locId, lines: payloadLines });
+      toast('Opening stock added'); onSaved && onSaved(); onClose();
+    } catch (ex: any) { toast(ex.message || 'Could not save opening stock.'); } finally { setBusy(false); }
+  }
+
   return (
     <Modal T={T} title="Add opening stock" subtitle={product.name} width={780} onClose={onClose}
-      footer={<><div style={{ flex: 1, fontSize: 11.5, color: T.inkMute }}>Saving connects when the opening-stock write path lands.</div><Btn T={T} kind="ghost" onClick={onClose}>Close</Btn><Btn T={T} kind="accent" onClick={() => { onClose(); toast('Opening-stock editing is on the way — nothing saved yet.'); }}>Save</Btn></>}>
+      footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Close</Btn><Btn T={T} kind="accent" onClick={save} disabled={busy}>{busy ? 'Saving…' : 'Save'}</Btn></>}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
         <span style={{ fontSize: 12.5, fontWeight: 600, color: T.inkSub }}>Location</span>
         <div style={{ minWidth: 200 }}>

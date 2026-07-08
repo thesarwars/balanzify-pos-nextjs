@@ -630,6 +630,17 @@ const ProductVariantSchema = z.object({
   sort_order: nonNegInt.default(0),
 });
 
+// Add opening stock — a location + per-line (variant) quantities & costs.
+const OpeningStockSchema = z.object({
+  location_id: uuid,
+  lines: z.array(z.object({
+    variant_id: uuid.optional().nullable(),
+    quantity: nonNegInt,
+    unit_cost: money.default(0),
+    note: optStr(255),
+  })).min(1),
+});
+
 // ── Pagination ────────────────────────────────────────────────────────────────
 const PaginationSchema = z.object({
   page: z.coerce.number().int().positive().default(1),
@@ -829,7 +840,7 @@ module.exports = {
   LeaveTypeSchema, LeaveTypeUpdateSchema, LeaveSchema, LeaveStatusSchema, LeaveOverrideSchema,
   RosterShiftSchema, RosterSwapSchema, HrAdvanceSchema, HrTodoSchema, StatusSchema,
   PayrollSchema, PayslipSettingsSchema, PackageSchema, ServiceTypeSchema,
-  PaginationSchema, ProductVariantSchema,
+  PaginationSchema, ProductVariantSchema, OpeningStockSchema,
   CouponSchema, ApplyCouponSchema, LoyaltyRuleSchema, RewardSettingsSchema, PettyCashSchema,
   BundleSchema, ScheduledReportSchema, CustomerSegmentSchema,
   BarcodeJobSchema, SupplierCatalogImportSchema, SaleSchemaV3,
