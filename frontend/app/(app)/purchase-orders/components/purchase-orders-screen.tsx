@@ -12,6 +12,7 @@ import { Btn, Badge, Panel, Modal, Field, TextField, SelectField, FormGrid, useT
 import { Topbar } from '@/components/shell';
 import { API } from '@/lib/api';
 import { PRODUCTS } from '@/lib/data';
+import { ActionsMenu } from '../../products/components/list-table';
 
 const { useState: useStatePu, useEffect: useEffectPu } = React;
 
@@ -24,7 +25,34 @@ export function Purchases({ T }: { T: any }) {
   const [editing, setEditing] = useStatePu<any>(null);   // an existing purchase being edited
   const [opening, setOpening] = useStatePu(false);
   const [view, setView] = useStatePu<any>(null);
+  const [openMenu, setOpenMenu] = useStatePu<any>(null); // row whose Actions menu is open
+  const [payFor, setPayFor] = useStatePu<any>(null);     // add-payment modal target
+  const [paymentsFor, setPaymentsFor] = useStatePu<any>(null);
+  const [statusFor, setStatusFor] = useStatePu<any>(null);
+  const [delFor, setDelFor] = useStatePu<any>(null);
   const [show, node] = useToast();
+
+  const openFull = React.useCallback((id: any, cb: (p: any) => void) => { API.purchaseOrder.get(id).then(cb).catch(() => show('Could not load the purchase.')); }, [show]);
+  const isReceivedRow = (p: any) => ['received', 'partial', 'approved'].includes(p.status);
+  const actionsFor = (p: any) => {
+    const received = isReceivedRow(p);
+    const items: any[] = [
+      { label: '◉ View', on: () => setView(p) },
+      { label: '⎙ Print', on: () => openFull(p.id, (full: any) => printPurchase(full)) },
+      { label: '✎ Edit', on: () => openFull(p.id, (full: any) => setEditing(full)) },
+      { sep: true },
+      { label: '＋ Add payment', on: () => setPayFor(p) },
+      { label: '◍ View payments', on: () => setPaymentsFor(p) },
+      { sep: true },
+      { label: '↻ Update status', on: () => setStatusFor(p) },
+    ];
+    if (!received) items.push({ label: '🗑 Delete', on: () => setDelFor(p), danger: true });
+    return items;
+  };
+  async function doDelete(p: any) {
+    try { await API.purchaseOrder.remove(p.id); setDelFor(null); show('Purchase cancelled'); reload(); }
+    catch (e: any) { show(e.message || 'Could not cancel the purchase.'); }
+  }
 
   const reload = React.useCallback(() => {
     setLoading(true);
@@ -52,12 +80,15 @@ export function Purchases({ T }: { T: any }) {
           <StatStrip T={T} stats={[['Purchase orders', rows.length], ['Total spend', money0(totalSpend)], ['Outstanding to suppliers', money0(totalDue)]]} />
           <Panel T={T} pad={false}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead><tr>{[['Reference', 'l'], ['Supplier', 'l'], ['Location', 'l'], ['Items', 'r'], ['Total', 'r'], ['Due', 'r'], ['Payment', 'r'], ['Date', 'r']].map(([h, a]: any, i: number) => (
+              <thead><tr>{[['Actions', 'l'], ['Reference', 'l'], ['Supplier', 'l'], ['Location', 'l'], ['Items', 'r'], ['Total', 'r'], ['Due', 'r'], ['Payment', 'r'], ['Date', 'r']].map(([h, a]: any, i: number) => (
                 <th key={i} style={{ textAlign: a === 'r' ? 'right' : 'left', padding: '11px 18px', fontSize: 10, fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', color: T.inkSub, background: T.paperAlt, borderBottom: `1px solid ${T.line}` } as React.CSSProperties}>{h}</th>
               ))}</tr></thead>
               <tbody>
                 {rows.map((p: any) => (
                   <tr key={p.id} onClick={() => setView(p)} style={{ cursor: 'pointer', transition: 'background .12s' }} onMouseEnter={(e: any) => e.currentTarget.style.background = T.paperAlt} onMouseLeave={(e: any) => e.currentTarget.style.background = 'transparent'}>
+                    <td onClick={(e: any) => e.stopPropagation()} style={{ padding: '10px 18px', borderBottom: `1px solid ${T.line}` }}>
+                      <ActionsMenu T={T} open={openMenu === p.id} onToggle={() => setOpenMenu((m: any) => m === p.id ? null : p.id)} items={actionsFor(p)} />
+                    </td>
                     <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontFamily: T.fMono, fontSize: 12.5, fontWeight: 600, color: T.accent.text }}>{p.ref_no}</td>
                     <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 13, color: T.ink, fontWeight: 600 }}>{p.supplier_name}</td>
                     <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 12.5, color: T.inkSub }}>{p.location_name}</td>
@@ -80,6 +111,10 @@ export function Purchases({ T }: { T: any }) {
       {editing && <PurchaseEditor T={T} suppliers={suppliers} locs={locs} existing={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); show('Purchase updated'); reload(); }} />}
       {opening && <OpeningStock T={T} onClose={() => setOpening(false)} toast={show} />}
       {view && <PurchaseView T={T} purchase={view} onClose={() => setView(null)} onEdit={(full: any) => { setView(null); setEditing(full); }} />}
+      {payFor && <AddPaymentModal T={T} purchase={payFor} onClose={() => setPayFor(null)} onSaved={() => { setPayFor(null); show('Payment recorded'); reload(); }} />}
+      {paymentsFor && <PaymentsModal T={T} purchase={paymentsFor} onClose={() => setPaymentsFor(null)} onAddPayment={() => { const p = paymentsFor; setPaymentsFor(null); setPayFor(p); }} />}
+      {statusFor && <UpdateStatusModal T={T} purchase={statusFor} onClose={() => setStatusFor(null)} onSaved={(msg: string) => { setStatusFor(null); show(msg || 'Status updated'); reload(); }} />}
+      {delFor && <ConfirmModal T={T} title="Cancel purchase?" body={`This cancels purchase ${delFor.ref_no}. This can't be undone.`} confirmLabel="Cancel purchase" onConfirm={() => doDelete(delFor)} onClose={() => setDelFor(null)} />}
       {node}
     </div>
   );
@@ -784,6 +819,131 @@ function printPurchase(p: any) {
   </body></html>`;
   const w = window.open('', '_blank', 'width=900,height=700');
   if (w) { w.document.write(html); w.document.close(); }
+}
+
+// ── Add payment ─────────────────────────────────────────────────────
+function AddPaymentModal({ T, purchase, onClose, onSaved }: { T: any; purchase: any; onClose: () => void; onSaved: () => void }) {
+  const due = Math.max(0, Number(purchase.due) || 0);
+  const [amount, setAmount] = useStatePu(due ? String(due) : '');
+  const [method, setMethod] = useStatePu('cash');
+  const [paidOn, setPaidOn] = useStatePu(new Date().toISOString().slice(0, 10));
+  const [note, setNote] = useStatePu('');
+  const [busy, setBusy] = useStatePu(false);
+  const [err, setErr] = useStatePu<any>(null);
+  async function save() {
+    const amt = Number(amount);
+    if (!(amt > 0)) { setErr('Enter an amount greater than 0.'); return; }
+    setBusy(true); setErr(null);
+    try { await API.purchaseOrder.pay(purchase.id, amt, method, note.trim() || undefined, paidOn); onSaved(); }
+    catch (e: any) { setErr(e.message || 'Could not record the payment.'); setBusy(false); }
+  }
+  return (
+    <Modal T={T} title="Add payment" subtitle={purchase.ref_no} width={520} onClose={onClose}
+      footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Close</Btn><Btn T={T} kind="accent" onClick={save} disabled={busy}>{busy ? 'Saving…' : 'Save payment'}</Btn></>}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 16 }}>
+        <MiniStat T={T} label="Total" value={money(purchase.grand_total)} />
+        <MiniStat T={T} label="Paid" value={money(purchase.paid || 0)} tone={T.green} />
+        <MiniStat T={T} label="Due" value={money(due)} tone={due > 0 ? T.amber : T.green} />
+      </div>
+      <FormGrid>
+        <Field T={T} label="Amount"><TextField T={T} type="number" value={amount} onChange={setAmount} placeholder="0.00" /></Field>
+        <Field T={T} label="Payment method"><SelectField T={T} value={method} options={['cash', 'bank', 'cheque', 'zaad', 'mobile']} onChange={setMethod} render={(v: any) => ({ cash: 'Cash', bank: 'Bank transfer', cheque: 'Cheque', zaad: 'ZAAD', mobile: 'Mobile money' } as any)[v]} /></Field>
+        <Field T={T} label="Paid on"><TextField T={T} type="date" value={paidOn} onChange={setPaidOn} /></Field>
+        <Field T={T} label="Payment note" full><TextField T={T} value={note} onChange={setNote} placeholder="Optional" /></Field>
+      </FormGrid>
+      {err && <div style={{ marginTop: 14, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}>⚠ {err}</div>}
+    </Modal>
+  );
+}
+
+// ── View payments ───────────────────────────────────────────────────
+function PaymentsModal({ T, purchase, onClose, onAddPayment }: { T: any; purchase: any; onClose: () => void; onAddPayment: () => void }) {
+  const [data, setData] = useStatePu<any>(null);
+  useEffectPu(() => { API.purchaseOrder.get(purchase.id).then(setData).catch(() => setData(purchase)); }, [purchase.id]);
+  const p = data || purchase;
+  const pays = p.payments || [];
+  const th: React.CSSProperties = { padding: '8px 12px', fontSize: 9.5, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', color: T.inkSub, background: T.paperAlt, borderBottom: `1px solid ${T.line}`, textAlign: 'left' };
+  const td: React.CSSProperties = { padding: '8px 12px', fontSize: 12.5, borderBottom: `1px solid ${T.line}` };
+  return (
+    <Modal T={T} title="Payments" subtitle={p.ref_no} width={560} onClose={onClose}
+      footer={<><div style={{ flex: 1 }} />{p.due > 0 && <Btn T={T} kind="accent" onClick={onAddPayment}>＋ Add payment</Btn>}<Btn T={T} kind="ghost" onClick={onClose}>Close</Btn></>}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 16 }}>
+        <MiniStat T={T} label="Total" value={money(p.grand_total)} />
+        <MiniStat T={T} label="Paid" value={money(p.paid || 0)} tone={T.green} />
+        <MiniStat T={T} label="Due" value={money(p.due || 0)} tone={p.due > 0 ? T.amber : T.green} />
+      </div>
+      <div style={{ border: `1px solid ${T.line}`, borderRadius: T.r, overflowX: 'auto' }}>
+        {pays.length ? (
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 480 }}>
+            <thead><tr><th style={th}>Date</th><th style={th}>Reference</th><th style={th}>Mode</th><th style={th}>Note</th><th style={{ ...th, textAlign: 'right' }}>Amount</th></tr></thead>
+            <tbody>{pays.map((pay: any, i: number) => (
+              <tr key={pay.id || i}>
+                <td style={{ ...td, fontFamily: T.fMono, color: T.inkMid }}>{pay.date || '—'}</td>
+                <td style={{ ...td, fontFamily: T.fMono, color: T.inkSub }}>{pay.reference || '—'}</td>
+                <td style={{ ...td, color: T.inkSub, textTransform: 'capitalize' }}>{String(pay.method || '').replace(/_/g, ' ') || '—'}</td>
+                <td style={{ ...td, color: T.inkSub }}>{pay.note || '—'}</td>
+                <td style={{ ...td, textAlign: 'right', fontFamily: T.fMono, fontWeight: 600, color: T.greenText }}>{money(pay.amount)}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        ) : <div style={{ padding: 22, textAlign: 'center', fontSize: 12.5, color: T.inkMute }}>No payments found.</div>}
+      </div>
+    </Modal>
+  );
+}
+
+// ── Update status ───────────────────────────────────────────────────
+function UpdateStatusModal({ T, purchase, onClose, onSaved }: { T: any; purchase: any; onClose: () => void; onSaved: (msg?: string) => void }) {
+  const received = ['received', 'partial', 'approved'].includes(purchase.status);
+  const [status, setStatus] = useStatePu(formStatus(purchase.status));
+  const [busy, setBusy] = useStatePu(false);
+  const [err, setErr] = useStatePu<any>(null);
+  async function save() {
+    setBusy(true); setErr(null);
+    try {
+      if (status === 'received') {
+        const full = await API.purchaseOrder.get(purchase.id);
+        const items = (full && full._real && full._real.items) || [];
+        const toReceive = items.filter((it: any) => Number(it.orderedQty) > Number(it.receivedQty || 0))
+          .map((it: any) => ({ id: it.id, product_id: it.productId, qty: Number(it.orderedQty) - Number(it.receivedQty || 0), unit_price: Number(it.unitPrice || 0) }));
+        if (!toReceive.length) { setErr('This purchase is already fully received.'); setBusy(false); return; }
+        await API.purchaseOrder.setStatus(purchase.id, 'received', toReceive);
+        onSaved('Received · stock updated');
+      } else {
+        await API.purchaseOrder.setStatus(purchase.id, status === 'ordered' ? 'sent' : 'draft');
+        onSaved('Status updated');
+      }
+    } catch (e: any) { setErr(e.message || 'Could not update the status.'); setBusy(false); }
+  }
+  return (
+    <Modal T={T} title="Update status" subtitle={purchase.ref_no} width={440} onClose={onClose}
+      footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Close</Btn>{!received && <Btn T={T} kind="accent" onClick={save} disabled={busy}>{busy ? 'Updating…' : 'Update'}</Btn>}</>}>
+      {received ? (
+        <div style={{ fontSize: 13, color: T.inkMid, lineHeight: 1.6 }}>
+          This purchase is <b>received</b>. Its stock, cost and supplier balance are already posted, so the status can't be downgraded here — reverse it with a purchase return instead.
+        </div>
+      ) : (
+        <>
+          <Field T={T} label="Purchase status" full>
+            <SelectField T={T} value={status} options={['received', 'ordered', 'pending']} onChange={setStatus} render={(v: any) => ({ received: 'Received', ordered: 'Ordered', pending: 'Pending' } as any)[v]} />
+          </Field>
+          {status === 'received' && <div style={{ marginTop: 10, fontSize: 12, color: T.inkSub, lineHeight: 1.5 }}>Marking this received will receive all ordered quantities into stock.</div>}
+        </>
+      )}
+      {err && <div style={{ marginTop: 14, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}>⚠ {err}</div>}
+    </Modal>
+  );
+}
+
+// ── Generic confirm ─────────────────────────────────────────────────
+function ConfirmModal({ T, title, body, confirmLabel, onConfirm, onClose }: { T: any; title: any; body: any; confirmLabel: any; onConfirm: () => void; onClose: () => void }) {
+  const [busy, setBusy] = useStatePu(false);
+  return (
+    <Modal T={T} title={title} width={420} onClose={onClose}
+      footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Close</Btn><Btn T={T} kind="danger" onClick={async () => { setBusy(true); await onConfirm(); }} disabled={busy}>{busy ? '…' : confirmLabel}</Btn></>}>
+      <div style={{ fontSize: 13.5, color: T.inkMid, lineHeight: 1.6 }}>{body}</div>
+    </Modal>
+  );
 }
 
 // ── Opening stock ───────────────────────────────────────────────────
