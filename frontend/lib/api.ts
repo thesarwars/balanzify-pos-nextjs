@@ -2133,7 +2133,7 @@ function adaptRealPO(o: any): any {
       id: it.id,
       product_id: it.productId, product_name: (it.product && it.product.name) || '',
       sku: (it.product && it.product.sku) || '',
-      qty: Number(it.orderedQty || 0), received_qty: Number(it.receivedQty || 0),
+      qty: Number(it.orderedQty || 0), received_qty: Number(it.receivedQty || 0), returned_qty: Number(it.returnedQty || 0),
       unit_cost: net,                                              // net (before tax)
       unit_cost_before_discount: beforeDisc,
       discount_percent: disc,
@@ -2161,6 +2161,21 @@ function adaptRealPO(o: any): any {
     const m = s.trim().match(/^(.*?)\s+([\d.]+)$/);
     return m ? { name: m[1].trim(), amount: Number(m[2]) } : null;
   }).filter(Boolean) : [];
+  const returns = Array.isArray(o.purchaseReturns) ? o.purchaseReturns.map((r: any) => ({
+    id: r.id,
+    number: r.returnNumber || '',
+    reference: r.reference || '',
+    date: String(r.returnDate || r.createdAt || '').slice(0, 10),
+    total: Number(r.totalAmount || 0),
+    by: (r.createdBy && r.createdBy.name) || '',
+    items: Array.isArray(r.items) ? r.items.map((ri: any) => ({
+      product_name: (ri.product && ri.product.name) || '',
+      sku: (ri.product && ri.product.sku) || '',
+      quantity: Number(ri.quantity || 0),
+      unit_price: Number(ri.unitPrice || 0),
+      total_price: Number(ri.totalPrice || 0),
+    })) : [],
+  })) : [];
   const sup = o.supplier || {};
   return {
     id: o.id, ref: o.poNumber, ref_no: o.poNumber,
@@ -2186,6 +2201,7 @@ function adaptRealPO(o: any): any {
     document_url: o.documentUrl || '',
     notes: userNotes,
     payments,
+    returns,
     lines,
     _real: o,
   };
@@ -4143,6 +4159,15 @@ const API: any = {
     async pay(id: any, amount: number, method = 'cash', note?: string, paidOn?: string) {
       if (REAL_MODE) return await realReq('POST', '/purchase-orders/' + id + '/payment', { body: { amount: Number(amount), payment_method: realPoPayMethod(method), notes: note || undefined, paid_on: paidOn || undefined } });
       return null;
+    },
+    // Return received goods to the supplier. body: { reference?, notes?, return_date?, items:[{po_item_id, quantity}] }
+    async createReturn(id: any, body: any) {
+      if (REAL_MODE) return await realReq('POST', '/purchase-orders/' + id + '/returns', { body });
+      return null;
+    },
+    async returns(id: any) {
+      if (REAL_MODE) return await realReq('GET', '/purchase-orders/' + id + '/returns');
+      return [];
     },
     async remove(id: any) {
       if (REAL_MODE) return await realReq('DELETE', '/purchase-orders/' + id);

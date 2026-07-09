@@ -508,6 +508,7 @@ model Business {
   stockCounts        StockCount[]
   suppliers          Supplier[]
   purchaseOrders     PurchaseOrder[]
+  purchaseReturns    PurchaseReturn[]
   goodsReceivedNotes GoodsReceivedNote[]
   customers          Customer[]
   shifts             Shift[]
@@ -1196,6 +1197,7 @@ model User {
   supplierComms            SupplierCommunication[]
   purchaseOrdersApproved   PurchaseOrder[]         @relation("po_approver")
   purchaseOrdersCreated    PurchaseOrder[]         @relation("po_creator")
+  purchaseReturnsCreated   PurchaseReturn[]        @relation("pr_creator")
   goodsReceivedNotes       GoodsReceivedNote[]
   poPayments               POPayment[]
   shifts                   Shift[]
@@ -1354,6 +1356,7 @@ model Location {
   stockTransfersTo   StockTransfer[]     @relation("to_location")
   stockCounts        StockCount[]
   purchaseOrders     PurchaseOrder[]
+  purchaseReturns    PurchaseReturn[]
   shifts             Shift[]
   sales              Sale[]
   reorderSuggestions ReorderSuggestion[]
@@ -1436,6 +1439,7 @@ model Product {
   stockCountItems    StockCountItem[]
   supplierProducts   SupplierProduct[]
   purchaseOrderItems PurchaseOrderItem[]
+  purchaseReturnItems PurchaseReturnItem[]
   saleItems          SaleItem[]
   refundItems        RefundItem[]
   reorderSuggestions ReorderSuggestion[]
@@ -1695,6 +1699,7 @@ model Supplier {
   products           SupplierProduct[]
   communications     SupplierCommunication[]
   purchaseOrders     PurchaseOrder[]
+  purchaseReturns    PurchaseReturn[]
   reorderSuggestions ReorderSuggestion[]
   catalog            SupplierCatalog[]
 
@@ -1805,6 +1810,7 @@ model PurchaseOrder {
   taxRate            TaxRate?            @relation(fields: [taxRateId], references: [id])
   taxRateId          String?             @map("tax_rate_id") @db.Uuid
   costLayers         CostLayer[]
+  purchaseReturns    PurchaseReturn[]
 
   @@index([businessId])
   @@map("purchase_orders")
@@ -1820,6 +1826,7 @@ model PurchaseOrderItem {
   unitId      String?   @map("unit_id") @db.Uuid
   orderedQty  Int       @map("ordered_qty")
   receivedQty Int       @default(0) @map("received_qty")
+  returnedQty Int       @default(0) @map("returned_qty") // qty returned to supplier (purchase units)
   unitPrice   Decimal   @map("unit_price") @db.Decimal(12, 2) // net cost per purchase unit (after line discount)
   discountPercent Decimal @default(0) @map("discount_percent") @db.Decimal(6, 2)
   sellingPrice    Decimal? @map("selling_price") @db.Decimal(12, 2) // applied to the product at receipt
@@ -1832,8 +1839,59 @@ model PurchaseOrderItem {
   product       Product         @relation(fields: [productId], references: [id])
   variant       ProductVariant? @relation(fields: [variantId], references: [id])
   unit          Unit?           @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  returnItems   PurchaseReturnItem[]
 
   @@map("purchase_order_items")
+}
+
+// A purchase return / debit note — goods sent back to the supplier against a
+// received PO. Reverses stock, the PO's cost layers, the supplier balance and
+// the GL (Dr AP / Cr Inventory) at the same landed-cost basis they were
+// received at. See POST /purchase-orders/:id/returns.
+model PurchaseReturn {
+  id           String   @id @default(uuid()) @db.Uuid
+  businessId   String   @map("business_id") @db.Uuid
+  poId         String   @map("po_id") @db.Uuid
+  supplierId   String?  @map("supplier_id") @db.Uuid
+  locationId   String?  @map("location_id") @db.Uuid
+  returnNumber String?  @unique @map("return_number") @db.VarChar(50)
+  reference    String?  @db.VarChar(100)
+  returnDate   DateTime @default(now()) @map("return_date") @db.Date
+  subtotal     Decimal  @default(0) @db.Decimal(12, 2)
+  taxAmount    Decimal  @default(0) @map("tax_amount") @db.Decimal(12, 2)
+  totalAmount  Decimal  @default(0) @map("total_amount") @db.Decimal(12, 2)
+  notes        String?
+  createdById  String?  @map("created_by") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  business      Business             @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  purchaseOrder PurchaseOrder        @relation(fields: [poId], references: [id])
+  supplier      Supplier?            @relation(fields: [supplierId], references: [id])
+  location      Location?            @relation(fields: [locationId], references: [id])
+  createdBy     User?                @relation("pr_creator", fields: [createdById], references: [id])
+  items         PurchaseReturnItem[]
+
+  @@index([businessId])
+  @@index([poId])
+  @@map("purchase_returns")
+}
+
+model PurchaseReturnItem {
+  id                  String  @id @default(uuid()) @db.Uuid
+  purchaseReturnId    String  @map("purchase_return_id") @db.Uuid
+  purchaseOrderItemId String  @map("purchase_order_item_id") @db.Uuid
+  productId           String  @map("product_id") @db.Uuid
+  variantId           String? @map("variant_id") @db.Uuid
+  quantity            Int     // returned qty in purchase units
+  unitPrice           Decimal @map("unit_price") @db.Decimal(12, 4) // landed cost per purchase unit
+  totalPrice          Decimal @map("total_price") @db.Decimal(12, 2) // landed cost basis returned (= GL/AP amount)
+  taxAmount           Decimal @default(0) @map("tax_amount") @db.Decimal(12, 2)
+
+  purchaseReturn    PurchaseReturn    @relation(fields: [purchaseReturnId], references: [id], onDelete: Cascade)
+  purchaseOrderItem PurchaseOrderItem @relation(fields: [purchaseOrderItemId], references: [id])
+  product           Product           @relation(fields: [productId], references: [id])
+
+  @@map("purchase_return_items")
 }
 
 model GoodsReceivedNote {

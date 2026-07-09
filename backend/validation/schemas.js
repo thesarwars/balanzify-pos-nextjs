@@ -218,6 +218,17 @@ const POPaymentSchema = z.object({
   paid_on: isoDate,                       // when the payment was actually made (defaults to now)
 });
 
+// Return goods to a supplier against a received purchase.
+const PurchaseReturnSchema = z.object({
+  reference: optStr(100),
+  notes: optStr(500),
+  return_date: isoDate,
+  items: z.array(z.object({
+    po_item_id: uuid,
+    quantity: z.coerce.number().int().positive('Return quantity must be a positive whole number'),
+  })).min(1, 'Add at least one line to return'),
+});
+
 // ── Suppliers ─────────────────────────────────────────────────────────────────
 const SupplierSchema = z.object({
   name: shortStr(255),
@@ -859,7 +870,7 @@ module.exports = {
   RefreshTokenSchema, VerifyMfaSchema,
   ProductSchema, SaleSchema, SaleItemSchema, RefundSchema,
   ShiftOpenSchema, ShiftCloseSchema, HoldSaleSchema,
-  PurchaseOrderSchema, PurchaseOrderUpdateSchema, POItemSchema, POStatusSchema, POPaymentSchema,
+  PurchaseOrderSchema, PurchaseOrderUpdateSchema, POItemSchema, POStatusSchema, POPaymentSchema, PurchaseReturnSchema,
   SupplierSchema, SupplierCommSchema, SupplierProductSchema,
   AdjustmentSchema, TransferSchema,
   TaskSchema, CommentSchema, ProjectSchema, MilestoneSchema,

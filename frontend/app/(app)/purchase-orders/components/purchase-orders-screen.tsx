@@ -29,6 +29,7 @@ export function Purchases({ T }: { T: any }) {
   const [payFor, setPayFor] = useStatePu<any>(null);     // add-payment modal target
   const [paymentsFor, setPaymentsFor] = useStatePu<any>(null);
   const [statusFor, setStatusFor] = useStatePu<any>(null);
+  const [returnFor, setReturnFor] = useStatePu<any>(null);
   const [delFor, setDelFor] = useStatePu<any>(null);
   const [show, node] = useToast();
 
@@ -46,6 +47,7 @@ export function Purchases({ T }: { T: any }) {
       { sep: true },
       { label: '↻ Update status', on: () => setStatusFor(p) },
     ];
+    if (received) items.push({ label: '↩ Purchase return', on: () => openFull(p.id, (full: any) => setReturnFor(full)) });
     if (!received) items.push({ label: '🗑 Delete', on: () => setDelFor(p), danger: true });
     return items;
   };
@@ -114,6 +116,7 @@ export function Purchases({ T }: { T: any }) {
       {payFor && <AddPaymentModal T={T} purchase={payFor} onClose={() => setPayFor(null)} onSaved={() => { setPayFor(null); show('Payment recorded'); reload(); }} />}
       {paymentsFor && <PaymentsModal T={T} purchase={paymentsFor} onClose={() => setPaymentsFor(null)} onAddPayment={() => { const p = paymentsFor; setPaymentsFor(null); setPayFor(p); }} />}
       {statusFor && <UpdateStatusModal T={T} purchase={statusFor} onClose={() => setStatusFor(null)} onSaved={(msg: string) => { setStatusFor(null); show(msg || 'Status updated'); reload(); }} />}
+      {returnFor && <PurchaseReturnModal T={T} purchase={returnFor} onClose={() => setReturnFor(null)} onSaved={() => { setReturnFor(null); show('Purchase return recorded · stock updated'); reload(); }} />}
       {delFor && <ConfirmModal T={T} title="Cancel purchase?" body={`This cancels purchase ${delFor.ref_no}. This can't be undone.`} confirmLabel="Cancel purchase" onConfirm={() => doDelete(delFor)} onClose={() => setDelFor(null)} />}
       {node}
     </div>
@@ -738,6 +741,31 @@ function PurchaseView({ T, purchase, onClose, onEdit }: { T: any; purchase: any;
         </div>
       </div>
 
+      {/* Purchase returns */}
+      {Array.isArray(p.returns) && p.returns.length > 0 && (
+        <div style={{ marginTop: 18 }}>
+          <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase', color: T.inkSub, marginBottom: 7 } as React.CSSProperties}>Returns</div>
+          <div style={{ border: `1px solid ${T.line}`, borderRadius: T.r, overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 480 }}>
+              <thead><tr>
+                <th style={th}>Date</th><th style={th}>Return #</th><th style={th}>Reference</th><th style={th}>Items</th><th style={{ ...th, textAlign: 'right' }}>Amount</th>
+              </tr></thead>
+              <tbody>
+                {p.returns.map((r: any, i: number) => (
+                  <tr key={r.id || i}>
+                    <td style={{ ...td, ...mono, color: T.inkMid }}>{r.date || '—'}</td>
+                    <td style={{ ...td, ...mono, color: T.inkSub }}>{r.number || '—'}</td>
+                    <td style={{ ...td, color: T.inkSub }}>{r.reference || '—'}</td>
+                    <td style={{ ...td, color: T.inkSub }}>{(r.items || []).reduce((s: number, it: any) => s + Number(it.quantity || 0), 0)}</td>
+                    <td style={{ ...td, ...mono, textAlign: 'right', fontWeight: 600, color: T.redText }}>−{money(r.total)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {/* Shipping details / notes / document */}
       {(p.shipping_details || p.notes || p.document_url) && (
         <div style={{ marginTop: 16, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
@@ -942,6 +970,82 @@ function ConfirmModal({ T, title, body, confirmLabel, onConfirm, onClose }: { T:
     <Modal T={T} title={title} width={420} onClose={onClose}
       footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Close</Btn><Btn T={T} kind="danger" onClick={async () => { setBusy(true); await onConfirm(); }} disabled={busy}>{busy ? '…' : confirmLabel}</Btn></>}>
       <div style={{ fontSize: 13.5, color: T.inkMid, lineHeight: 1.6 }}>{body}</div>
+    </Modal>
+  );
+}
+
+// ── Purchase return ─────────────────────────────────────────────────
+// Return received goods to the supplier. Per line you can return up to
+// (received − already returned); the backend also caps at what's still in
+// stock from this purchase and reverses stock, cost, supplier balance and GL.
+function PurchaseReturnModal({ T, purchase, onClose, onSaved }: { T: any; purchase: any; onClose: () => void; onSaved: () => void }) {
+  const p = purchase;
+  const remainingOf = (l: any) => Number(l.received_qty || 0) - Number(l.returned_qty || 0);
+  const returnable = (p.lines || []).filter((l: any) => remainingOf(l) > 0);
+  const [reference, setReference] = useStatePu('');
+  const [qtys, setQtys] = useStatePu<any>({});
+  const [busy, setBusy] = useStatePu(false);
+  const [err, setErr] = useStatePu<any>(null);
+  const setQ = (id: any, v: any) => setQtys((m: any) => ({ ...m, [id]: v }));
+  const lineTotal = (l: any) => (Number(qtys[l.id]) || 0) * Number(l.unit_cost || 0);
+  const total = returnable.reduce((s: any, l: any) => s + lineTotal(l), 0);
+
+  async function save() {
+    const items = returnable.filter((l: any) => Number(qtys[l.id]) > 0).map((l: any) => ({ po_item_id: l.id, quantity: Number(qtys[l.id]) }));
+    if (!items.length) { setErr('Enter a return quantity for at least one line.'); return; }
+    for (const l of returnable) { const q = Number(qtys[l.id]) || 0; if (q > remainingOf(l)) { setErr(`Return qty for "${l.product_name}" exceeds the ${remainingOf(l)} returnable.`); return; } }
+    setBusy(true); setErr(null);
+    try { await API.purchaseOrder.createReturn(p.id, { reference: reference.trim() || undefined, items }); onSaved(); }
+    catch (e: any) { setErr(e.message || 'Could not record the return.'); setBusy(false); }
+  }
+
+  const th: React.CSSProperties = { padding: '8px 10px', fontSize: 9.5, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', color: T.inkSub, background: T.paperAlt, borderBottom: `1px solid ${T.line}`, whiteSpace: 'nowrap' };
+  const td: React.CSSProperties = { padding: '7px 10px', fontSize: 12, borderBottom: `1px solid ${T.line}` };
+  const mono = { fontFamily: T.fMono } as React.CSSProperties;
+
+  return (
+    <Modal T={T} title="Purchase return" subtitle={p.ref_no} width={760} onClose={onClose}
+      footer={<>
+        <div style={{ flex: 1, fontSize: 13.5, color: T.inkSub }}>Est. return total <b style={{ color: T.ink, fontFamily: T.fMono, marginLeft: 6, fontSize: 15 }}>{money(total)}</b></div>
+        <Btn T={T} kind="ghost" onClick={onClose}>Cancel</Btn>
+        <Btn T={T} kind="accent" onClick={save} disabled={busy}>{busy ? 'Saving…' : 'Save return'}</Btn>
+      </>}>
+      <div style={{ fontSize: 12.5, color: T.inkMid, marginBottom: 12, lineHeight: 1.6 }}>
+        <b style={{ color: T.inkSub }}>Parent purchase:</b> {p.ref_no} · {p.supplier_name}{p.location_name && p.location_name !== '—' ? ' · ' + p.location_name : ''} · {p.date}
+      </div>
+      <Field T={T} label="Reference No"><TextField T={T} value={reference} onChange={setReference} placeholder="Optional — e.g. DN-2026-001" /></Field>
+      <div style={{ marginTop: 14, border: `1px solid ${T.line}`, borderRadius: T.r, overflowX: 'auto' }}>
+        {returnable.length ? (
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 640 }}>
+            <thead><tr>
+              <th style={{ ...th, textAlign: 'left', width: 26 }}>#</th>
+              <th style={{ ...th, textAlign: 'left' }}>Product</th>
+              <th style={{ ...th, textAlign: 'right' }}>Unit cost</th>
+              <th style={{ ...th, textAlign: 'right' }}>Received</th>
+              <th style={{ ...th, textAlign: 'right' }}>Returnable</th>
+              <th style={{ ...th, textAlign: 'right', width: 110 }}>Return qty</th>
+              <th style={{ ...th, textAlign: 'right' }}>Subtotal</th>
+            </tr></thead>
+            <tbody>
+              {returnable.map((l: any, i: number) => (
+                <tr key={l.id}>
+                  <td style={{ ...td, color: T.inkMute }}>{i + 1}</td>
+                  <td style={{ ...td, whiteSpace: 'normal', fontWeight: 600, color: T.ink }}>{l.product_name}{l.sku ? <span style={{ color: T.inkMute, fontWeight: 400 }}> · {l.sku}</span> : null}</td>
+                  <td style={{ ...td, ...mono, textAlign: 'right', color: T.inkSub }}>{money(l.unit_cost)}</td>
+                  <td style={{ ...td, ...mono, textAlign: 'right', color: T.inkSub }}>{l.received_qty}{l.unit_name ? ` ${l.unit_name}` : ''}</td>
+                  <td style={{ ...td, ...mono, textAlign: 'right', color: T.inkMid }}>{remainingOf(l)}</td>
+                  <td style={{ ...td, textAlign: 'right' }}>
+                    <input type="number" min={0} max={remainingOf(l)} value={qtys[l.id] || ''} onChange={(e: any) => setQ(l.id, e.target.value)} placeholder="0" style={{ ...miniNum(T), width: 96 }} />
+                  </td>
+                  <td style={{ ...td, ...mono, textAlign: 'right', color: T.ink, fontWeight: 600 }}>{money(lineTotal(l))}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : <div style={{ padding: 22, textAlign: 'center', fontSize: 12.5, color: T.inkMute }}>Nothing on this purchase is available to return.</div>}
+      </div>
+      <div style={{ fontSize: 11, color: T.inkMute, marginTop: 10, lineHeight: 1.5 }}>The estimate uses the supplier price; the recorded amount is the actual landed cost the goods were received at. You can only return units still in stock from this purchase — if some were already sold, the return is capped to what remains and the rest is declined.</div>
+      {err && <div style={{ marginTop: 14, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}>⚠ {err}</div>}
     </Modal>
   );
 }
