@@ -165,6 +165,9 @@ const PurchaseOrderSchema = z.object({
   discount_amount: money.default(0),      // order-level discount
   tax_amount: money.default(0),           // purchase tax
   shipping_charges: money.default(0),
+  shipping_details: optStr(500),          // carrier / tracking / handling notes
+  document_url: optStr(500),              // attached document (invoice scan) — uploaded file URL
+  document_key: optStr(255),
   additional_expenses: z.array(z.object({ name: optStr(100), amount: money.default(0) })).max(20).optional(),
   freight_cost: money.default(0),
   customs_duty: money.default(0),
@@ -191,6 +194,7 @@ const POPaymentSchema = z.object({
   payment_method: z.enum(['cash','bank_transfer','cheque','zaad','mobile']),
   reference: optStr(100),
   notes: optStr(500),
+  paid_on: isoDate,                       // when the payment was actually made (defaults to now)
 });
 
 // ── Suppliers ─────────────────────────────────────────────────────────────────

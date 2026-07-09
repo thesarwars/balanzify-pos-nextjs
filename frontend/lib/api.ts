@@ -2134,6 +2134,14 @@ function adaptRealPO(o: any): any {
   })) : [];
   const total = Number(o.totalAmount || 0);
   const paid = Number(o.amountPaid || 0);
+  const payments = Array.isArray(o.payments) ? o.payments.map((p: any) => ({
+    id: p.id,
+    amount: Number(p.amount || 0),
+    method: p.paymentMethod || '',
+    note: p.notes || '',
+    date: String(p.paidAt || p.createdAt || '').slice(0, 10),
+    by: (p.createdBy && p.createdBy.name) || '',
+  })) : [];
   return {
     id: o.id, ref: o.poNumber, ref_no: o.poNumber,
     supplier_id: o.supplierId, party_name: (o.supplier && o.supplier.name) || '—', supplier_name: (o.supplier && o.supplier.name) || '—',
@@ -2143,6 +2151,9 @@ function adaptRealPO(o: any): any {
     item_count: (o._count && o._count.items) != null ? o._count.items : lines.length,
     total, grand_total: total, paid, due: Math.max(0, +(total - paid).toFixed(2)),
     payment_status: paid >= total && total > 0 ? 'paid' : paid > 0 ? 'partial' : 'due',
+    shipping_details: o.shippingDetails || '',
+    document_url: o.documentUrl || '',
+    payments,
     lines,
     _real: o,
   };
@@ -2163,6 +2174,9 @@ function toRealPOBody(b: any): any {
     discount_amount: b.discount_amount ? Number(b.discount_amount) : 0,
     tax_amount: b.tax_amount ? Number(b.tax_amount) : 0,
     shipping_charges: b.shipping ? Number(b.shipping) : 0,
+    shipping_details: b.shipping_details || undefined,
+    document_url: b.document_url || undefined,
+    document_key: b.document_key || undefined,
     additional_expenses: Array.isArray(b.expenses)
       ? b.expenses.filter((e: any) => e && e.name && Number(e.amount) > 0).map((e: any) => ({ name: e.name, amount: Number(e.amount) }))
       : undefined,
@@ -4090,8 +4104,8 @@ const API: any = {
       if (REAL_MODE) return adaptRealPO(await realReq('PUT', '/purchase-orders/' + id + '/status', { body: { status, ...(received_items ? { received_items } : {}) } }));
       return (await transport('PUT', '/connector/api/purchase-order/' + id + '/status', { body: { status } })).data;
     },
-    async pay(id: any, amount: number, method = 'cash', note?: string) {
-      if (REAL_MODE) return await realReq('POST', '/purchase-orders/' + id + '/payment', { body: { amount: Number(amount), payment_method: realPoPayMethod(method), notes: note || undefined } });
+    async pay(id: any, amount: number, method = 'cash', note?: string, paidOn?: string) {
+      if (REAL_MODE) return await realReq('POST', '/purchase-orders/' + id + '/payment', { body: { amount: Number(amount), payment_method: realPoPayMethod(method), notes: note || undefined, paid_on: paidOn || undefined } });
       return null;
     },
     async remove(id: any) {

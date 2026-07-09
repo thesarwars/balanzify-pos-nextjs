@@ -54,7 +54,7 @@ router.post('/', auth, requireRole('owner', 'manager'), validate(PurchaseOrderSc
     const {
       supplier_id, location_id, items, expected_delivery, payment_terms, notes, currency,
       reference_no, order_date, status, discount_amount, tax_amount, shipping_charges, additional_expenses,
-      freight_cost, customs_duty, other_charges,
+      freight_cost, customs_duty, other_charges, shipping_details, document_url, document_key,
     } = req.body;
 
     // unit_price is the NET cost per purchase unit (frontend applies line discounts).
@@ -100,6 +100,9 @@ router.post('/', auth, requireRole('owner', 'manager'), validate(PurchaseOrderSc
         currency: currency || 'USD',
         paymentTerms: payment_terms || 0,
         notes: fullNotes,
+        shippingDetails: shipping_details || null,
+        documentUrl: document_url || null,
+        documentKey: document_key || null,
         createdById: req.user.id,
         items: {
           create: items.map(item => ({
@@ -368,13 +371,13 @@ router.put('/:id/status', auth, requireRole('owner', 'manager'), validate(POStat
 
 router.post('/:id/payment', auth, requireRole('owner', 'manager'), validate(POPaymentSchema), async (req, res, next) => {
   try {
-    const { amount, payment_method, reference, notes } = req.body;
+    const { amount, payment_method, reference, notes, paid_on } = req.body;
     const po = await prisma.purchaseOrder.findUnique({ where: { id: req.params.id } });
     if (!po || po.businessId !== req.user.business_id) return res.status(404).json({ title: 'Not found', status: 404 });
 
     await prisma.$transaction(async (tx) => {
       await tx.pOPayment.create({
-        data: { poId: req.params.id, amount, paymentMethod: payment_method, reference: reference || null, notes: notes || null, createdById: req.user.id },
+        data: { poId: req.params.id, amount, paymentMethod: payment_method, reference: reference || null, notes: notes || null, paidAt: paid_on ? new Date(paid_on) : new Date(), createdById: req.user.id },
       });
       await tx.purchaseOrder.update({
         where: { id: req.params.id },

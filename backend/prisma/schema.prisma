@@ -1782,6 +1782,9 @@ model PurchaseOrder {
   paymentTerms     Int                 @default(0) @map("payment_terms")
   paymentStatus    POPaymentStatus     @default(unpaid) @map("payment_status")
   notes            String?
+  shippingDetails  String?             @map("shipping_details")
+  documentUrl      String?             @map("document_url")
+  documentKey      String?             @map("document_key")
   sentVia          String?             @map("sent_via") @db.VarChar(20)
   sentAt           DateTime?           @map("sent_at")
   approvedById     String?             @map("approved_by") @db.Uuid
@@ -1857,6 +1860,7 @@ model POPayment {
   paymentMethod String?  @map("payment_method") @db.VarChar(30)
   reference     String?  @db.VarChar(100)
   notes         String?
+  paidAt        DateTime? @map("paid_at")
   createdById   String?  @map("created_by") @db.Uuid
   createdAt     DateTime @default(now()) @map("created_at")
 

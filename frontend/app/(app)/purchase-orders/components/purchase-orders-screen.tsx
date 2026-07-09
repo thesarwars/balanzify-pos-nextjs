@@ -98,10 +98,17 @@ function PurchaseEditor({ T, suppliers, locs, onClose, onSaved }: { T: any; supp
   const [taxRateId, setTaxRateId] = useStatePu('');      // purchase tax = a defined tax rate
   const [taxRates, setTaxRates] = useStatePu<any[]>([]);
   const [shipping, setShipping] = useStatePu('');
+  const [shipDetails, setShipDetails] = useStatePu('');   // carrier / tracking / handling notes
   const [expenses, setExpenses] = useStatePu<any[]>([{ name: '', amount: '' }]);
   const [paid, setPaid] = useStatePu<any>('');
   const [payMethod, setPayMethod] = useStatePu('cash');
   const [payNote, setPayNote] = useStatePu('');
+  const [paidOn, setPaidOn] = useStatePu(new Date().toISOString().slice(0, 10));
+  const [doc, setDoc] = useStatePu<any>(null);            // { url, key, name } for the attached document
+  const [docBusy, setDocBusy] = useStatePu(false);
+  const [importMsg, setImportMsg] = useStatePu('');
+  const docRef = React.useRef<any>(null);
+  const importRef = React.useRef<any>(null);
   const [busy, setBusy] = useStatePu(false);
   const [err, setErr] = useStatePu<any>(null);
   // Live catalog in real mode; seed PRODUCTS is the mock fallback.
@@ -145,6 +152,31 @@ function PurchaseEditor({ T, suppliers, locs, onClose, onSaved }: { T: any; supp
 
   const setExpense = (i: any, k: any, v: any) => setExpenses((es: any) => es.map((e: any, j: any) => j === i ? { ...e, [k]: v } : e));
 
+  // ── Document attachment (invoice scan, etc.) ──
+  async function onPickDoc(e: any) {
+    const f = e.target.files && e.target.files[0]; e.target.value = '';
+    if (!f) return;
+    setDocBusy(true); setErr(null);
+    try { const r = await API.upload.file(f); setDoc({ url: r.url, key: r.key, name: f.name }); }
+    catch (ex: any) { setErr(ex.message || 'Could not upload the document.'); }
+    finally { setDocBusy(false); }
+  }
+  function onRemoveDoc() { const key = doc && doc.key; setDoc(null); if (key) API.upload.remove(key).catch(() => {}); }
+
+  // ── Import product lines from CSV / XLSX ──
+  async function onImportFile(e: any) {
+    const f = e.target.files && e.target.files[0]; e.target.value = '';
+    if (!f) return;
+    setImportMsg(''); setErr(null);
+    try {
+      const grid = await readSheet(f);
+      const { lines: imported, matched, total } = mapImportRows(grid, products);
+      if (!imported.length) { setImportMsg(`No products matched (${total} row${total === 1 ? '' : 's'} read). Use SKU or exact product name.`); return; }
+      setLines((ls: any) => { const keep = ls.filter((l: any) => l.product_id); return [...keep, ...imported]; });
+      setImportMsg(`Imported ${matched} of ${total} row${total === 1 ? '' : 's'}${matched < total ? ` · ${total - matched} unmatched` : ''}.`);
+    } catch (ex: any) { setErr(ex.message || 'Could not read that file.'); }
+  }
+
   async function save() {
     if (!supplier_id) { setErr('Pick a supplier.'); return; }
     const valid = lines.filter((l: any) => l.product_id && Number(l.qty) > 0);
@@ -155,6 +187,8 @@ function PurchaseEditor({ T, suppliers, locs, onClose, onSaved }: { T: any; supp
         supplier_id, location_id, date, reference_no: reference.trim() || undefined, status,
         pay_term: payTerm, notes,
         discount_amount: discountAmt, tax_amount: taxAmt, shipping: shipAmt,
+        shipping_details: shipDetails.trim() || undefined,
+        document_url: (doc && doc.url) || undefined, document_key: (doc && doc.key) || undefined,
         expenses: expenses.filter((e: any) => e.name && Number(e.amount) > 0),
         lines: valid,
       });
@@ -164,7 +198,7 @@ function PurchaseEditor({ T, suppliers, locs, onClose, onSaved }: { T: any; supp
         const received = items.map((it: any) => ({ id: it.id, product_id: it.productId, qty: Number(it.orderedQty || 0), unit_price: Number(it.unitPrice || 0) }));
         await API.purchaseOrder.setStatus(created.id, 'received', received);
       }
-      if (Number(paid) > 0) await API.purchaseOrder.pay(created.id, Number(paid), payMethod, payNote).catch(() => {});
+      if (Number(paid) > 0) await API.purchaseOrder.pay(created.id, Number(paid), payMethod, payNote, paidOn).catch(() => {});
       onSaved();
     } catch (ex: any) { setErr(ex.message || 'Could not save the purchase.'); } finally { setBusy(false); }
   }
@@ -188,8 +222,36 @@ function PurchaseEditor({ T, suppliers, locs, onClose, onSaved }: { T: any; supp
       </div>
       {supplier && supplier.address && <div style={{ fontSize: 12, color: T.inkSub, marginTop: 8 }}>Address: {supplier.address}</div>}
 
+      {/* Attach document — invoice scan / PDF / photo */}
+      <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <input ref={docRef} type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx,.csv,.zip" style={{ display: 'none' }} onChange={onPickDoc} />
+        {!doc ? (
+          <button onClick={() => docRef.current && docRef.current.click()} disabled={docBusy}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '7px 12px', fontSize: 12.5, fontWeight: 600, fontFamily: T.fBody, color: T.inkMid, background: T.paper, border: `1px dashed ${T.line}`, borderRadius: T.r, cursor: docBusy ? 'wait' : 'pointer' }}>
+            📎 {docBusy ? 'Uploading…' : 'Attach document'}
+          </button>
+        ) : (
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '6px 10px', fontSize: 12.5, background: T.paperAlt, border: `1px solid ${T.line}`, borderRadius: T.r }}>
+            <span>📄</span>
+            <a href={doc.url} target="_blank" rel="noreferrer" style={{ color: T.accent.text, fontWeight: 600, textDecoration: 'none', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{doc.name || 'Document'}</a>
+            <button onClick={onRemoveDoc} title="Remove document" style={{ border: 'none', background: 'none', color: T.redText, cursor: 'pointer', fontSize: 13, lineHeight: 1 }}>✕</button>
+          </div>
+        )}
+        <span style={{ fontSize: 11, color: T.inkMute }}>Invoice, delivery note or receipt (pdf, image, doc)</span>
+      </div>
+
       {/* Product lines */}
-      <div style={{ marginTop: 18, marginBottom: 9, fontSize: 12, fontWeight: 700, color: T.inkSub }}>PRODUCTS</div>
+      <div style={{ marginTop: 18, marginBottom: 9, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+        <span style={{ fontSize: 12, fontWeight: 700, color: T.inkSub }}>PRODUCTS</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          {importMsg && <span style={{ fontSize: 11.5, color: T.inkSub }}>{importMsg}</span>}
+          <input ref={importRef} type="file" accept=".csv,.xlsx,.xls" style={{ display: 'none' }} onChange={onImportFile} />
+          <button onClick={() => importRef.current && importRef.current.click()}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 11px', fontSize: 12, fontWeight: 700, fontFamily: T.fBody, color: T.accent.text, background: T.paper, border: `1px solid ${T.line}`, borderRadius: T.r, cursor: 'pointer' }}>
+            ⇪ Import products
+          </button>
+        </div>
+      </div>
       <div style={{ border: `1px solid ${T.line}`, borderRadius: T.r, overflowX: 'auto' }}>
         <div style={{ minWidth: 860 }}>
           <div style={{ display: 'grid', gridTemplateColumns: cols, gap: 6, padding: '8px 12px', background: T.paperAlt, fontSize: 9.5, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', color: T.inkSub } as React.CSSProperties}>
@@ -199,10 +261,7 @@ function PurchaseEditor({ T, suppliers, locs, onClose, onSaved }: { T: any; supp
             const opts = unitOptsFor(l);
             return (
             <div key={i} style={{ display: 'grid', gridTemplateColumns: cols, gap: 6, padding: '7px 12px', borderTop: `1px solid ${T.line}`, alignItems: 'center' }}>
-              <select value={l.product_id} onChange={(e: any) => onPickProduct(i, e.target.value)} style={{ padding: '7px 8px', fontSize: 12, fontFamily: T.fBody, color: T.ink, background: T.paper, border: `1px solid ${T.line}`, borderRadius: 7, outline: 'none' }}>
-                <option value="">Select…</option>
-                {products.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
-              </select>
+              <ProductCombo T={T} products={products} value={l.product_id} onPick={(pid: any) => onPickProduct(i, pid)} />
               <input type="number" value={l.qty} onChange={(e: any) => setLine(i, 'qty', e.target.value)} placeholder="0" style={miniNum(T)} />
               <select value={l.unit_id} onChange={(e: any) => setLine(i, 'unit_id', e.target.value)} disabled={!l.product_id} title="Purchase unit — multiples convert to base stock at receipt" style={{ padding: '7px 6px', fontSize: 11.5, fontFamily: T.fBody, color: T.ink, background: T.paper, border: `1px solid ${T.line}`, borderRadius: 7, outline: 'none', opacity: l.product_id ? 1 : 0.5 }}>
                 <option value="">{baseUnitName(l)}</option>
@@ -244,6 +303,12 @@ function PurchaseEditor({ T, suppliers, locs, onClose, onSaved }: { T: any; supp
             </div>
           </div>
 
+          {/* Shipping details — full width */}
+          <div>
+            <div style={sub(T)}>Shipping details</div>
+            <input value={shipDetails} onChange={(e: any) => setShipDetails(e.target.value)} placeholder="Carrier, tracking number, handling notes…" style={{ width: '100%', padding: '9px 11px', fontSize: 13, fontFamily: T.fBody, color: T.ink, background: T.paper, border: `1px solid ${T.line}`, borderRadius: T.r, outline: 'none', boxSizing: 'border-box' } as React.CSSProperties} />
+          </div>
+
           {/* Additional expenses — full width */}
           <div>
             <div style={sub(T)}>Additional expenses</div>
@@ -273,6 +338,7 @@ function PurchaseEditor({ T, suppliers, locs, onClose, onSaved }: { T: any; supp
             <div style={{ fontSize: 11, fontWeight: 700, color: T.inkSub, marginBottom: 7 }}>PAYMENT</div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12.5, marginBottom: 7 }}><span style={{ color: T.inkSub }}>Amount paid</span><input type="number" value={paid} onChange={(e: any) => setPaid(e.target.value)} placeholder="0.00" style={{ ...miniNum(T), width: 100 }} /></div>
             <div style={{ marginBottom: 7 }}><SelectField T={T} value={payMethod} options={['cash', 'bank', 'cheque', 'zaad', 'mobile']} onChange={setPayMethod} render={(v: any) => ({ cash: 'Cash', bank: 'Bank transfer', cheque: 'Cheque', zaad: 'ZAAD', mobile: 'Mobile money' } as any)[v]} /></div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12.5, marginBottom: 7 }}><span style={{ color: T.inkSub }}>Paid on</span><input type="date" value={paidOn} onChange={(e: any) => setPaidOn(e.target.value)} style={{ padding: '6px 8px', fontSize: 12, fontFamily: T.fBody, color: T.ink, background: T.paper, border: `1px solid ${T.line}`, borderRadius: 6, outline: 'none' } as React.CSSProperties} /></div>
             <input value={payNote} onChange={e => setPayNote(e.target.value)} placeholder="Payment note" style={{ width: '100%', padding: '7px 9px', fontSize: 12.5, fontFamily: T.fBody, color: T.ink, background: T.paper, border: `1px solid ${T.line}`, borderRadius: 6, outline: 'none', boxSizing: 'border-box' } as React.CSSProperties} />
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, marginTop: 8, fontWeight: 600 }}><span style={{ color: T.inkSub }}>Payment due</span><span style={{ fontFamily: T.fMono, color: due > 0 ? T.amberText : T.greenText }}>{money(due)}</span></div>
           </div>
@@ -284,6 +350,139 @@ function PurchaseEditor({ T, suppliers, locs, onClose, onSaved }: { T: any; supp
 }
 function blankLine() { return { product_id: '', qty: '', unit_id: '', unit_cost: '', discount_percent: '', selling_price: '' }; }
 function sub(T: any): React.CSSProperties { return { fontSize: 10.5, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', color: T.inkSub, marginBottom: 6 } as React.CSSProperties; }
+
+// ── Searchable product picker — filters by name / SKU / barcode ──────
+// Uses a fixed-position dropdown so it escapes the line table's overflow clip.
+function ProductCombo({ T, products, value, onPick }: { T: any; products: any[]; value: any; onPick: (pid: any) => void }) {
+  const selected = products.find((p: any) => p.id === value);
+  const [q, setQ] = useStatePu('');
+  const [open, setOpen] = useStatePu(false);
+  const [hi, setHi] = useStatePu(0);
+  const [rect, setRect] = useStatePu<any>(null);
+  const inRef = React.useRef<any>(null);
+  const ql = q.trim().toLowerCase();
+  const matches = (open ? products.filter((p: any) => {
+    if (!ql) return true;
+    return String(p.name || '').toLowerCase().includes(ql) || String(p.sku || '').toLowerCase().includes(ql) || String(p.barcode || '').toLowerCase().includes(ql);
+  }) : []).slice(0, 60);
+  const shown = open ? q : (selected ? selected.name : '');
+
+  const place = () => { const el = inRef.current; if (el) { const r = el.getBoundingClientRect(); setRect({ left: r.left, top: r.bottom + 4, width: r.width }); } };
+  const choose = (p: any) => { onPick(p.id); setQ(''); setOpen(false); };
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <input
+        ref={inRef}
+        value={shown}
+        onChange={(e: any) => { setQ(e.target.value); setHi(0); if (!open) { setOpen(true); place(); } }}
+        onFocus={() => { setOpen(true); setQ(''); setHi(0); place(); }}
+        onBlur={() => setTimeout(() => setOpen(false), 140)}
+        onKeyDown={(e: any) => {
+          if (e.key === 'ArrowDown') { e.preventDefault(); setHi((h: any) => Math.min(h + 1, matches.length - 1)); }
+          else if (e.key === 'ArrowUp') { e.preventDefault(); setHi((h: any) => Math.max(h - 1, 0)); }
+          else if (e.key === 'Enter' && matches[hi]) { e.preventDefault(); choose(matches[hi]); }
+          else if (e.key === 'Escape') { setOpen(false); }
+        }}
+        placeholder={selected ? selected.name : 'Search product / SKU…'}
+        style={{ width: '100%', padding: '7px 8px', fontSize: 12, fontFamily: T.fBody, color: T.ink, background: T.paper, border: `1px solid ${selected ? T.line : T.line}`, borderRadius: 7, outline: 'none', boxSizing: 'border-box' } as React.CSSProperties}
+      />
+      {open && rect && matches.length > 0 && (
+        <div style={{ position: 'fixed', left: rect.left, top: rect.top, width: Math.max(rect.width, 240), maxHeight: 260, overflowY: 'auto', background: T.paper, border: `1px solid ${T.line}`, borderRadius: 8, boxShadow: T.sh2 || '0 8px 24px rgba(0,0,0,.14)', zIndex: 9999 }}>
+          {matches.map((p: any, i: number) => (
+            <div key={p.id} onMouseDown={(e: any) => { e.preventDefault(); choose(p); }} onMouseEnter={() => setHi(i)}
+              style={{ display: 'flex', justifyContent: 'space-between', gap: 10, padding: '8px 11px', cursor: 'pointer', background: i === hi ? T.paperAlt : 'transparent', borderBottom: i < matches.length - 1 ? `1px solid ${T.line}` : 'none' }}>
+              <span style={{ fontSize: 12.5, color: T.ink, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</span>
+              {(p.sku || p.barcode) && <span style={{ fontSize: 11, fontFamily: T.fMono, color: T.inkSub, flexShrink: 0 }}>{p.sku || p.barcode}</span>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── CSV / XLSX import → product lines ────────────────────────────────
+// Returns a grid (array of rows, each an array of cell strings).
+async function readSheet(file: any): Promise<string[][]> {
+  const name = String(file.name || '').toLowerCase();
+  if (name.endsWith('.xlsx') || name.endsWith('.xls')) {
+    const XLSX: any = await import('xlsx');
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: 'array' });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, blankrows: false, defval: '' });
+    return rows.map((r: any[]) => r.map((c: any) => (c == null ? '' : String(c))));
+  }
+  const text = await file.text();
+  return text.split(/\r?\n/).filter((l: string) => l.trim() !== '').map(splitCsvLine);
+}
+
+function splitCsvLine(line: string): string[] {
+  const out: string[] = []; let cur = ''; let inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQ) {
+      if (ch === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else inQ = false; }
+      else cur += ch;
+    } else if (ch === '"') inQ = true;
+    else if (ch === ',') { out.push(cur); cur = ''; }
+    else cur += ch;
+  }
+  out.push(cur);
+  return out.map((s) => s.trim());
+}
+
+// Map an imported grid to purchase lines by matching SKU / barcode / name.
+function mapImportRows(grid: string[][], products: any[]): { lines: any[]; matched: number; total: number } {
+  if (!grid.length) return { lines: [], matched: 0, total: 0 };
+  const find = (cands: string[], header: string[]) => header.findIndex((h) => cands.includes(h.trim().toLowerCase()));
+  const first = grid[0].map((c) => c.trim().toLowerCase());
+  const looksHeader = first.some((c) => ['sku', 'name', 'product', 'qty', 'quantity', 'cost', 'unit cost', 'price'].includes(c));
+  let idx = { sku: 0, name: -1, qty: 1, cost: 2, sell: 3 };
+  let body = grid;
+  if (looksHeader) {
+    idx = {
+      sku: find(['sku', 'code', 'barcode', 'item code'], first),
+      name: find(['name', 'product', 'product name', 'item', 'item name'], first),
+      qty: find(['qty', 'quantity', 'purchase quantity', 'purchase qty'], first),
+      cost: find(['cost', 'unit cost', 'unit_cost', 'purchase price', 'purchase_price', 'buy price'], first),
+      sell: find(['selling', 'selling price', 'price', 'sale price', 'unit selling price', 'mrp'], first),
+    };
+    body = grid.slice(1);
+  }
+  const cell = (row: string[], i: number) => (i >= 0 && i < row.length ? String(row[i] || '').trim() : '');
+  const lines: any[] = []; let matched = 0; let total = 0;
+  for (const row of body) {
+    if (!row.length || row.every((c) => !c || !c.trim())) continue;
+    total++;
+    const skuV = cell(row, idx.sku), nameV = cell(row, idx.name >= 0 ? idx.name : idx.sku);
+    const p = matchProduct(products, skuV, nameV);
+    if (!p) continue;
+    matched++;
+    const qty = cell(row, idx.qty), cost = cell(row, idx.cost), sell = cell(row, idx.sell);
+    lines.push({
+      product_id: p.id, unit_id: '',
+      qty: qty && !isNaN(Number(qty)) ? String(Number(qty)) : '1',
+      unit_cost: cost && !isNaN(Number(cost)) ? String(Number(cost)) : (p.cost != null ? String(p.cost) : ''),
+      discount_percent: '',
+      selling_price: sell && !isNaN(Number(sell)) ? String(Number(sell)) : (p.price != null ? String(p.price) : ''),
+    });
+  }
+  return { lines, matched, total };
+}
+
+function matchProduct(products: any[], skuV: string, nameV: string): any {
+  const s = String(skuV || '').trim().toLowerCase();
+  const n = String(nameV || '').trim().toLowerCase();
+  if (s) { const bySku = products.find((p: any) => String(p.sku || '').toLowerCase() === s || String(p.barcode || '').toLowerCase() === s); if (bySku) return bySku; }
+  if (n) {
+    let byName = products.find((p: any) => String(p.name || '').toLowerCase() === n); if (byName) return byName;
+    byName = products.find((p: any) => String(p.name || '').toLowerCase().includes(n) && n.length >= 3); if (byName) return byName;
+    const asSku = products.find((p: any) => String(p.sku || '').toLowerCase() === n || String(p.barcode || '').toLowerCase() === n); if (asSku) return asSku;
+  }
+  return null;
+}
 
 // ── Purchase detail ─────────────────────────────────────────────────
 function PurchaseView({ T, purchase, onClose }: { T: any; purchase: any; onClose: () => void }) {
@@ -308,6 +507,28 @@ function PurchaseView({ T, purchase, onClose }: { T: any; purchase: any; onClose
           </div>
         ); })}
       </div>
+
+      {(p.shipping_details || p.document_url) && (
+        <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {p.shipping_details && <div style={{ fontSize: 12.5, color: T.inkMid }}><span style={{ fontWeight: 700, color: T.inkSub }}>Shipping: </span>{p.shipping_details}</div>}
+          {p.document_url && <a href={p.document_url} target="_blank" rel="noreferrer" style={{ fontSize: 12.5, color: T.accent.text, fontWeight: 600, textDecoration: 'none' }}>📄 View attached document</a>}
+        </div>
+      )}
+
+      {Array.isArray(p.payments) && p.payments.length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase', color: T.inkSub, marginBottom: 7 } as React.CSSProperties}>Payments</div>
+          <div style={{ border: `1px solid ${T.line}`, borderRadius: T.r, overflow: 'hidden' }}>
+            {p.payments.map((pay: any, i: number) => (
+              <div key={pay.id || i} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 10, padding: '8px 12px', borderTop: i ? `1px solid ${T.line}` : 'none', fontSize: 12.5, alignItems: 'center' }}>
+                <span style={{ color: T.inkMid, fontFamily: T.fMono }}>{pay.date || '—'}</span>
+                <span style={{ color: T.inkSub, textTransform: 'capitalize' }}>{String(pay.method || '').replace(/_/g, ' ') || '—'}</span>
+                <span style={{ textAlign: 'right', fontFamily: T.fMono, fontWeight: 600, color: T.greenText }}>{money(pay.amount)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </Modal>
   );
 }
