@@ -95,7 +95,8 @@ function PurchaseEditor({ T, suppliers, locs, onClose, onSaved }: { T: any; supp
   const [lines, setLines] = useStatePu<any[]>([blankLine()]);
   const [discType, setDiscType] = useStatePu('none');   // none | fixed | percent
   const [discVal, setDiscVal] = useStatePu('');
-  const [taxPct, setTaxPct] = useStatePu('');            // purchase tax %
+  const [taxRateId, setTaxRateId] = useStatePu('');      // purchase tax = a defined tax rate
+  const [taxRates, setTaxRates] = useStatePu<any[]>([]);
   const [shipping, setShipping] = useStatePu('');
   const [expenses, setExpenses] = useStatePu<any[]>([{ name: '', amount: '' }]);
   const [paid, setPaid] = useStatePu<any>('');
@@ -109,6 +110,7 @@ function PurchaseEditor({ T, suppliers, locs, onClose, onSaved }: { T: any; supp
   useEffectPu(() => {
     if (API.config?.isReal?.()) API.product.list({ per_page: 200 }).then((r: any) => setCatalog(r.items || [])).catch(() => {});
     API.unit.list().then((us: any) => setUnits(Array.isArray(us) ? us : [])).catch(() => {});
+    API.taxRate.list().then((ts: any) => setTaxRates(Array.isArray(ts) ? ts : [])).catch(() => {});
   }, []);
   const products = catalog.filter((p: any) => p.type !== 'combo' && p.enable_stock !== false);
   const supplier = suppliers.find((s: any) => String(s.id) === String(supplier_id));
@@ -134,7 +136,8 @@ function PurchaseEditor({ T, suppliers, locs, onClose, onSaved }: { T: any; supp
 
   const subtotal = lines.reduce((s: any, l: any) => s + lineTotal(l), 0);
   const discountAmt = discType === 'fixed' ? (Number(discVal) || 0) : discType === 'percent' ? subtotal * (Number(discVal) || 0) / 100 : 0;
-  const taxAmt = subtotal > 0 ? (subtotal - discountAmt) * (Number(taxPct) || 0) / 100 : 0;
+  const taxRate = taxRateId ? Number((taxRates.find((r: any) => String(r.id) === String(taxRateId)) || {}).amount || 0) : 0;
+  const taxAmt = subtotal > 0 ? +((subtotal - discountAmt) * taxRate / 100).toFixed(2) : 0;
   const shipAmt = Number(shipping) || 0;
   const expensesTotal = expenses.reduce((s: any, e: any) => s + (Number(e.amount) || 0), 0);
   const total = Math.max(0, subtotal - discountAmt + taxAmt + shipAmt + expensesTotal);
@@ -231,8 +234,9 @@ function PurchaseEditor({ T, suppliers, locs, onClose, onSaved }: { T: any; supp
               </div>
             </div>
             <div>
-              <div style={sub(T)}>Purchase tax (%)</div>
-              <input type="number" value={taxPct} onChange={(e: any) => setTaxPct(e.target.value)} placeholder="0" style={{ ...miniNum(T), width: '100%' }} />
+              <div style={sub(T)}>Purchase tax</div>
+              <SelectField T={T} value={taxRateId} options={['', ...taxRates.map((r: any) => String(r.id))]} onChange={setTaxRateId}
+                render={(v: any) => { if (!v) return 'None'; const r = taxRates.find((x: any) => String(x.id) === v); return r ? `${r.name} (${r.amount}%)` : 'None'; }} />
             </div>
             <div>
               <div style={sub(T)}>Shipping charges</div>
