@@ -84,7 +84,9 @@ services:
     depends_on:
       - api
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost/health"]
+      # 127.0.0.1, not localhost — the nginx base image maps localhost to ::1
+      # only, but nginx listens on IPv4 :80, so a localhost probe is refused.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/health"]
       interval: 30s
       timeout: 5s
       retries: 3
