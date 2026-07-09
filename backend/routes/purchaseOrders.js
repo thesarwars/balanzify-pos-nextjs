@@ -3,7 +3,7 @@ const { z } = require('zod');
 const prisma = require('../lib/prisma');
 const { auth, requireRole } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
-const { PurchaseOrderSchema, POStatusSchema, POPaymentSchema } = require('../validation/schemas');
+const { PurchaseOrderSchema, PurchaseOrderUpdateSchema, POStatusSchema, POPaymentSchema } = require('../validation/schemas');
 const accounting = require('../lib/accounting');
 const router = express.Router();
 
@@ -122,6 +122,120 @@ router.post('/', auth, requireRole('owner', 'manager'), validate(PurchaseOrderSc
       include: { items: true, supplier: { select: { name: true } } },
     });
     res.status(201).json(po);
+  } catch (err) {
+    if (err.code === 'P2002') return res.status(409).json({ title: 'That reference number is already in use', status: 409 });
+    next(err);
+  }
+});
+
+// Full include used by the detail + edit endpoints.
+const PO_INCLUDE = {
+  supplier: true,
+  location: { select: { name: true } },
+  items: { include: { product: { select: { name: true, sku: true } }, unit: { select: { shortName: true, actualName: true, baseMultiplier: true, baseUnitId: true } } } },
+  payments: { include: { createdBy: { select: { name: true } } } },
+  goodsReceivedNotes: true,
+  approvedBy: { select: { name: true } },
+  createdBy: { select: { name: true } },
+};
+
+// Edit a purchase. A received purchase has already posted stock, cost layers,
+// AP and GL (and its cost layers may already be partly consumed by sales), so
+// its lines, amounts, supplier and location are locked — only metadata
+// (reference, dates, pay term, notes, shipping details, document) may change.
+// A not-yet-received purchase can be edited in full and its totals recomputed.
+router.put('/:id', auth, requireRole('owner', 'manager'), validate(PurchaseOrderUpdateSchema), async (req, res, next) => {
+  try {
+    const po = await prisma.purchaseOrder.findUnique({ where: { id: req.params.id }, include: { items: true } });
+    if (!po || po.businessId !== req.user.business_id) return res.status(404).json({ title: 'Not found', status: 404 });
+
+    const b = req.body;
+    const hasReceipt = po.items.some((i) => i.receivedQty > 0);
+
+    // Reference number, if changed, must stay unique.
+    if (b.reference_no && b.reference_no !== po.poNumber) {
+      const clash = await prisma.purchaseOrder.count({ where: { poNumber: b.reference_no, id: { not: po.id } } });
+      if (clash) return res.status(409).json({ title: 'That reference number is already in use', status: 409 });
+    }
+
+    // Metadata — always safe to change.
+    const data = {};
+    if (b.reference_no !== undefined) data.poNumber = b.reference_no || po.poNumber;
+    if (b.order_date) data.orderDate = new Date(b.order_date);
+    if (b.expected_delivery !== undefined) data.expectedDelivery = b.expected_delivery ? new Date(b.expected_delivery) : null;
+    if (b.payment_terms !== undefined) data.paymentTerms = b.payment_terms || 0;
+    if (b.shipping_details !== undefined) data.shippingDetails = b.shipping_details || null;
+    if (b.document_url !== undefined) data.documentUrl = b.document_url || null;
+    if (b.document_key !== undefined) data.documentKey = b.document_key || null;
+
+    if (hasReceipt) {
+      // Preserve any folded "Expenses: …" tail on the notes.
+      if (b.notes !== undefined) {
+        const tail = po.notes && po.notes.includes(' | Expenses:') ? po.notes.slice(po.notes.indexOf(' | Expenses:')) : '';
+        data.notes = ((b.notes || '') + tail) || null;
+      }
+      await prisma.purchaseOrder.update({ where: { id: po.id }, data });
+      const updated = await prisma.purchaseOrder.findUnique({ where: { id: po.id }, include: PO_INCLUDE });
+      return res.json({ ...updated, locked: true });
+    }
+
+    // ── Not received → full edit ──
+    if (b.supplier_id) data.supplierId = b.supplier_id;
+    if (b.location_id !== undefined) data.locationId = b.location_id || null;
+    if (b.status) data.status = b.status === 'received' ? 'approved' : b.status === 'ordered' ? 'sent' : 'draft';
+
+    const items = Array.isArray(b.items) ? b.items : null;
+    if (items) {
+      const unitIds = [...new Set(items.map((i) => i.unit_id).filter(Boolean))];
+      if (unitIds.length && (await prisma.unit.count({ where: { id: { in: unitIds }, businessId: req.user.business_id } })) !== unitIds.length) {
+        return res.status(400).json({ title: 'One or more purchase units not found', status: 400 });
+      }
+    }
+
+    const subtotal = items ? +items.reduce((s, i) => s + i.unit_price * i.ordered_qty, 0).toFixed(2) : parseFloat(po.subtotal);
+    const discount = b.discount_amount != null ? b.discount_amount : parseFloat(po.discountAmount);
+    const tax = b.tax_amount != null ? b.tax_amount : parseFloat(po.taxAmount);
+    const shipping = b.shipping_charges != null ? b.shipping_charges : parseFloat(po.freightCost);
+    const expensesList = Array.isArray(b.additional_expenses) ? b.additional_expenses.filter((e) => (e.amount || 0) > 0) : null;
+    const expensesTotal = expensesList ? expensesList.reduce((s, e) => s + (e.amount || 0), 0) : parseFloat(po.otherCharges);
+    const totalAmount = +(subtotal - discount + tax + shipping + expensesTotal).toFixed(2);
+
+    data.subtotal = subtotal;
+    data.discountAmount = discount;
+    data.taxAmount = tax;
+    data.freightCost = shipping;
+    data.otherCharges = expensesTotal;
+    data.totalAmount = totalAmount;
+    const paid = parseFloat(po.amountPaid);
+    data.paymentStatus = paid <= 0 ? 'unpaid' : paid >= totalAmount ? 'paid' : 'partial';
+
+    // Rebuild notes = user notes + fresh expense tail (avoid doubling an old tail).
+    const baseNotes = b.notes != null ? b.notes : (po.notes ? po.notes.split(' | Expenses:')[0] : '');
+    const expenseNote = expensesList && expensesList.length ? 'Expenses: ' + expensesList.map((e) => `${e.name || 'expense'} ${e.amount}`).join(', ') : '';
+    data.notes = [baseNotes, expenseNote].filter(Boolean).join(' | ') || null;
+
+    await prisma.$transaction(async (tx) => {
+      if (items) {
+        await tx.purchaseOrderItem.deleteMany({ where: { poId: po.id } });
+        data.items = {
+          create: items.map((item) => ({
+            productId: item.product_id,
+            unitId: item.unit_id || null,
+            orderedQty: item.ordered_qty,
+            unitPrice: item.unit_price,
+            discountPercent: item.discount_percent || 0,
+            sellingPrice: item.selling_price != null ? item.selling_price : null,
+            totalPrice: +(item.unit_price * item.ordered_qty).toFixed(2),
+            expiryDate: item.expiry_date ? new Date(item.expiry_date) : null,
+            batchNumber: item.batch_number || null,
+          })),
+        };
+      }
+      await tx.purchaseOrder.update({ where: { id: po.id }, data });
+    });
+
+    const updated = await prisma.purchaseOrder.findUnique({ where: { id: po.id }, include: PO_INCLUDE });
+    res.json(updated);
   } catch (err) {
     if (err.code === 'P2002') return res.status(409).json({ title: 'That reference number is already in use', status: 409 });
     next(err);

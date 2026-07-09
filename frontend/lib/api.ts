@@ -2125,13 +2125,23 @@ function adaptRealModules(catalog: any[]): any[] {
 // ── Purchase orders (/api/v1/purchase-orders) → UI view-model ──────────────────
 function adaptRealPO(o: any): any {
   if (!o) return o;
-  const lines = Array.isArray(o.items) ? o.items.map((it: any) => ({
-    id: it.id,
-    product_id: it.productId, product_name: (it.product && it.product.name) || '',
-    qty: Number(it.orderedQty || 0), unit_cost: Number(it.unitPrice || 0),
-    unit_id: it.unitId || '',
-    unit_name: (it.unit && (it.unit.shortName || it.unit.actualName)) || '',
-  })) : [];
+  const lines = Array.isArray(o.items) ? o.items.map((it: any) => {
+    const disc = Number(it.discountPercent || 0);
+    const net = Number(it.unitPrice || 0);                         // cost per unit AFTER line discount, before tax
+    const beforeDisc = disc > 0 ? +(net / (1 - disc / 100)).toFixed(4) : net;
+    return {
+      id: it.id,
+      product_id: it.productId, product_name: (it.product && it.product.name) || '',
+      sku: (it.product && it.product.sku) || '',
+      qty: Number(it.orderedQty || 0), received_qty: Number(it.receivedQty || 0),
+      unit_cost: net,                                              // net (before tax)
+      unit_cost_before_discount: beforeDisc,
+      discount_percent: disc,
+      selling_price: it.sellingPrice != null ? Number(it.sellingPrice) : null,
+      unit_id: it.unitId || '',
+      unit_name: (it.unit && (it.unit.shortName || it.unit.actualName)) || '',
+    };
+  }) : [];
   const total = Number(o.totalAmount || 0);
   const paid = Number(o.amountPaid || 0);
   const payments = Array.isArray(o.payments) ? o.payments.map((p: any) => ({
@@ -2139,20 +2149,42 @@ function adaptRealPO(o: any): any {
     amount: Number(p.amount || 0),
     method: p.paymentMethod || '',
     note: p.notes || '',
+    reference: p.reference || '',
     date: String(p.paidAt || p.createdAt || '').slice(0, 10),
     by: (p.createdBy && p.createdBy.name) || '',
   })) : [];
+  // Named expenses are folded into notes as "… | Expenses: name amt, name amt".
+  const rawNotes = o.notes || '';
+  const notesParts = rawNotes.split(' | Expenses:');
+  const userNotes = notesParts[0] || '';
+  const expenses = notesParts[1] ? notesParts[1].split(',').map((s: string) => {
+    const m = s.trim().match(/^(.*?)\s+([\d.]+)$/);
+    return m ? { name: m[1].trim(), amount: Number(m[2]) } : null;
+  }).filter(Boolean) : [];
+  const sup = o.supplier || {};
   return {
     id: o.id, ref: o.poNumber, ref_no: o.poNumber,
-    supplier_id: o.supplierId, party_name: (o.supplier && o.supplier.name) || '—', supplier_name: (o.supplier && o.supplier.name) || '—',
+    supplier_id: o.supplierId, party_name: sup.name || '—', supplier_name: sup.name || '—',
+    supplier_address: sup.address || '', supplier_phone: sup.phone || '', supplier_email: sup.email || '',
+    supplier_city: sup.city || '', supplier_country: sup.country || '',
     location_id: o.locationId, location_name: (o.location && o.location.name) || '—',
-    date: o.createdAt ? String(o.createdAt).slice(0, 10) : '',
+    date: (o.orderDate && String(o.orderDate).slice(0, 10)) || (o.createdAt ? String(o.createdAt).slice(0, 10) : ''),
+    expected_delivery: o.expectedDelivery ? String(o.expectedDelivery).slice(0, 10) : '',
+    payment_terms: Number(o.paymentTerms || 0),
     status: o.status,
+    received: lines.some((l: any) => l.received_qty > 0),
     item_count: (o._count && o._count.items) != null ? o._count.items : lines.length,
+    subtotal: Number(o.subtotal || 0),
+    discount: Number(o.discountAmount || 0),
+    tax: Number(o.taxAmount || 0),
+    shipping: Number(o.freightCost || 0),
+    expenses_total: Number(o.otherCharges || 0),
+    expenses,
     total, grand_total: total, paid, due: Math.max(0, +(total - paid).toFixed(2)),
     payment_status: paid >= total && total > 0 ? 'paid' : paid > 0 ? 'partial' : 'due',
     shipping_details: o.shippingDetails || '',
     document_url: o.documentUrl || '',
+    notes: userNotes,
     payments,
     lines,
     _real: o,
@@ -4097,6 +4129,10 @@ const API: any = {
     async create(body: any) {
       if (REAL_MODE) return adaptRealPO(await realReq('POST', '/purchase-orders', { body: toRealPOBody(body) }));
       return (await transport('POST', '/connector/api/purchase-order', { body })).data;
+    },
+    async update(id: any, body: any) {
+      if (REAL_MODE) return adaptRealPO(await realReq('PUT', '/purchase-orders/' + id, { body: toRealPOBody(body) }));
+      return null;
     },
     // Receiving (status 'received'/'partial') takes received_items:
     // [{ id: <po item id>, product_id, qty, unit_price?, expiry_date?, batch_number? }].

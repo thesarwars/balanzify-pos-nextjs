@@ -177,6 +177,27 @@ const PurchaseOrderSchema = z.object({
   currency: z.string().length(3).default('USD'),
 });
 
+// Editing a purchase — every field optional. The route decides what may
+// actually change based on whether the purchase has been received.
+const PurchaseOrderUpdateSchema = z.object({
+  supplier_id: uuid.optional(),
+  location_id: uuid.optional().nullable(),
+  items: z.array(POItemSchema).optional(),
+  reference_no: optStr(50),
+  order_date: isoDate,
+  status: z.enum(['ordered', 'pending', 'received']).optional(),
+  expected_delivery: isoDate,
+  discount_amount: money.optional(),
+  tax_amount: money.optional(),
+  shipping_charges: money.optional(),
+  shipping_details: optStr(500),
+  document_url: optStr(500),
+  document_key: optStr(255),
+  additional_expenses: z.array(z.object({ name: optStr(100), amount: money.default(0) })).max(20).optional(),
+  payment_terms: nonNegInt.optional(),
+  notes: optStr(2000),
+});
+
 const POStatusSchema = z.object({
   status: z.enum(['draft','pending_approval','approved','sent','partial','received','cancelled']),
   received_items: z.array(z.object({
@@ -838,7 +859,7 @@ module.exports = {
   RefreshTokenSchema, VerifyMfaSchema,
   ProductSchema, SaleSchema, SaleItemSchema, RefundSchema,
   ShiftOpenSchema, ShiftCloseSchema, HoldSaleSchema,
-  PurchaseOrderSchema, POItemSchema, POStatusSchema, POPaymentSchema,
+  PurchaseOrderSchema, PurchaseOrderUpdateSchema, POItemSchema, POStatusSchema, POPaymentSchema,
   SupplierSchema, SupplierCommSchema, SupplierProductSchema,
   AdjustmentSchema, TransferSchema,
   TaskSchema, CommentSchema, ProjectSchema, MilestoneSchema,
