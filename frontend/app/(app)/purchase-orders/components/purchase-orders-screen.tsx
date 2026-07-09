@@ -174,16 +174,16 @@ function PurchaseEditor({ T, suppliers, locs, onClose, onSaved }: { T: any; supp
         <Btn T={T} kind="ghost" onClick={onClose}>Cancel</Btn>
         <Btn T={T} kind="accent" onClick={save} disabled={busy}>{busy ? 'Saving…' : status === 'received' ? 'Save & receive' : 'Save purchase'}</Btn>
       </>}>
-      {/* Header */}
-      <FormGrid cols={4}>
+      {/* Header — even 3-column grid so nothing orphans */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '14px 16px' }}>
         <Field T={T} label="Supplier"><SelectField T={T} value={String(supplier_id)} options={['', ...suppliers.map((s: any) => String(s.id))]} onChange={(v: any) => setSupplier(v)} render={(v: any) => v ? (suppliers.find((s: any) => String(s.id) === v) || {}).name : 'Please select…'} /></Field>
         <Field T={T} label="Reference No" hint="Blank = auto-generated"><TextField T={T} value={reference} onChange={setReference} placeholder="e.g. PO-2026-001" /></Field>
         <Field T={T} label="Purchase Date"><TextField T={T} type="date" value={date} onChange={setDate} /></Field>
         <Field T={T} label="Purchase Status"><SelectField T={T} value={status} options={['received', 'ordered', 'pending']} onChange={setStatus} render={(v: any) => ({ received: 'Received', ordered: 'Ordered', pending: 'Pending' } as any)[v]} /></Field>
         <Field T={T} label="Business Location"><SelectField T={T} value={String(location_id)} options={locs.map((l: any) => String(l.id))} onChange={setLocation} render={(v: any) => (locs.find((l: any) => String(l.id) === v) || {}).name} /></Field>
         <Field T={T} label="Pay term (days)"><TextField T={T} type="number" value={payTerm} onChange={setPayTerm} placeholder="e.g. 30" /></Field>
-      </FormGrid>
-      {supplier && supplier.address && <div style={{ fontSize: 12, color: T.inkSub, marginTop: 6 }}>Address: {supplier.address}</div>}
+      </div>
+      {supplier && supplier.address && <div style={{ fontSize: 12, color: T.inkSub, marginTop: 8 }}>Address: {supplier.address}</div>}
 
       {/* Product lines */}
       <div style={{ marginTop: 18, marginBottom: 9, fontSize: 12, fontWeight: 700, color: T.inkSub }}>PRODUCTS</div>
@@ -219,33 +219,43 @@ function PurchaseEditor({ T, suppliers, locs, onClose, onSaved }: { T: any; supp
       </div>
 
       {/* Totals + discount/tax/shipping/expenses */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 24, marginTop: 18, alignItems: 'start' }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <div>
-            <div style={{ fontSize: 11, fontWeight: 700, color: T.inkSub, marginBottom: 6 }}>DISCOUNT</div>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <div style={{ width: 130 }}><SelectField T={T} value={discType} options={['none', 'fixed', 'percent']} onChange={setDiscType} render={(v: any) => ({ none: 'None', fixed: 'Fixed', percent: 'Percentage' } as any)[v]} /></div>
-              {discType !== 'none' && <input type="number" value={discVal} onChange={(e: any) => setDiscVal(e.target.value)} placeholder={discType === 'percent' ? '%' : '0.00'} style={{ ...miniNum(T), width: 100 }} />}
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 320px', gap: 20, marginTop: 20, alignItems: 'start' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {/* Discount · Tax · Shipping — one row that fills the column */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12 }}>
+            <div>
+              <div style={sub(T)}>Discount</div>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <div style={{ flex: discType === 'none' ? 1 : '0 0 auto', width: discType === 'none' ? 'auto' : 110, minWidth: 0 }}><SelectField T={T} value={discType} options={['none', 'fixed', 'percent']} onChange={setDiscType} render={(v: any) => ({ none: 'None', fixed: 'Fixed', percent: '%' } as any)[v]} /></div>
+                {discType !== 'none' && <input type="number" value={discVal} onChange={(e: any) => setDiscVal(e.target.value)} placeholder={discType === 'percent' ? '%' : '0.00'} style={{ ...miniNum(T), flex: 1, minWidth: 0 }} />}
+              </div>
+            </div>
+            <div>
+              <div style={sub(T)}>Purchase tax (%)</div>
+              <input type="number" value={taxPct} onChange={(e: any) => setTaxPct(e.target.value)} placeholder="0" style={{ ...miniNum(T), width: '100%' }} />
+            </div>
+            <div>
+              <div style={sub(T)}>Shipping charges</div>
+              <input type="number" value={shipping} onChange={(e: any) => setShipping(e.target.value)} placeholder="0.00" style={{ ...miniNum(T), width: '100%' }} />
             </div>
           </div>
+
+          {/* Additional expenses — full width */}
           <div>
-            <div style={{ fontSize: 11, fontWeight: 700, color: T.inkSub, marginBottom: 6 }}>PURCHASE TAX (%)</div>
-            <input type="number" value={taxPct} onChange={(e: any) => setTaxPct(e.target.value)} placeholder="0" style={{ ...miniNum(T), width: 100 }} />
-          </div>
-          <div>
-            <div style={{ fontSize: 11, fontWeight: 700, color: T.inkSub, marginBottom: 6 }}>SHIPPING & EXPENSES</div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}><span style={{ fontSize: 12, color: T.inkSub, width: 110 }}>Shipping charges</span><input type="number" value={shipping} onChange={(e: any) => setShipping(e.target.value)} placeholder="0.00" style={{ ...miniNum(T), width: 100 }} /></div>
+            <div style={sub(T)}>Additional expenses</div>
             {expenses.map((e: any, i: number) => (
               <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
-                <input value={e.name} onChange={(ev: any) => setExpense(i, 'name', ev.target.value)} placeholder="Expense name" style={{ flex: 1, padding: '7px 9px', fontSize: 12.5, fontFamily: T.fBody, color: T.ink, background: T.paper, border: `1px solid ${T.line}`, borderRadius: 6, outline: 'none', boxSizing: 'border-box' } as React.CSSProperties} />
-                <input type="number" value={e.amount} onChange={(ev: any) => setExpense(i, 'amount', ev.target.value)} placeholder="0.00" style={{ ...miniNum(T), width: 100 }} />
+                <input value={e.name} onChange={(ev: any) => setExpense(i, 'name', ev.target.value)} placeholder="Expense name" style={{ flex: 1, minWidth: 0, padding: '8px 10px', fontSize: 12.5, fontFamily: T.fBody, color: T.ink, background: T.paper, border: `1px solid ${T.line}`, borderRadius: 6, outline: 'none', boxSizing: 'border-box' } as React.CSSProperties} />
+                <input type="number" value={e.amount} onChange={(ev: any) => setExpense(i, 'amount', ev.target.value)} placeholder="0.00" style={{ ...miniNum(T), width: 120 }} />
               </div>
             ))}
-            <button onClick={() => setExpenses((es: any) => [...es, { name: '', amount: '' }])} style={{ background: 'none', border: 'none', color: T.accent.text, fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: T.fBody, padding: 0 }}>+ Add expense</button>
+            <button onClick={() => setExpenses((es: any) => [...es, { name: '', amount: '' }])} style={{ background: 'none', border: 'none', color: T.accent.text, fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: T.fBody, padding: '2px 0' }}>+ Add expense</button>
           </div>
+
+          {/* Additional notes — full width */}
           <div>
-            <div style={{ fontSize: 11, fontWeight: 700, color: T.inkSub, marginBottom: 6 }}>ADDITIONAL NOTES</div>
-            <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={2} placeholder="Optional" style={{ width: '100%', padding: '9px 11px', fontSize: 13, fontFamily: T.fBody, color: T.ink, background: T.paper, border: `1.5px solid ${T.line}`, borderRadius: T.r, outline: 'none', resize: 'vertical', boxSizing: 'border-box' } as React.CSSProperties} />
+            <div style={sub(T)}>Additional notes</div>
+            <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={3} placeholder="Optional" style={{ width: '100%', padding: '9px 11px', fontSize: 13, fontFamily: T.fBody, color: T.ink, background: T.paper, border: `1.5px solid ${T.line}`, borderRadius: T.r, outline: 'none', resize: 'vertical', boxSizing: 'border-box' } as React.CSSProperties} />
           </div>
         </div>
 
@@ -269,6 +279,7 @@ function PurchaseEditor({ T, suppliers, locs, onClose, onSaved }: { T: any; supp
   );
 }
 function blankLine() { return { product_id: '', qty: '', unit_id: '', unit_cost: '', discount_percent: '', selling_price: '' }; }
+function sub(T: any): React.CSSProperties { return { fontSize: 10.5, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', color: T.inkSub, marginBottom: 6 } as React.CSSProperties; }
 
 // ── Purchase detail ─────────────────────────────────────────────────
 function PurchaseView({ T, purchase, onClose }: { T: any; purchase: any; onClose: () => void }) {
