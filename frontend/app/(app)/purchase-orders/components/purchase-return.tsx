@@ -16,6 +16,10 @@ export function PurchaseReturnModal({ T, purchase, onClose, onSaved }: { T: any;
   const remainingOf = (l: any) => Number(l.received_qty || 0) - Number(l.returned_qty || 0);
   const returnable = (p.lines || []).filter((l: any) => remainingOf(l) > 0);
   const [reference, setReference] = useStatePu('');
+  const [date, setDate] = useStatePu(new Date().toISOString().slice(0, 10));
+  const [doc, setDoc] = useStatePu<any>(null);        // { url, key, name }
+  const [docBusy, setDocBusy] = useStatePu(false);
+  const docRef = React.useRef<any>(null);
   const [qtys, setQtys] = useStatePu<any>({});
   const [busy, setBusy] = useStatePu(false);
   const [err, setErr] = useStatePu<any>(null);
@@ -28,9 +32,27 @@ export function PurchaseReturnModal({ T, purchase, onClose, onSaved }: { T: any;
     if (!items.length) { setErr('Enter a return quantity for at least one line.'); return; }
     for (const l of returnable) { const q = Number(qtys[l.id]) || 0; if (q > remainingOf(l)) { setErr(`Return qty for "${l.product_name}" exceeds the ${remainingOf(l)} returnable.`); return; } }
     setBusy(true); setErr(null);
-    try { await API.purchaseOrder.createReturn(p.id, { reference: reference.trim() || undefined, items }); onSaved(); }
+    try {
+      await API.purchaseOrder.createReturn(p.id, {
+        reference: reference.trim() || undefined,
+        return_date: date || undefined,
+        document_url: (doc && doc.url) || undefined, document_key: (doc && doc.key) || undefined,
+        items,
+      });
+      onSaved();
+    }
     catch (e: any) { setErr(e.message || 'Could not record the return.'); setBusy(false); }
   }
+
+  async function onPickDoc(e: any) {
+    const file = e.target.files && e.target.files[0]; e.target.value = '';
+    if (!file) return;
+    setDocBusy(true); setErr(null);
+    try { const r = await API.upload.file(file); setDoc({ url: r.url, key: r.key, name: file.name }); }
+    catch (ex: any) { setErr(ex.message || 'Could not upload the document.'); }
+    finally { setDocBusy(false); }
+  }
+  function onRemoveDoc() { const key = doc && doc.key; setDoc(null); if (key) API.upload.remove(key).catch(() => {}); }
 
   const th: React.CSSProperties = { padding: '8px 10px', fontSize: 9.5, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', color: T.inkSub, background: T.paperAlt, borderBottom: `1px solid ${T.line}`, whiteSpace: 'nowrap' };
   const td: React.CSSProperties = { padding: '7px 10px', fontSize: 12, borderBottom: `1px solid ${T.line}` };
@@ -46,7 +68,26 @@ export function PurchaseReturnModal({ T, purchase, onClose, onSaved }: { T: any;
       <div style={{ fontSize: 12.5, color: T.inkMid, marginBottom: 12, lineHeight: 1.6 }}>
         <b style={{ color: T.inkSub }}>Parent purchase:</b> {p.ref_no} · {p.supplier_name}{p.location_name && p.location_name !== '—' ? ' · ' + p.location_name : ''} · {p.date}
       </div>
-      <Field T={T} label="Reference No"><TextField T={T} value={reference} onChange={setReference} placeholder="Optional — e.g. DN-2026-001" /></Field>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+        <Field T={T} label="Reference No"><TextField T={T} value={reference} onChange={setReference} placeholder="Optional — e.g. DN-2026-001" /></Field>
+        <Field T={T} label="Date"><TextField T={T} type="date" value={date} onChange={setDate} /></Field>
+      </div>
+      <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <input ref={docRef} type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx,.csv,.zip" style={{ display: 'none' }} onChange={onPickDoc} />
+        {!doc ? (
+          <button onClick={() => docRef.current && docRef.current.click()} disabled={docBusy}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '7px 12px', fontSize: 12.5, fontWeight: 600, fontFamily: T.fBody, color: T.inkMid, background: T.paper, border: `1px dashed ${T.line}`, borderRadius: T.r, cursor: docBusy ? 'wait' : 'pointer' }}>
+            📎 {docBusy ? 'Uploading…' : 'Attach document'}
+          </button>
+        ) : (
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '6px 10px', fontSize: 12.5, background: T.paperAlt, border: `1px solid ${T.line}`, borderRadius: T.r }}>
+            <span>📄</span>
+            <a href={doc.url} target="_blank" rel="noreferrer" style={{ color: T.accent.text, fontWeight: 600, textDecoration: 'none', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{doc.name || 'Document'}</a>
+            <button onClick={onRemoveDoc} title="Remove" style={{ border: 'none', background: 'none', color: T.redText, cursor: 'pointer', fontSize: 13, lineHeight: 1 }}>✕</button>
+          </div>
+        )}
+        <span style={{ fontSize: 11, color: T.inkMute }}>Debit note or credit memo (pdf, image, doc)</span>
+      </div>
       <div style={{ marginTop: 14, border: `1px solid ${T.line}`, borderRadius: T.r, overflowX: 'auto' }}>
         {returnable.length ? (
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 640 }}>

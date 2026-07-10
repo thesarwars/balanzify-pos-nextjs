@@ -1866,6 +1866,8 @@ model PurchaseReturn {
   taxAmount    Decimal  @default(0) @map("tax_amount") @db.Decimal(12, 2)
   totalAmount  Decimal  @default(0) @map("total_amount") @db.Decimal(12, 2)
   notes        String?
+  documentUrl  String?  @map("document_url")
+  documentKey  String?  @map("document_key")
   createdById  String?  @map("created_by") @db.Uuid
   createdAt    DateTime @default(now()) @map("created_at")
 

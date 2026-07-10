@@ -163,7 +163,7 @@ try {
     reportsRouter, usersRouter, categoriesRouter, locationsRouter,
     customersRouter, settingsRouter, notificationsRouter,
     expensesRouter, expenseCategoriesRouter, paymentAccountsRouter,
-    customerGroupsRouter, unitsRouter, brandsRouter, variationsRouter, barcodeSettingsRouter, receiptPrintersRouter,
+    customerGroupsRouter, unitsRouter, brandsRouter, variationsRouter, barcodeSettingsRouter, receiptPrintersRouter, purchaseReturnsRouter,
     discountsRouter, priceGroupsRouter, invoiceLayoutsRouter, invoiceSchemesRouter,
     serviceTypesRouter,
   } = require('./routes/combined');
@@ -252,6 +252,7 @@ try {
   app.use('/api/v1/units', apiLimiter, unitsRouter);
   app.use('/api/v1/barcode-settings', apiLimiter, barcodeSettingsRouter);
   app.use('/api/v1/receipt-printers', apiLimiter, receiptPrintersRouter);
+  app.use('/api/v1/purchase-returns', apiLimiter, purchaseReturnsRouter);
   app.use('/api/v1/brands', apiLimiter, brandsRouter);
   app.use('/api/v1/variations', apiLimiter, variationsRouter);
   app.use('/api/v1/discounts', apiLimiter, discountsRouter);

@@ -223,6 +223,8 @@ const PurchaseReturnSchema = z.object({
   reference: optStr(100),
   notes: optStr(500),
   return_date: isoDate,
+  document_url: optStr(500),   // debit-note scan, uploaded via /upload/file
+  document_key: optStr(255),
   items: z.array(z.object({
     po_item_id: uuid,
     quantity: z.coerce.number().int().positive('Return quantity must be a positive whole number'),

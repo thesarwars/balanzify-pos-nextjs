@@ -8,6 +8,7 @@
 // modal lives in its own module alongside it.
 // ─────────────────────────────────────────────────────────────────
 import React from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { money, money0 } from '@/lib/theme';
 import { Btn, Badge, Panel, useToast } from '@/components/kit';
 import { Topbar } from '@/components/shell';
@@ -41,6 +42,12 @@ export function Purchases({ T }: { T: any }) {
   const [notifyFor, setNotifyFor] = useStatePu<any>(null);
   const [delFor, setDelFor] = useStatePu<any>(null);
   const [show, node] = useToast();
+  // Deep link: /purchase-orders?new=1 opens the Add Purchase editor (nav shortcut).
+  const router = useRouter();
+  const search = useSearchParams();
+  useEffectPu(() => {
+    if (search.get('new') === '1') { setEdit(true); router.replace('/purchase-orders'); }
+  }, [search, router]);
 
   const openFull = React.useCallback((id: any, cb: (p: any) => void) => { API.purchaseOrder.get(id).then(cb).catch(() => show('Could not load the purchase.')); }, [show]);
   const isReceivedRow = (p: any) => ['received', 'partial', 'approved'].includes(p.status);

@@ -527,7 +527,7 @@ router.post('/:id/payment', auth, requireRole('owner', 'manager'), validate(POPa
 // remaining), so you can never return more than is still on hand from this PO.
 router.post('/:id/returns', auth, requireRole('owner', 'manager'), validate(PurchaseReturnSchema), async (req, res, next) => {
   try {
-    const { reference, notes, return_date, items } = req.body;
+    const { reference, notes, return_date, items, document_url, document_key } = req.body;
     const po = await prisma.purchaseOrder.findUnique({ where: { id: req.params.id }, include: { items: true } });
     if (!po || po.businessId !== req.user.business_id) return res.status(404).json({ title: 'Not found', status: 404 });
     if (!po.locationId) return res.status(400).json({ title: 'This purchase has no location, so its stock cannot be returned.', status: 400 });
@@ -644,6 +644,7 @@ router.post('/:id/returns', auth, requireRole('owner', 'manager'), validate(Purc
           returnNumber: `PRET-${Date.now()}`, reference: reference || null,
           returnDate: return_date ? new Date(return_date) : new Date(),
           subtotal, taxAmount: 0, totalAmount: subtotal, notes: notes || null,
+          documentUrl: document_url || null, documentKey: document_key || null,
           createdById: req.user.id,
           items: { create: returnItemsData },
         },

@@ -2266,6 +2266,36 @@ function adaptRealTaxGroup(g: any): any {
   };
 }
 
+// ── Purchase returns (/api/v1/purchase-returns) → UI view-model ──────────────
+function adaptRealPurchaseReturn(r: any): any {
+  if (!r) return r;
+  return {
+    id: r.id,
+    number: r.returnNumber || '',
+    reference: r.reference || '',
+    date: String(r.returnDate || r.createdAt || '').slice(0, 10),
+    parent_po_id: r.poId || (r.purchaseOrder && r.purchaseOrder.id) || '',
+    parent_ref: (r.purchaseOrder && r.purchaseOrder.poNumber) || '',
+    supplier_name: (r.supplier && r.supplier.name) || '—',
+    location_name: (r.location && r.location.name) || '—',
+    total: Number(r.totalAmount || 0),
+    subtotal: Number(r.subtotal || 0),
+    tax: Number(r.taxAmount || 0),
+    notes: r.notes || '',
+    document_url: r.documentUrl || '',
+    item_count: (r._count && r._count.items) != null ? r._count.items : (Array.isArray(r.items) ? r.items.length : 0),
+    by: (r.createdBy && r.createdBy.name) || '',
+    items: Array.isArray(r.items) ? r.items.map((it: any) => ({
+      product_name: (it.product && it.product.name) || '',
+      sku: (it.product && it.product.sku) || '',
+      quantity: Number(it.quantity || 0),
+      unit_price: Number(it.unitPrice || 0),
+      total_price: Number(it.totalPrice || 0),
+    })) : [],
+    _real: r,
+  };
+}
+
 // ── Receipt printers (/api/v1/receipt-printers) → UI view-model ──────────────
 function adaptRealPrinter(p: any): any {
   if (!p) return p;
@@ -3659,6 +3689,23 @@ const API: any = {
     },
     async removeProductImage(productId: string): Promise<any> {
       return realReq('DELETE', '/upload/product/' + productId + '/image');
+    },
+  },
+  // Purchase returns across every purchase. A return is always CREATED against
+  // its parent purchase (that pins the cost basis) — see purchaseOrder.createReturn.
+  purchaseReturn: {
+    async list(params: any = {}) {
+      if (REAL_MODE) {
+        const query: any = {};
+        for (const k of ['supplier_id', 'location_id', 'from', 'to', 'search']) if (params[k]) query[k] = params[k];
+        const res = await realReq('GET', '/purchase-returns', Object.keys(query).length ? { query } : {});
+        return { rows: ((res && res.returns) || []).map(adaptRealPurchaseReturn), totals: (res && res.totals) || { count: 0, grand_total: 0 } };
+      }
+      return { rows: [], totals: { count: 0, grand_total: 0 } };
+    },
+    async get(id: any) {
+      if (REAL_MODE) return adaptRealPurchaseReturn(await realReq('GET', '/purchase-returns/' + id));
+      return null;
     },
   },
   // Thermal receipt printers. charactersPerLine drives the ESC/POS layout.

@@ -49,7 +49,13 @@ export const NAV = [
       },
       { id: 'stock', label: 'Stock', icon: LuBoxes },
       { id: 'stocktake', label: 'Stocktake', icon: LuClipboardCheck },
-      { id: 'purchase-orders', label: 'Purchase Orders', icon: LuShoppingCart },
+      {
+        id: 'purchase-orders', label: 'Purchases', icon: LuShoppingCart, children: [
+          { key: 'list-purchases',   activeId: 'purchase-orders',  label: 'List Purchases',   route: '/purchase-orders' },
+          { key: 'add-purchase',     activeId: '',                 label: 'Add Purchase',     route: '/purchase-orders?new=1' },
+          { key: 'purchase-returns', activeId: 'purchase-returns', label: 'Purchase Returns', route: '/purchase-returns' },
+        ]
+      },
       { id: 'orders', label: 'Orders', icon: LuClipboardList },
       { id: 'suppliers', label: 'Suppliers', icon: LuTruck },
     ]
