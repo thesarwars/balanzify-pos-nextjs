@@ -12,6 +12,7 @@ import { money, money0 } from '@/lib/theme';
 import { Btn, Badge, Panel, useToast } from '@/components/kit';
 import { Topbar } from '@/components/shell';
 import { API } from '@/lib/api';
+import { formatDate } from '@/lib/business-settings';
 import { ActionsMenu } from '../../products/components/list-table';
 import { ConfirmModal, StatStrip } from './bits';
 import { PurchaseEditor } from './purchase-editor';
@@ -112,7 +113,7 @@ export function Purchases({ T }: { T: any }) {
                     <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right', fontFamily: T.fMono, fontSize: 13, fontWeight: 600, color: T.ink } as React.CSSProperties}>{money(p.grand_total)}</td>
                     <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right', fontFamily: T.fMono, fontSize: 12.5, color: p.due > 0 ? T.amberText : T.inkMute } as React.CSSProperties}>{p.due > 0 ? money(p.due) : '—'}</td>
                     <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right' } as React.CSSProperties}><Badge T={T} tone={tone[p.payment_status]}>{p.payment_status}</Badge></td>
-                    <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right', fontSize: 12, color: T.inkSub } as React.CSSProperties}>{p.date}</td>
+                    <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right', fontSize: 12, color: T.inkSub } as React.CSSProperties}>{formatDate(p.date)}</td>
                   </tr>
                 ))}
               </tbody>

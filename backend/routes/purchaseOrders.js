@@ -6,6 +6,7 @@ const { validate } = require('../middleware/validate');
 const { PurchaseOrderSchema, PurchaseOrderUpdateSchema, POStatusSchema, POPaymentSchema, PurchaseReturnSchema } = require('../validation/schemas');
 const accounting = require('../lib/accounting');
 const email = require('../lib/email');
+const { assertWithinEditWindow, invalidateBusinessSettings } = require('../lib/businessSettings');
 const router = express.Router();
 
 router.get('/', auth, async (req, res, next) => {
@@ -142,6 +143,8 @@ router.put('/:id', auth, requireRole('owner', 'manager'), validate(PurchaseOrder
   try {
     const po = await prisma.purchaseOrder.findUnique({ where: { id: req.params.id }, include: { items: true } });
     if (!po || po.businessId !== req.user.business_id) return res.status(404).json({ title: 'Not found', status: 404 });
+    // Business Settings → "Transaction edit days" locks old records.
+    await assertWithinEditWindow(req.user.business_id, po.createdAt, 'This purchase');
 
     const b = req.body;
     const hasReceipt = po.items.some((i) => i.receivedQty > 0);
@@ -231,6 +234,7 @@ router.put('/:id', auth, requireRole('owner', 'manager'), validate(PurchaseOrder
     const updated = await prisma.purchaseOrder.findUnique({ where: { id: po.id }, include: PO_INCLUDE });
     res.json(updated);
   } catch (err) {
+    if (err.statusCode) return res.status(err.statusCode).json({ title: err.message, status: err.statusCode });
     if (err.code === 'P2002') return res.status(409).json({ title: 'That reference number is already in use', status: 409 });
     next(err);
   }
@@ -735,12 +739,21 @@ router.post('/:id/notify-received', auth, requireRole('owner', 'manager'), async
 
 router.delete('/:id', auth, requireRole('owner', 'manager'), async (req, res, next) => {
   try {
+    // Scope to the caller's business first — this previously cancelled a PO by id
+    // alone, letting one tenant cancel another tenant's purchase.
+    const po = await prisma.purchaseOrder.findUnique({ where: { id: req.params.id }, select: { businessId: true, createdAt: true } });
+    if (!po || po.businessId !== req.user.business_id) return res.status(404).json({ title: 'Not found', status: 404 });
+    await assertWithinEditWindow(req.user.business_id, po.createdAt, 'This purchase');
+
     await prisma.purchaseOrder.update({
       where: { id: req.params.id },
       data: { status: 'cancelled' },
     });
     res.json({ message: 'PO cancelled.' });
-  } catch (err) { next(err); }
+  } catch (err) {
+    if (err.statusCode) return res.status(err.statusCode).json({ title: err.message, status: err.statusCode });
+    next(err);
+  }
 });
 
 // ── 3-WAY MATCH: SUPPLIER INVOICE vs PO (ordered) vs GRN (received) ──

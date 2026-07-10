@@ -104,7 +104,10 @@ async function generateEscPos({ sale, items, business, receiptUrl }) {
 
   if (business.address) push(business.address);
   if (business.phone)   push(business.phone);
-  if (business.taxNumber) push(`TIN: ${business.taxNumber}`);
+  // Business Settings: tax1_name labels the primary registration; tax2 is optional.
+  const bset = (business && business.settings) || {};
+  if (business.taxNumber) push(`${bset.tax1_name || 'TIN'}: ${business.taxNumber}`);
+  if (bset.tax2_number) push(`${bset.tax2_name || 'Tax 2'}: ${bset.tax2_number}`);
 
   if (business.receiptHeader) {
     push('');

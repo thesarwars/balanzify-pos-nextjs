@@ -3,7 +3,8 @@ import React from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Btn, Badge, Panel, Modal, Field, TextField, SelectField, FormGrid, useToast, useViewport, swatchBg } from '@/components/kit';
 import { Topbar, useSession } from '@/components/shell';
-import { money } from '@/lib/theme';
+import { money, qty } from '@/lib/theme';
+import { getSetting, useBusinessSettings } from '@/lib/business-settings';
 import { API } from '@/lib/api';
 import { BUSINESS, CATEGORIES, PRODUCTS } from '@/lib/data';
 import { marginOf, Toggle, MiniInp } from './form-bits';
@@ -138,9 +139,17 @@ export function Products({ T }: { T: any }) {
 
   const SWATCHES = ['#E7B85C', '#7FB7D6', '#C0504D', '#5B8A4C', '#D9C9A3', '#9AC0CB', '#B5793F', '#7A4A2B'];
 
+  useBusinessSettings();   // re-render the form when Business Settings change
+  // `default_unit_id` (Business Settings) picks the unit for a new product.
+  const defaultUnitShortName = () => {
+    const id = getSetting<string | null>('default_unit_id', null);
+    const byId = id ? refs.units.find((u: any) => String(u.id) === String(id)) : null;
+    return (byId || refs.units[0] || {}).short_name || 'Pc(s)';
+  };
   const blankForm = () => ({
-    type: 'single', name: '', sku: '', sku_prefix: '', cat: '',
-    unit: (refs.units[0] || {}).short_name || 'Pc(s)', brand_id: '', tax_id: 0,
+    // Business Settings seed the new-product defaults.
+    type: 'single', name: '', sku: '', sku_prefix: getSetting<string>('sku_prefix', '') || '', cat: '',
+    unit: defaultUnitShortName(), brand_id: '', tax_id: 0,
     alert_quantity: '', enable_stock: true, not_for_selling: false,
     price: '', cost: '', stock: '',
     var_sku_format: 'number', varGroups: [], combo: [],
@@ -238,6 +247,10 @@ export function Products({ T }: { T: any }) {
   async function save(andAnother = false) {
     const err = validate();
     if (err) { setFormErr(err); return; }
+    // Business Settings → "Is product image required?"
+    if (getSetting('product_image_required', false) && !form.img && !form._imgFile) {
+      setFormErr('A product image is required.'); return;
+    }
     setFormErr(null); setSaving(true);
     const payload = {
       type: form.type, name: form.name.trim(), sku: form.sku.trim(), sku_prefix: form.sku_prefix,
@@ -429,7 +442,7 @@ export function Products({ T }: { T: any }) {
                         <td style={{ ...tdStyle(T), fontSize: 12, color: T.inkMid, maxWidth: 160 }}>{locNames}</td>
                         <td style={{ ...tdStyle(T), textAlign: 'right', fontFamily: T.fMono, fontSize: 12.5, color: T.inkSub }}>{money(p.cost)}</td>
                         <td style={{ ...tdStyle(T), textAlign: 'right', fontFamily: T.fMono, fontSize: 13, fontWeight: 600, color: T.ink }}>{money(p.price)}</td>
-                        <td style={{ ...tdStyle(T), textAlign: 'right' }}>{p.stock === Infinity || p.enable_stock === false ? <Badge T={T} tone="gray">∞</Badge> : <Badge T={T} tone={stockTone(p.stock) as any}>{p.stock} {p.unit}</Badge>}</td>
+                        <td style={{ ...tdStyle(T), textAlign: 'right' }}>{p.stock === Infinity || p.enable_stock === false ? <Badge T={T} tone="gray">∞</Badge> : <Badge T={T} tone={stockTone(p.stock) as any}>{qty(p.stock)} {p.unit}</Badge>}</td>
                         <td style={tdStyle(T)}><Badge T={T} tone={typeTag[1] as any}>{typeTag[0]}</Badge></td>
                         <td style={tdStyle(T)}>{catName ? <Badge T={T} tone="gray">{catName}</Badge> : <span style={{ color: T.inkMute }}>—</span>}</td>
                         <td style={{ ...tdStyle(T), fontSize: 12.5, color: T.inkMid }}>{p.brand_name || (refs.brands.find((b: any) => String(b.id) === String(p.brand_id)) || {}).name || '—'}</td>
@@ -501,14 +514,16 @@ export function Products({ T }: { T: any }) {
             <Field T={T} label={form.sku ? 'SKU' : 'SKU (auto-generated if blank)'}><TextField T={T} value={form.sku} onChange={(v: any) => setF('sku', v)} placeholder="Leave blank to auto-generate" /></Field>
             <Field T={T} label="Barcode"><TextField T={T} value={form.barcode} onChange={(v: any) => setF('barcode', v)} placeholder="Scan or type barcode" /></Field>
             <Field T={T} label="Barcode type"><SelectField T={T} value={form.barcode_type} options={['C128', 'C39', 'EAN13', 'EAN8', 'UPCA', 'UPCE']} onChange={(v: any) => setF('barcode_type', v)} render={(v: any) => (({ C128: 'Code 128 (C128)', C39: 'Code 39 (C39)', EAN13: 'EAN-13', EAN8: 'EAN-8', UPCA: 'UPC-A', UPCE: 'UPC-E' } as any)[v] || v)} /></Field>
-            <Field T={T} label="Category"><SelectField T={T} value={form.cat} options={['', ...cats.map((c: any) => c.id)]} onChange={(v: any) => setF('cat', v)} render={(v: any) => (v ? ((cats.find((c: any) => c.id === v) || {}).name || v) : '— None —')} /></Field>
-            <Field T={T} label="Brand">
+            {getSetting('enable_categories', true) && <Field T={T} label="Category"><SelectField T={T} value={form.cat} options={['', ...cats.map((c: any) => c.id)]} onChange={(v: any) => setF('cat', v)} render={(v: any) => (v ? ((cats.find((c: any) => c.id === v) || {}).name || v) : '— None —')} /></Field>}
+            {getSetting('enable_brands', true) && <Field T={T} label="Brand">
               <SelectField T={T} value={String(form.brand_id)} options={[{ v: '', l: '— None —' }, ...refs.brands.map((b: any) => ({ v: String(b.id), l: b.name }))].map((o: any) => o.v)} onChange={(v: any) => setF('brand_id', v)}
                 render={(v: any) => (refs.brands.find((b: any) => String(b.id) === v) || {}).name || '— None —'} />
-            </Field>
+            </Field>}
             <Field T={T} label="Unit"><SelectField T={T} value={form.unit} options={refs.units.map((u: any) => u.short_name)} onChange={(v: any) => setF('unit', v)} /></Field>
-            <Field T={T} label="Applicable tax"><SelectField T={T} value={String(form.tax_id)} options={['', ...refs.taxRates.map((t: any) => String(t.id))]} onChange={(v: any) => setF('tax_id', v)} render={(v: any) => (refs.taxRates.find((t: any) => String(t.id) === v) || {}).name || 'None'} /></Field>
-            <Field T={T} label="Selling price tax type"><SelectField T={T} value={form.selling_price_tax_type} options={['exclusive', 'inclusive']} onChange={(v: any) => setF('selling_price_tax_type', v)} render={(v: any) => (v === 'inclusive' ? 'Inclusive' : 'Exclusive')} /></Field>
+            {getSetting('enable_price_tax', true) && <>
+              <Field T={T} label="Applicable tax"><SelectField T={T} value={String(form.tax_id)} options={['', ...refs.taxRates.map((t: any) => String(t.id))]} onChange={(v: any) => setF('tax_id', v)} render={(v: any) => (refs.taxRates.find((t: any) => String(t.id) === v) || {}).name || 'None'} /></Field>
+              <Field T={T} label="Selling price tax type"><SelectField T={T} value={form.selling_price_tax_type} options={['exclusive', 'inclusive']} onChange={(v: any) => setF('selling_price_tax_type', v)} render={(v: any) => (v === 'inclusive' ? 'Inclusive' : 'Exclusive')} /></Field>
+            </>}
             <Field T={T} label="Alert quantity"><TextField T={T} type="number" value={form.alert_quantity} onChange={(v: any) => setF('alert_quantity', v)} placeholder="Low-stock threshold" /></Field>
             <Field T={T} label="Weight"><TextField T={T} type="number" value={form.weight} onChange={(v: any) => setF('weight', v)} placeholder="e.g. 0.5" /></Field>
             <Field T={T} label="Preparation time (minutes)"><TextField T={T} type="number" value={form.prep_time_minutes} onChange={(v: any) => setF('prep_time_minutes', v)} placeholder="Service staff timer" /></Field>
@@ -554,7 +569,15 @@ export function Products({ T }: { T: any }) {
 
             {/* SINGLE pricing — margin drives the selling price (reference behaviour) */}
             {form.type === 'single' && <>
-              <Field T={T} label="Purchase price ($)"><TextField T={T} type="number" value={form.cost} onChange={(v: any) => setF('cost', v)} placeholder="0.00" /></Field>
+              <Field T={T} label="Purchase price ($)"><TextField T={T} type="number" value={form.cost}
+                onChange={(v: any) => {
+                  setF('cost', v);
+                  // Business Settings → "Default profit percent" seeds the selling price the
+                  // first time a cost is entered. Same margin-on-price formula as marginOf().
+                  const pct = Number(getSetting('default_profit_percent', 0));
+                  const c = parseFloat(v || '0');
+                  if (pct > 0 && c > 0 && !form.price) setF('price', (Math.round((c / (1 - Math.min(pct, 99.99) / 100)) * 100) / 100).toFixed(2));
+                }} placeholder="0.00" /></Field>
               <Field T={T} label="Margin (%)">
                 <TextField T={T} type="number" value={form.price && form.cost ? String(marginOf(form)) : ''} placeholder="e.g. 25"
                   onChange={(v: any) => { const c = parseFloat(form.cost || 0); const m = parseFloat(v); if (c > 0 && !isNaN(m)) setF('price', (Math.round(c / (1 - Math.min(m, 99.99) / 100) * 100) / 100).toFixed(2)); }} />

@@ -103,22 +103,49 @@ export function hydrateCurrency() {
 // Multi-character symbols (KSh, SlSh) read better with a thin gap before digits.
 const gap = (sym: string) => (sym.length > 1 ? ' ' : '');
 
+// ── Business Settings overrides ───────────────────────────────────────────────
+// `currency_precision` and `currency_symbol_placement` are pushed in by AppShell.
+// theme.ts stays import-free (money() is called from ~36 files, some of which the
+// API layer imports), so the values arrive through a setter rather than an
+// import — the same shape as setCurrency/hydrateCurrency above.
+let _dpOverride: number | null = null;
+let _symbolAfter = false;
+let _qtyDp = 0;
+
+export function setMoneyFormat({ precision, symbolAfter, quantityPrecision }: { precision?: number | null; symbolAfter?: boolean; quantityPrecision?: number | null }) {
+  _dpOverride = typeof precision === 'number' && precision >= 0 && precision <= 4 ? precision : null;
+  _symbolAfter = !!symbolAfter;
+  _qtyDp = typeof quantityPrecision === 'number' && quantityPrecision >= 0 && quantityPrecision <= 4 ? quantityPrecision : 0;
+}
+
+/** Format a quantity using `quantity_precision` (default 0 — stock is whole units). */
+export const qty = (n: number | string, opts: { dp?: number } = {}) => {
+  const dp = opts.dp ?? _qtyDp;
+  return parseFloat(String(n ?? 0)).toLocaleString(activeCurrency().locale, { minimumFractionDigits: dp, maximumFractionDigits: dp });
+};
+/** Decimals in effect: an explicit opt wins, then the business setting, then the currency. */
+const activeDp = (opt?: number) => opt ?? (_dpOverride ?? activeCurrency().dp);
+export function moneySymbolAfter() { return _symbolAfter; }
+
 export const money = (n: number | string, opts: { symbol?: string; dp?: number } = {}) => {
   const cur = activeCurrency();
   const sym = opts.symbol ?? cur.symbol;
-  const dp = opts.dp ?? cur.dp;
-  return sym + gap(sym) + parseFloat(String(n || 0)).toLocaleString(cur.locale, { minimumFractionDigits: dp, maximumFractionDigits: dp });
+  const dp = activeDp(opts.dp);
+  const num = parseFloat(String(n || 0)).toLocaleString(cur.locale, { minimumFractionDigits: dp, maximumFractionDigits: dp });
+  return _symbolAfter ? num + gap(sym) + sym : sym + gap(sym) + num;
 };
 export const money0 = (n: number | string) => money(n, { dp: 0 });
 
 // Split a money value into [symbol, whole, '.dd'] for typographic emphasis.
+// `after` tells the caller which side the symbol belongs on.
 export function moneyParts(n: number | string, symbol?: string) {
   const cur = activeCurrency();
   const sym = symbol ?? cur.symbol;
   const num = parseFloat(String(n || 0));
-  const s = num.toLocaleString(cur.locale, { minimumFractionDigits: cur.dp, maximumFractionDigits: cur.dp });
+  const dp = activeDp();
+  const s = num.toLocaleString(cur.locale, { minimumFractionDigits: dp, maximumFractionDigits: dp });
   const [whole, dec = ''] = s.split('.');
-  return { symbol: sym, whole, dec: dec ? '.' + dec : '' };
+  return { symbol: sym, whole, dec: dec ? '.' + dec : '', after: _symbolAfter };
 }
 
 export function timeAgo(min: number) {

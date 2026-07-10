@@ -1,6 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const prisma = require('../../lib/prisma');
+const { getBusinessSettings } = require('../../lib/businessSettings');
 const accounting = require('../../lib/accounting');
 const { auth, requireRole } = require('../../middleware/auth');
 const { validate } = require('../../middleware/validate');
@@ -31,7 +32,9 @@ reportsRouter.get('/sales', auth, async (req, res, next) => {
     };
     // Bound by_day with a real Date parameter (never interpolate a conditional
     // SQL fragment into a tagged $queryRaw — it becomes a bound param → syntax error).
-    const fromDate = from ? new Date(from) : new Date('2000-01-01');
+    // Business Settings → "Start date" is the earliest data this business has.
+    const bset = await getBusinessSettings(req.user.business_id);
+    const fromDate = from ? new Date(from) : new Date(bset.start_date || '2000-01-01');
     const [totals, byMethod, byDay] = await Promise.all([
       prisma.sale.aggregate({ where, _sum: { totalAmount: true, discountAmount: true }, _count: { id: true }, _avg: { totalAmount: true } }),
       prisma.sale.groupBy({ by: ['paymentMethod'], where, _sum: { totalAmount: true }, _count: { id: true } }),
@@ -90,7 +93,9 @@ reportsRouter.get('/profit', auth, async (req, res, next) => {
 
     // COGS: sum of (cost_price * quantity) from sale_items joined to completed sales
     // Build date bounds for the raw query
-    const fromDate = from ? new Date(from) : new Date('2000-01-01');
+    // Business Settings → "Start date" is the earliest data this business has.
+    const bset = await getBusinessSettings(req.user.business_id);
+    const fromDate = from ? new Date(from) : new Date(bset.start_date || '2000-01-01');
     const toDate   = to   ? new Date(new Date(to).setDate(new Date(to).getDate() + 1)) : new Date('2099-12-31');
     const cogsResult = await prisma.$queryRaw`
       SELECT COALESCE(SUM(si.cost_price * si.quantity), 0) AS cogs

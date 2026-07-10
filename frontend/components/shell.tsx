@@ -1,6 +1,7 @@
 'use client';
 import React from 'react';
-import { makeTheme, type Theme, SIDEBARS } from '@/lib/theme';
+import { makeTheme, type Theme, SIDEBARS, setMoneyFormat } from '@/lib/theme';
+import { setBusinessSettings, hydrateBusinessSettings, getBusinessSettings, getSetting } from '@/lib/business-settings';
 import { BUSINESS, CASHIER } from '@/lib/data';
 import { API } from '@/lib/api';
 import { useViewport } from '@/components/kit';
@@ -464,6 +465,31 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     setAuthed(true);
     API.auth.me().then(setSession).catch(() => { });
   }, [router]);
+
+  // Business Settings preference bag — hydrate from storage so the first paint is
+  // already formatted, then refresh from the server. The Business Settings screen
+  // dispatches 'bz:settings-changed' after a save so this picks it up live.
+  React.useEffect(() => {
+    if (authed !== true) return;
+    const apply = (bag: any) => {
+      setBusinessSettings(bag);
+      setMoneyFormat({
+        precision: getSetting<number | null>('currency_precision', null),
+        symbolAfter: getSetting<string>('currency_symbol_placement', 'before') === 'after',
+        quantityPrecision: getSetting<number | null>('quantity_precision', 0),
+      });
+    };
+    hydrateBusinessSettings();
+    apply(getBusinessSettings());
+    const load = () => {
+      if (!(API.config?.isReal?.())) return;
+      API.business.get().then((b: any) => { if (b) apply(b.settings || {}); }).catch(() => { /* keep hydrated values */ });
+    };
+    load();
+    if (typeof window === 'undefined') return;
+    window.addEventListener('bz:settings-changed', load);
+    return () => window.removeEventListener('bz:settings-changed', load);
+  }, [authed]);
 
   // Enabled modules drive which nav items show. Reloads when a module is
   // toggled (the Plan & Modules screen dispatches 'bz:modules-changed').

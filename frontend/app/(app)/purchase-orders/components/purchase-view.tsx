@@ -3,6 +3,7 @@ import React from 'react';
 import { money } from '@/lib/theme';
 import { Btn, Badge, Modal } from '@/components/kit';
 import { API } from '@/lib/api';
+import { formatDate } from '@/lib/business-settings';
 import { Row } from './bits';
 
 const { useState: useStatePu, useEffect: useEffectPu } = React;
@@ -39,7 +40,7 @@ export function PurchaseView({ T, purchase, onClose, onEdit }: { T: any; purchas
         </div>
         <div style={{ fontSize: 12.5, color: T.inkMid, lineHeight: 1.7 }}>
           <Row T={T} k="Reference" v={p.ref_no} mono />
-          <Row T={T} k="Date" v={p.date} />
+          <Row T={T} k="Date" v={formatDate(p.date)} />
           {p.expected_delivery && <Row T={T} k="Expected" v={p.expected_delivery} />}
           <Row T={T} k="Status" v={statusLabel} />
           <Row T={T} k="Payment" v={<Badge T={T} tone={({ paid: 'green', partial: 'amber', due: 'red' } as any)[p.payment_status]}>{payLabel}</Badge>} />
@@ -106,7 +107,7 @@ export function PurchaseView({ T, purchase, onClose, onEdit }: { T: any; purchas
               <tbody>
                 {p.payments.map((pay: any, i: number) => (
                   <tr key={pay.id || i}>
-                    <td style={{ ...td, ...mono, color: T.inkMid }}>{pay.date || '—'}</td>
+                    <td style={{ ...td, ...mono, color: T.inkMid }}>{pay.date ? formatDate(pay.date) : '—'}</td>
                     <td style={{ ...td, ...mono, color: T.inkSub }}>{pay.reference || '—'}</td>
                     <td style={{ ...td, color: T.inkSub, textTransform: 'capitalize' }}>{String(pay.method || '').replace(/_/g, ' ') || '—'}</td>
                     <td style={{ ...td, whiteSpace: 'normal', color: T.inkSub }}>{pay.note || '—'}</td>
@@ -133,7 +134,7 @@ export function PurchaseView({ T, purchase, onClose, onEdit }: { T: any; purchas
               <tbody>
                 {p.returns.map((r: any, i: number) => (
                   <tr key={r.id || i}>
-                    <td style={{ ...td, ...mono, color: T.inkMid }}>{r.date || '—'}</td>
+                    <td style={{ ...td, ...mono, color: T.inkMid }}>{r.date ? formatDate(r.date) : '—'}</td>
                     <td style={{ ...td, ...mono, color: T.inkSub }}>{r.number || '—'}</td>
                     <td style={{ ...td, color: T.inkSub }}>{r.reference || '—'}</td>
                     <td style={{ ...td, color: T.inkSub }}>{(r.items || []).reduce((s: number, it: any) => s + Number(it.quantity || 0), 0)}</td>

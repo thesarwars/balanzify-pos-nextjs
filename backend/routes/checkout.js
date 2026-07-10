@@ -222,7 +222,9 @@ router.get('/receipt/:saleId/pdf', auth, async (req, res, next) => {
     doc.fontSize(14).font('Helvetica-Bold').text(business?.name || 'Balanzify', { align: 'center' });
     if (business?.address) doc.fontSize(8).font('Helvetica').text(business.address, { align: 'center' });
     if (business?.phone)   doc.text(business.phone, { align: 'center' });
-    if (business?.taxNumber) doc.text(`TIN: ${business.taxNumber}`, { align: 'center' });
+    const bset = (business && business.settings) || {};
+    if (business?.taxNumber) doc.text(`${bset.tax1_name || 'TIN'}: ${business.taxNumber}`, { align: 'center' });
+    if (bset.tax2_number) doc.text(`${bset.tax2_name || 'Tax 2'}: ${bset.tax2_number}`, { align: 'center' });
     if (business?.receiptHeader) {
       doc.moveDown(0.3).fontSize(8).text(business.receiptHeader, { align: 'center' });
     }

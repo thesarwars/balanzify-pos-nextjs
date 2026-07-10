@@ -484,36 +484,28 @@ const PayslipSettingsSchema = z.object({
 // ── Settings ──────────────────────────────────────────────────────────────────
 // UltimatePOS-style Business Settings preference bag. Every field optional so
 // partial saves work; the route shallow-merges into the stored settings JSON.
+// Every key here is honoured somewhere in the app. Keys that had no consumer
+// (fy_start_month, enable_inline_tax, the sub-category/sub-unit/rack/row/position/
+// warranty/expiry toggles, and LIFO) were removed rather than stored inertly.
 const BusinessSettingsBag = z.object({
-  start_date: isoDate,
-  currency_symbol_placement: z.enum(['before', 'after']),
-  fy_start_month: z.coerce.number().int().min(1).max(12),
-  transaction_edit_days: z.coerce.number().int().min(0).max(3650),
+  start_date: isoDate,                                    // reports lower bound
+  currency_symbol_placement: z.enum(['before', 'after']),  // money()
+  transaction_edit_days: z.coerce.number().int().min(0).max(3650), // edit-window guard
   date_format: z.enum(['mm/dd/yyyy', 'dd/mm/yyyy', 'yyyy-mm-dd', 'dd-mm-yyyy', 'mm-dd-yyyy']),
   time_format: z.enum(['12', '24']),
-  currency_precision: z.coerce.number().int().min(0).max(4),
-  quantity_precision: z.coerce.number().int().min(0).max(4),
-  default_profit_percent: z.coerce.number().min(0).max(100000),
+  currency_precision: z.coerce.number().int().min(0).max(4),  // money()
+  quantity_precision: z.coerce.number().int().min(0).max(4),  // qty()
+  default_profit_percent: z.coerce.number().min(0).max(100000), // seeds selling price
   timezone: optStr(64),
-  stock_accounting_method: z.enum(['fifo', 'lifo']),
-  // Tax
+  // Tax — label the registration numbers on receipts
   tax1_name: optStr(60),
   tax2_name: optStr(60),
   tax2_number: optStr(100),
-  enable_inline_tax: z.boolean(),
-  // Product
+  // Product form
   sku_prefix: optStr(20),
-  enable_product_expiry: z.boolean(),
-  product_expiry_type: z.enum(['add_expiry', 'add_mfg_expiry']),
   enable_brands: z.boolean(),
   enable_categories: z.boolean(),
-  enable_sub_categories: z.boolean(),
   enable_price_tax: z.boolean(),
-  enable_sub_units: z.boolean(),
-  enable_racks: z.boolean(),
-  enable_row: z.boolean(),
-  enable_position: z.boolean(),
-  enable_warranty: z.boolean(),
   product_image_required: z.boolean(),
   default_unit_id: z.string().uuid().nullable(),
 }).partial();

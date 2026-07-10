@@ -9,8 +9,9 @@ import React from 'react';
 import { Btn, Panel, Field, TextField, SelectField, FormGrid, useToast } from '@/components/kit';
 import { Topbar } from '@/components/shell';
 import { API } from '@/lib/api';
+import { SearchSelect } from './search-select';
 
-const { useState, useEffect } = React;
+const { useState, useEffect, useMemo } = React;
 
 const CCY: [string, string][] = [
   ['USD', 'US Dollar'], ['EUR', 'Euro'], ['GBP', 'British Pound'], ['KES', 'Kenyan Shilling'],
@@ -18,18 +19,17 @@ const CCY: [string, string][] = [
   ['NGN', 'Nigerian Naira'], ['ETB', 'Ethiopian Birr'], ['TZS', 'Tanzanian Shilling'], ['UGX', 'Ugandan Shilling'],
   ['ZAR', 'South African Rand'], ['GHS', 'Ghanaian Cedi'],
 ];
-const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const DATE_FMTS = ['mm/dd/yyyy', 'dd/mm/yyyy', 'yyyy-mm-dd', 'dd-mm-yyyy', 'mm-dd-yyyy'];
 
+// Only settings the app actually honours. Anything that could not be wired to a
+// real consumer was removed rather than shown as an inert toggle.
 const DEFAULTS: any = {
-  start_date: '', currency_symbol_placement: 'before', fy_start_month: 1, transaction_edit_days: 30,
-  date_format: 'mm/dd/yyyy', time_format: '24', currency_precision: 2, quantity_precision: 2,
-  default_profit_percent: 25, stock_accounting_method: 'fifo', timezone: '',
-  tax1_name: '', tax2_name: '', tax2_number: '', enable_inline_tax: true,
-  sku_prefix: '', enable_product_expiry: false, product_expiry_type: 'add_expiry',
-  enable_brands: true, enable_categories: true, enable_sub_categories: true, enable_price_tax: true,
-  enable_sub_units: false, enable_racks: false, enable_row: false, enable_position: false,
-  enable_warranty: false, product_image_required: false, default_unit_id: null,
+  start_date: '', currency_symbol_placement: 'before', transaction_edit_days: 0,
+  date_format: 'yyyy-mm-dd', time_format: '24', currency_precision: 2, quantity_precision: 0,
+  default_profit_percent: 25, timezone: '',
+  tax1_name: '', tax2_name: '', tax2_number: '',
+  sku_prefix: '', enable_brands: true, enable_categories: true, enable_price_tax: true,
+  product_image_required: false, default_unit_id: null,
 };
 
 const TABS = [['business', 'Business'], ['tax', 'Tax'], ['product', 'Product']];
@@ -41,6 +41,7 @@ export function BusinessSettings({ T }: { T: any }) {
   const [taxNumber, setTaxNumber] = useState('');
   const [s, setS] = useState<any>(DEFAULTS);
   const [units, setUnits] = useState<any[]>([]);
+  const [unitsErr, setUnitsErr] = useState('');
   const [logoUrl, setLogoUrl] = useState('');
   const [logoBusy, setLogoBusy] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -49,6 +50,18 @@ export function BusinessSettings({ T }: { T: any }) {
   const [show, node] = useToast();
   const logoRef = React.useRef<any>(null);
   const set = (k: any, v: any) => setS((p: any) => ({ ...p, [k]: v }));
+
+  // The full IANA list straight from the runtime; a short fallback for the rare
+  // engine without Intl.supportedValuesOf.
+  const timezones: string[] = useMemo(() => {
+    try {
+      const supported = (Intl as any).supportedValuesOf;
+      if (typeof supported === 'function') return supported('timeZone');
+    } catch { /* fall through */ }
+    return ['UTC', 'Africa/Mogadishu', 'Africa/Nairobi', 'Africa/Addis_Ababa', 'Africa/Dar_es_Salaam',
+            'Africa/Kampala', 'Africa/Lagos', 'Africa/Johannesburg', 'Asia/Dubai', 'Asia/Riyadh',
+            'Asia/Kolkata', 'Europe/London', 'America/New_York', 'America/Los_Angeles'];
+  }, []);
 
   useEffect(() => {
     if (API.config?.isReal?.()) {
@@ -62,7 +75,9 @@ export function BusinessSettings({ T }: { T: any }) {
         }
       }).catch(() => {}).finally(() => setLoading(false));
     } else { setLoading(false); }
-    API.unit.list().then((us: any) => setUnits(Array.isArray(us) ? us : [])).catch(() => {});
+    API.unit.list()
+      .then((us: any) => setUnits(Array.isArray(us) ? us : []))
+      .catch((e: any) => setUnitsErr(e?.message || 'Could not load units.'));
   }, []);
 
   // These bounds mirror BusinessSettingsBag on the backend. A 422 rejects the
@@ -107,24 +122,20 @@ export function BusinessSettings({ T }: { T: any }) {
         settings: {
           start_date: s.start_date || null,
           currency_symbol_placement: s.currency_symbol_placement,
-          fy_start_month: Number(s.fy_start_month),
           transaction_edit_days: Number(s.transaction_edit_days),
           date_format: s.date_format, time_format: s.time_format,
           currency_precision: Number(s.currency_precision), quantity_precision: Number(s.quantity_precision),
           default_profit_percent: Number(s.default_profit_percent),
           timezone: s.timezone || null,
-          stock_accounting_method: s.stock_accounting_method,
           tax1_name: s.tax1_name || null, tax2_name: s.tax2_name || null, tax2_number: s.tax2_number || null,
-          enable_inline_tax: !!s.enable_inline_tax,
           sku_prefix: s.sku_prefix || null,
-          enable_product_expiry: !!s.enable_product_expiry, product_expiry_type: s.product_expiry_type,
-          enable_brands: !!s.enable_brands, enable_categories: !!s.enable_categories, enable_sub_categories: !!s.enable_sub_categories,
-          enable_price_tax: !!s.enable_price_tax, enable_sub_units: !!s.enable_sub_units,
-          enable_racks: !!s.enable_racks, enable_row: !!s.enable_row, enable_position: !!s.enable_position,
-          enable_warranty: !!s.enable_warranty, product_image_required: !!s.product_image_required,
+          enable_brands: !!s.enable_brands, enable_categories: !!s.enable_categories,
+          enable_price_tax: !!s.enable_price_tax, product_image_required: !!s.product_image_required,
           default_unit_id: s.default_unit_id || null,
         },
       });
+      // Let AppShell re-read the bag so money/date formatting updates immediately.
+      try { window.dispatchEvent(new Event('bz:settings-changed')); } catch { /* ignore */ }
       show('Business settings saved');
     } catch (e: any) { setErr(saveError(e)); } finally { setBusy(false); }
   }
@@ -157,10 +168,6 @@ export function BusinessSettings({ T }: { T: any }) {
           </div>
 
           {/* Content */}
-          <div>
-            <div style={{ marginBottom: 14, padding: '10px 13px', borderRadius: T.r, background: T.paperAlt, border: `1px solid ${T.line}`, color: T.inkMid, fontSize: 12, lineHeight: 1.55 }}>
-              These preferences are saved to your business profile. Several of them are recorded but not yet applied across the app — each is noted on its field.
-            </div>
           <Panel T={T} style={{ padding: 22 }}>
             {loading ? <div style={{ padding: 30, textAlign: 'center', color: T.inkSub, fontSize: 13 }}>Loading…</div> : (
               <>
@@ -172,17 +179,18 @@ export function BusinessSettings({ T }: { T: any }) {
 
                     <Field T={T} label="Currency"><SelectField T={T} value={currency} options={CCY.map(([c]) => c)} onChange={setCurrency} render={(v: any) => { const c = CCY.find(([x]) => x === v); return c ? `${c[0]} — ${c[1]}` : v; }} /></Field>
                     <Field T={T} label="Currency symbol placement"><SelectField T={T} value={s.currency_symbol_placement} options={['before', 'after']} onChange={(v: any) => set('currency_symbol_placement', v)} render={(v: any) => v === 'before' ? 'Before amount' : 'After amount'} /></Field>
-                    <Field T={T} label="Time zone"><TextField T={T} value={s.timezone || ''} onChange={(v: any) => set('timezone', v)} placeholder="e.g. Africa/Nairobi" /></Field>
+                    <Field T={T} label="Time zone" hint="IANA name"><SearchSelect T={T} value={s.timezone || ''} options={timezones} onChange={(v: any) => set('timezone', v)} placeholder="Search time zone…" /></Field>
 
-                    <Field T={T} label="Financial year start month"><SelectField T={T} value={String(s.fy_start_month)} options={MONTHS.map((_, i) => String(i + 1))} onChange={(v: any) => set('fy_start_month', v)} render={(v: any) => MONTHS[Number(v) - 1]} /></Field>
                     <Field T={T} label="Date format"><SelectField T={T} value={s.date_format} options={DATE_FMTS} onChange={(v: any) => set('date_format', v)} render={(v: any) => v} /></Field>
                     <Field T={T} label="Time format"><SelectField T={T} value={s.time_format} options={['12', '24']} onChange={(v: any) => set('time_format', v)} render={(v: any) => v === '12' ? '12 Hour' : '24 Hour'} /></Field>
 
-                    <Field T={T} label="Transaction edit days *"><TextField T={T} type="number" value={String(s.transaction_edit_days)} onChange={(v: any) => set('transaction_edit_days', v)} placeholder="30" /></Field>
+                    <Field T={T} label="Transaction edit days *" hint="0 = never lock. Older purchases can no longer be edited or cancelled"><TextField T={T} type="number" value={String(s.transaction_edit_days)} onChange={(v: any) => set('transaction_edit_days', v)} placeholder="30" /></Field>
                     <Field T={T} label="Currency precision *"><SelectField T={T} value={String(s.currency_precision)} options={['0', '1', '2', '3', '4']} onChange={(v: any) => set('currency_precision', v)} render={(v: any) => v} /></Field>
                     <Field T={T} label="Quantity precision *"><SelectField T={T} value={String(s.quantity_precision)} options={['0', '1', '2', '3', '4']} onChange={(v: any) => set('quantity_precision', v)} render={(v: any) => v} /></Field>
 
-                    <Field T={T} label="Stock accounting method *" hint="Recorded as your stated policy — inventory is currently always valued FIFO/FEFO from cost layers"><SelectField T={T} value={s.stock_accounting_method} options={['fifo', 'lifo']} onChange={(v: any) => set('stock_accounting_method', v)} render={(v: any) => v === 'fifo' ? 'FIFO (First In First Out)' : 'LIFO (Last In First Out)'} /></Field>
+                    <Field T={T} label="Stock accounting method" hint="Perishables are consumed soonest-to-expire first, everything else oldest-first. Not configurable.">
+                      <div style={{ padding: '10px 13px', fontSize: 14, fontFamily: T.fBody, color: T.inkMid, background: T.paperAlt, border: `1px solid ${T.line}`, borderRadius: T.r } as React.CSSProperties}>FIFO / FEFO</div>
+                    </Field>
                     <Field T={T} label="Logo" full>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
                         {logoUrl && <img src={logoUrl} alt="logo" style={{ height: 40, borderRadius: 6, border: `1px solid ${T.line}` }} />}
@@ -196,44 +204,26 @@ export function BusinessSettings({ T }: { T: any }) {
 
                 {tab === 'tax' && (
                   <FormGrid cols={2}>
-                    <Field T={T} label="Tax 1 name" hint="e.g. GSTIN, VAT"><TextField T={T} value={s.tax1_name || ''} onChange={(v: any) => set('tax1_name', v)} placeholder="GST / VAT / Other" /></Field>
+                    <Field T={T} label="Tax 1 name" hint="Labels your tax number on receipts (default: TIN)"><TextField T={T} value={s.tax1_name || ''} onChange={(v: any) => set('tax1_name', v)} placeholder="GST / VAT / Other" /></Field>
                     <Field T={T} label="Tax 1 number"><TextField T={T} value={taxNumber} onChange={setTaxNumber} placeholder="Registration number" /></Field>
-                    <Field T={T} label="Tax 2 name"><TextField T={T} value={s.tax2_name || ''} onChange={(v: any) => set('tax2_name', v)} placeholder="GST / VAT / Other" /></Field>
+                    <Field T={T} label="Tax 2 name" hint="Printed on receipts when a Tax 2 number is set"><TextField T={T} value={s.tax2_name || ''} onChange={(v: any) => set('tax2_name', v)} placeholder="GST / VAT / Other" /></Field>
                     <Field T={T} label="Tax 2 number"><TextField T={T} value={s.tax2_number || ''} onChange={(v: any) => set('tax2_number', v)} placeholder="Registration number" /></Field>
-                    <div style={{ gridColumn: '1 / -1' }}>
-                      <Check T={T} label="Enable inline tax in purchase and sell" hint="Saved as a preference — the per-line tax selector is not driven by it yet" checked={s.enable_inline_tax} onChange={(v: any) => set('enable_inline_tax', v)} />
-                    </div>
                   </FormGrid>
                 )}
 
                 {tab === 'product' && (
                   <div>
                     <FormGrid cols={2}>
-                      <Field T={T} label="SKU prefix" hint="Saved for future use — SKUs are not auto-generated yet"><TextField T={T} value={s.sku_prefix || ''} onChange={(v: any) => set('sku_prefix', v)} placeholder="e.g. AS" /></Field>
-                      <Field T={T} label="Default unit" hint="From the Units section"><SelectField T={T} value={s.default_unit_id || ''} options={['', ...units.map((u: any) => String(u.id))]} onChange={(v: any) => set('default_unit_id', v || null)} render={(v: any) => { if (!v) return 'Please select…'; const u = units.find((x: any) => String(x.id) === v); return u ? unitName(u) : 'Please select…'; }} /></Field>
-                    </FormGrid>
-                    <div style={{ height: 14 }} />
-                    <FormGrid cols={2}>
-                      <Field T={T} label="Product expiry" full>
-                        <Check T={T} label="Enable product expiry" checked={s.enable_product_expiry} onChange={(v: any) => set('enable_product_expiry', v)} />
-                        {s.enable_product_expiry && (
-                          <div style={{ marginTop: 8, maxWidth: 320 }}>
-                            <SelectField T={T} value={s.product_expiry_type} options={['add_expiry', 'add_mfg_expiry']} onChange={(v: any) => set('product_expiry_type', v)} render={(v: any) => v === 'add_expiry' ? 'Add item expiry' : 'Add manufacturing date & expiry period'} />
-                          </div>
-                        )}
+                      <Field T={T} label="SKU prefix" hint="Prefills the SKU prefix on a new product"><TextField T={T} value={s.sku_prefix || ''} onChange={(v: any) => set('sku_prefix', v)} placeholder="e.g. AS" /></Field>
+                      <Field T={T} label="Default unit" hint={unitsErr ? `Could not load units — ${unitsErr}` : units.length ? 'Preselected on a new product · from the Units section' : 'No units yet — add them in Products → Units'}>
+                        <SelectField T={T} value={s.default_unit_id || ''} options={['', ...units.map((u: any) => String(u.id))]} onChange={(v: any) => set('default_unit_id', v || null)} render={(v: any) => { if (!v) return units.length ? 'Please select…' : 'No units available'; const u = units.find((x: any) => String(x.id) === v); return u ? unitName(u) : 'Please select…'; }} />
                       </Field>
                     </FormGrid>
-                    <div style={{ marginTop: 6, display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '4px 18px' }}>
-                      <Check T={T} label="Enable brands" checked={s.enable_brands} onChange={(v: any) => set('enable_brands', v)} />
-                      <Check T={T} label="Enable categories" checked={s.enable_categories} onChange={(v: any) => set('enable_categories', v)} />
-                      <Check T={T} label="Enable sub-categories" checked={s.enable_sub_categories} onChange={(v: any) => set('enable_sub_categories', v)} />
-                      <Check T={T} label="Enable price & tax info" checked={s.enable_price_tax} onChange={(v: any) => set('enable_price_tax', v)} />
-                      <Check T={T} label="Enable sub units" hint="Show sub-units for the selected unit" checked={s.enable_sub_units} onChange={(v: any) => set('enable_sub_units', v)} />
-                      <Check T={T} label="Is product image required?" checked={s.product_image_required} onChange={(v: any) => set('product_image_required', v)} />
-                      <Check T={T} label="Enable racks" hint="Rack details per location" checked={s.enable_racks} onChange={(v: any) => set('enable_racks', v)} />
-                      <Check T={T} label="Enable row" checked={s.enable_row} onChange={(v: any) => set('enable_row', v)} />
-                      <Check T={T} label="Enable position" checked={s.enable_position} onChange={(v: any) => set('enable_position', v)} />
-                      <Check T={T} label="Enable warranty" checked={s.enable_warranty} onChange={(v: any) => set('enable_warranty', v)} />
+                    <div style={{ marginTop: 14, display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '4px 18px' }}>
+                      <Check T={T} label="Enable brands" hint="Show the Brand field on the product form" checked={s.enable_brands} onChange={(v: any) => set('enable_brands', v)} />
+                      <Check T={T} label="Enable categories" hint="Show the Category field on the product form" checked={s.enable_categories} onChange={(v: any) => set('enable_categories', v)} />
+                      <Check T={T} label="Enable price & tax info" hint="Show the tax fields on the product form" checked={s.enable_price_tax} onChange={(v: any) => set('enable_price_tax', v)} />
+                      <Check T={T} label="Is product image required?" hint="Block saving a product without an image" checked={s.product_image_required} onChange={(v: any) => set('product_image_required', v)} />
                     </div>
                   </div>
                 )}
@@ -242,7 +232,6 @@ export function BusinessSettings({ T }: { T: any }) {
               </>
             )}
           </Panel>
-          </div>
         </div>
       </div>
       {node}

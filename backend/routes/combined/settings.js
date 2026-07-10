@@ -1,6 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const prisma = require('../../lib/prisma');
+const { invalidateBusinessSettings } = require('../../lib/businessSettings');
 const accounting = require('../../lib/accounting');
 const { auth, requireRole } = require('../../middleware/auth');
 const { validate } = require('../../middleware/validate');
@@ -50,6 +51,7 @@ settingsRouter.put('/', auth, requireRole('owner'), validate(SettingsSchema), as
       data.settings = { ...((current && current.settings) || {}), ...req.body.settings };
     }
     const biz = await prisma.business.update({ where: { id: req.user.business_id }, data });
+    invalidateBusinessSettings(req.user.business_id);   // routes read the bag through a TTL cache
     res.json({ ...biz, settings: biz.settings || {} });
   } catch (err) { next(err); }
 });
