@@ -17,7 +17,16 @@ import { miniNum } from '../../purchase-orders/components/bits';
 
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
 
-type Line = { product_id: string; name: string; sku: string; returnable: number; unit_cost: number; quantity: string };
+// A line is a product AS PURCHASED in one unit. The same product bought loose on
+// one purchase and by the Dozen on another is two separate lines: `quantity` and
+// `unit_cost` are both counted in `unit_name`, and only whole units go back.
+type Line = {
+  product_id: string; unit_id: string | null; name: string; sku: string;
+  unit_name: string; base_multiplier: number;
+  returnable: number; unit_cost: number; quantity: string;
+};
+
+const keyOf = (p: { product_id: string; unit_id?: string | null }) => `${p.product_id}|${p.unit_id || ''}`;
 
 export function AddPurchaseReturnModal({ T, suppliers, locations, onClose, onSaved }:
   { T: any; suppliers: any[]; locations: any[]; onClose: () => void; onSaved: () => void }) {
@@ -67,19 +76,20 @@ export function AddPurchaseReturnModal({ T, suppliers, locations, onClose, onSav
     return () => { dead = true; clearTimeout(t); };
   }, [ready, open, query, supplierId, locationId]);
 
-  const chosen = useMemo(() => new Set(lines.map((l) => l.product_id)), [lines]);
-  const shown = results.filter((p) => !chosen.has(p.product_id)).slice(0, 25);
+  const chosen = useMemo(() => new Set(lines.map(keyOf)), [lines]);
+  const shown = results.filter((p) => !chosen.has(keyOf(p))).slice(0, 25);
 
   const addLine = useCallback((p: any) => {
-    setLines((ls) => (ls.some((l) => l.product_id === p.product_id) ? ls : [...ls, {
-      product_id: p.product_id, name: p.name, sku: p.sku || '',
+    setLines((ls) => (ls.some((l) => keyOf(l) === keyOf(p)) ? ls : [...ls, {
+      product_id: p.product_id, unit_id: p.unit_id || null, name: p.name, sku: p.sku || '',
+      unit_name: p.unit_name || '', base_multiplier: Number(p.base_multiplier || 1),
       returnable: Number(p.returnable || 0), unit_cost: Number(p.unit_cost || 0), quantity: '1',
     }]));
     setQuery(''); setOpen(false);
   }, []);
 
-  const setQty = (id: string, v: string) => setLines((ls) => ls.map((l) => (l.product_id === id ? { ...l, quantity: v } : l)));
-  const dropLine = (id: string) => setLines((ls) => ls.filter((l) => l.product_id !== id));
+  const setQty = (k: string, v: string) => setLines((ls) => ls.map((l) => (keyOf(l) === k ? { ...l, quantity: v } : l)));
+  const dropLine = (k: string) => setLines((ls) => ls.filter((l) => keyOf(l) !== k));
 
   const lineTotal = (l: Line) => (Number(l.quantity) || 0) * l.unit_cost;
   const subtotal = lines.reduce((s, l) => s + lineTotal(l), 0);
@@ -101,12 +111,14 @@ export function AddPurchaseReturnModal({ T, suppliers, locations, onClose, onSav
     if (!supplierId) { setErr('Choose the supplier the goods go back to.'); return; }
     if (!locationId) { setErr('Choose the location the goods leave.'); return; }
     if (!date) { setErr('A return date is required.'); return; }
-    const items = lines.filter((l) => Number(l.quantity) > 0).map((l) => ({ product_id: l.product_id, quantity: Number(l.quantity) }));
+    const items = lines.filter((l) => Number(l.quantity) > 0)
+      .map((l) => ({ product_id: l.product_id, unit_id: l.unit_id, quantity: Number(l.quantity) }));
     if (!items.length) { setErr('Add at least one product with a quantity.'); return; }
     for (const l of lines) {
       const q = Number(l.quantity) || 0;
-      if (q > l.returnable) { setErr(`Only ${l.returnable} unit(s) of "${l.name}" can still be returned.`); return; }
-      if (q > 0 && !Number.isInteger(q)) { setErr(`"${l.name}" must be returned in whole units.`); return; }
+      const u = l.unit_name ? ` ${l.unit_name}` : ' unit(s)';
+      if (q > l.returnable) { setErr(`Only ${l.returnable}${u} of "${l.name}" can still be returned.`); return; }
+      if (q > 0 && !Number.isInteger(q)) { setErr(`"${l.name}" is bought by the ${l.unit_name || 'unit'}, so it goes back in whole ${l.unit_name || 'unit'}s.`); return; }
     }
     setBusy(true); setErr(null);
     try {
@@ -183,17 +195,20 @@ export function AddPurchaseReturnModal({ T, suppliers, locations, onClose, onSav
               </div>
             )}
             {!searching && shown.map((p: any) => (
-              <button key={p.product_id} onMouseDown={(e: any) => e.preventDefault()} onClick={() => addLine(p)}
+              <button key={keyOf(p)} onMouseDown={(e: any) => e.preventDefault()} onClick={() => addLine(p)}
                 style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '9px 12px', background: 'none', border: 'none', borderTop: `1px solid ${T.line}`, cursor: 'pointer', textAlign: 'left', fontFamily: T.fBody }}
                 onMouseEnter={(e: any) => (e.currentTarget.style.background = T.paperAlt)}
                 onMouseLeave={(e: any) => (e.currentTarget.style.background = 'transparent')}>
                 <span style={{ minWidth: 0 }}>
-                  <span style={{ display: 'block', fontSize: 13, fontWeight: 600, color: T.ink }}>{p.name}</span>
+                  <span style={{ display: 'block', fontSize: 13, fontWeight: 600, color: T.ink }}>
+                    {p.name}
+                    {p.unit_name ? <span style={{ fontWeight: 400, color: T.inkSub }}> · per {p.unit_name}{p.base_multiplier > 1 ? ` (×${p.base_multiplier})` : ''}</span> : null}
+                  </span>
                   <span style={{ display: 'block', fontSize: 11.5, color: T.inkSub, ...mono }}>{p.sku || '—'}</span>
                 </span>
                 <span style={{ flexShrink: 0, textAlign: 'right', ...mono }}>
                   <span style={{ display: 'block', fontSize: 12.5, color: T.ink }}>{money(p.unit_cost)}</span>
-                  <span style={{ display: 'block', fontSize: 11, color: T.inkMute }}>{p.returnable} returnable</span>
+                  <span style={{ display: 'block', fontSize: 11, color: T.inkMute }}>{p.returnable} {p.unit_name || 'returnable'}</span>
                 </span>
               </button>
             ))}
@@ -214,21 +229,28 @@ export function AddPurchaseReturnModal({ T, suppliers, locations, onClose, onSav
             </tr></thead>
             <tbody>
               {lines.map((l) => {
+                const k = keyOf(l);
                 const over = (Number(l.quantity) || 0) > l.returnable;
                 return (
-                  <tr key={l.product_id}>
+                  <tr key={k}>
                     <td style={{ ...td, whiteSpace: 'normal', fontWeight: 600, color: T.ink }}>
                       {l.name}{l.sku ? <span style={{ color: T.inkMute, fontWeight: 400 }}> · {l.sku}</span> : null}
-                      <span style={{ display: 'block', fontSize: 10.5, fontWeight: 400, color: over ? T.redText : T.inkMute }}>{l.returnable} returnable</span>
+                      <span style={{ display: 'block', fontSize: 10.5, fontWeight: 400, color: over ? T.redText : T.inkMute }}>
+                        {l.returnable} {l.unit_name || 'unit'}{l.returnable === 1 ? '' : 's'} returnable
+                        {l.base_multiplier > 1 ? ` · 1 ${l.unit_name} = ${l.base_multiplier} in stock` : ''}
+                      </span>
                     </td>
                     <td style={{ ...td, textAlign: 'right' }}>
-                      <input type="number" min={1} max={l.returnable} step={1} value={l.quantity} onChange={(e: any) => setQty(l.product_id, e.target.value)}
-                        style={{ ...miniNum(T), width: 112, ...(over ? { borderColor: T.redText, color: T.redText } : null) }} />
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6 }}>
+                        <input type="number" min={1} max={l.returnable} step={1} value={l.quantity} onChange={(e: any) => setQty(k, e.target.value)}
+                          style={{ ...miniNum(T), width: 92, ...(over ? { borderColor: T.redText, color: T.redText } : null) }} />
+                        {l.unit_name && <span style={{ fontSize: 11, color: T.inkMute, minWidth: 26, textAlign: 'left' }}>{l.unit_name}</span>}
+                      </div>
                     </td>
                     <td style={{ ...td, ...mono, textAlign: 'right', color: T.inkSub }}>{money(l.unit_cost)}</td>
                     <td style={{ ...td, ...mono, textAlign: 'right', color: T.ink, fontWeight: 600 }}>{money(lineTotal(l))}</td>
                     <td style={{ ...td, textAlign: 'center' }}>
-                      <button onClick={() => dropLine(l.product_id)} title="Remove" aria-label={`Remove ${l.name}`}
+                      <button onClick={() => dropLine(k)} title="Remove" aria-label={`Remove ${l.name}`}
                         style={{ border: 'none', background: 'none', color: T.redText, cursor: 'pointer', fontSize: 14, lineHeight: 1 }}>✕</button>
                     </td>
                   </tr>
@@ -257,7 +279,7 @@ export function AddPurchaseReturnModal({ T, suppliers, locations, onClose, onSav
       </div>
 
       <div style={{ fontSize: 11, color: T.inkMute, marginTop: 12, lineHeight: 1.55 }}>
-        Unit Price is the average landed cost these units were received at, and each unit is credited back to its own purchase — oldest first — so the amount recorded may differ slightly from this estimate when a product was bought at more than one price.
+        Goods go back in the unit they were bought in, so a product purchased by the Dozen is listed and returned in whole Dozens. Unit Price is the average landed cost those units were received at, and each one is credited back to its own purchase — oldest first — so the amount recorded may differ slightly from this estimate when a product was bought at more than one price.
         {taxPct > 0 && ' Purchase tax is recorded on the document and in the total, but the ledger reverses the goods cost only — exactly as receiving posted it.'}
       </div>
 

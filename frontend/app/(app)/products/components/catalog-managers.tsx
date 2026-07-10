@@ -16,9 +16,11 @@ export function UnitManager({ T, units, onClose, onChange, toast }: any) {
   async function add() {
     if (!name.trim()) return;
     if (asMultiple && (!baseId || !parseFloat(mult))) { toast('Pick a base unit and how many it equals.'); return; }
+    // Stock is counted in whole base units, so a multiple has to be a whole number.
+    if (asMultiple && !Number.isInteger(parseFloat(mult))) { toast('A unit must equal a whole number of its base unit.'); return; }
     setBusy(true);
     try {
-      await API.unit.create({ actual_name: name, short_name: short || name, allow_decimal: dec, base_unit_id: asMultiple ? baseId : null, base_multiplier: asMultiple ? parseFloat(mult) : null });
+      await API.unit.create({ actual_name: name, short_name: short || name, allow_decimal: dec, base_unit_id: asMultiple ? baseId : null, base_multiplier: asMultiple ? parseInt(mult, 10) : null });
       setName(''); setShort(''); setDec(false); setAsMultiple(false); setBaseId(''); setMult('');
       onChange(); toast('Unit added');
     }
@@ -50,7 +52,7 @@ export function UnitManager({ T, units, onClose, onChange, toast }: any) {
         {asMultiple && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10 }}>
             <span style={{ fontSize: 13, fontWeight: 700, color: T.ink, whiteSpace: 'nowrap' }}>1 {name.trim() || 'unit'} =</span>
-            <div style={{ width: 110 }}><TextField T={T} type="number" value={mult} onChange={setMult} placeholder="e.g. 12" /></div>
+            <div style={{ width: 110 }}><TextField T={T} type="number" min={1} step={1} value={mult} onChange={setMult} placeholder="e.g. 12" /></div>
             <span style={{ fontSize: 13, color: T.inkSub }}>×</span>
             <div style={{ flex: 1 }}>
               <SelectField T={T} value={baseId} options={['', ...units.filter((u: any) => !u.base_unit_id).map((u: any) => u.id)]} onChange={setBaseId}

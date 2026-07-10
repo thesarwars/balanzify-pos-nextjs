@@ -2300,14 +2300,18 @@ function adaptRealPurchaseReturn(r: any): any {
     by: (r.createdBy && r.createdBy.name) || '',
     // The list payload's items only carry their parent purchase (used above);
     // only the detail payload has products, so don't fabricate blank lines.
-    items: (Array.isArray(r.items) ? r.items : []).filter((it: any) => it.product).map((it: any) => ({
-      product_name: (it.product && it.product.name) || '',
-      sku: (it.product && it.product.sku) || '',
-      quantity: Number(it.quantity || 0),
-      unit_price: Number(it.unitPrice || 0),
-      total_price: Number(it.totalPrice || 0),
-      parent_ref: (it.purchaseOrderItem && it.purchaseOrderItem.purchaseOrder && it.purchaseOrderItem.purchaseOrder.poNumber) || '',
-    })),
+    items: (Array.isArray(r.items) ? r.items : []).filter((it: any) => it.product).map((it: any) => {
+      const u = it.purchaseOrderItem && it.purchaseOrderItem.unit;
+      return {
+        product_name: (it.product && it.product.name) || '',
+        sku: (it.product && it.product.sku) || '',
+        quantity: Number(it.quantity || 0),
+        unit_name: (u && (u.shortName || u.actualName)) || '',   // quantity is in purchase units
+        unit_price: Number(it.unitPrice || 0),
+        total_price: Number(it.totalPrice || 0),
+        parent_ref: (it.purchaseOrderItem && it.purchaseOrderItem.purchaseOrder && it.purchaseOrderItem.purchaseOrder.poNumber) || '',
+      };
+    }),
     _real: r,
   };
 }
@@ -3725,7 +3729,8 @@ const API: any = {
       return null;
     },
     // What this supplier delivered to this location that can still be returned.
-    // `unit_cost` is the LANDED cost — freight capitalised at receipt included.
+    // One row per product AND purchase unit: a product bought by the Dozen is
+    // returned in whole Dozens, so `returnable`/`unit_cost` are per purchase unit.
     async returnable(params: { supplier_id: string; location_id: string; search?: string }) {
       if (REAL_MODE) {
         const query: any = { supplier_id: params.supplier_id, location_id: params.location_id };
@@ -3733,6 +3738,9 @@ const API: any = {
         const res = await realReq('GET', '/purchase-returns/returnable', { query });
         return ((res && res.products) || []).map((p: any) => ({
           product_id: p.product_id, name: p.name, sku: p.sku || '',
+          unit_id: p.unit_id || null,
+          unit_name: p.unit_name || '',
+          base_multiplier: Number(p.base_multiplier || 1),
           returnable: Number(p.returnable || 0), unit_cost: Number(p.unit_cost || 0),
         }));
       }
@@ -3751,7 +3759,9 @@ const API: any = {
             document_url: body.document_url || undefined,
             document_key: body.document_key || undefined,
             tax_rate_id: body.tax_rate_id || undefined,
-            items: (body.items || []).map((i: any) => ({ product_id: i.product_id, quantity: Number(i.quantity) })),
+            // unit_id must survive as an explicit `null` (= the base unit); only a
+            // caller that never set it at all may leave it out for the server to infer.
+            items: (body.items || []).map((i: any) => ({ product_id: i.product_id, unit_id: i.unit_id, quantity: Number(i.quantity) })),
           },
         });
       }

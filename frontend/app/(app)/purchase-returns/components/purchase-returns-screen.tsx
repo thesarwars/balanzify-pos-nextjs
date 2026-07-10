@@ -169,7 +169,7 @@ function ReturnView({ T, row, onClose }: { T: any; row: any; onClose: () => void
                 <td style={{ ...td, fontWeight: 600, color: T.ink }}>{it.product_name}</td>
                 <td style={{ ...td, fontFamily: T.fMono, color: T.inkSub }}>{it.sku || '—'}</td>
                 <td style={{ ...td, fontFamily: T.fMono, color: T.inkSub }}>{it.parent_ref || '—'}</td>
-                <td style={{ ...td, textAlign: 'right', fontFamily: T.fMono, color: T.inkSub } as React.CSSProperties}>{it.quantity}</td>
+                <td style={{ ...td, textAlign: 'right', fontFamily: T.fMono, color: T.inkSub } as React.CSSProperties}>{it.quantity}{it.unit_name ? ` ${it.unit_name}` : ''}</td>
                 <td style={{ ...td, textAlign: 'right', fontFamily: T.fMono, color: T.inkSub } as React.CSSProperties}>{money(it.unit_price)}</td>
                 <td style={{ ...td, textAlign: 'right', fontFamily: T.fMono, fontWeight: 600, color: T.ink } as React.CSSProperties}>{money(it.total_price)}</td>
               </tr>

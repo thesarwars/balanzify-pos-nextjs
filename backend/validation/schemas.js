@@ -232,6 +232,10 @@ const PurchaseReturnCreateSchema = z.object({
   tax_rate_id: uuid.optional().nullable(),   // tax is computed server-side from the rate
   items: z.array(z.object({
     product_id: uuid,
+    // The unit the goods were PURCHASED in (e.g. Dozen). `quantity` counts whole
+    // purchase units of it. May be omitted only when this supplier sold the
+    // product here in exactly one unit; otherwise the server 400s as ambiguous.
+    unit_id: uuid.optional().nullable(),
     quantity: z.coerce.number().int().positive('Return quantity must be a positive whole number'),
   })).min(1, 'Add at least one product to return'),
 });
@@ -683,8 +687,11 @@ const UnitSchema = z.object({
   short_name:    shortStr(20),
   allow_decimal: z.coerce.boolean().default(false),
   // "Multiple of other unit": 1 of this unit = base_multiplier × base unit.
+  // Whole multiples only. Base stock is counted in integers (stock_levels.quantity
+  // and cost_layers.quantity_remaining are both Int), so "1 Roll = 2.5 m" cannot be
+  // held, received or returned without rounding — which would misstate the ledger.
   base_unit_id:    uuid.optional().nullable(),
-  base_multiplier: z.coerce.number().positive().max(1000000).optional().nullable(),
+  base_multiplier: z.coerce.number().int('A unit must be a whole multiple of its base unit').positive().max(1000000).optional().nullable(),
 });
 
 const BrandSchema = z.object({

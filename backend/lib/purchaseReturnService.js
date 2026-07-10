@@ -29,6 +29,14 @@ async function reverseLines(tx, { businessId, userId, entries }) {
     }
 
     const mult = multiplierOf(line.unit);
+    // A fractional multiple cannot be converted to the integer base units that
+    // stock and cost layers are counted in: Math.round() would relieve more (or
+    // less) inventory and AP than the goods are worth, and the shortfall would be
+    // stranded. New units are validated as whole multiples; refuse the rest rather
+    // than post a wrong journal.
+    if (!Number.isInteger(mult)) {
+      throw Object.assign(new Error(`"${line.unit ? line.unit.actualName : 'That unit'}" is defined as ${mult} of its base unit. Make it a whole multiple before returning goods bought in it.`), { statusCode: 400 });
+    }
     const baseQty = Math.round(qty * mult);
     if (baseQty <= 0) {
       throw Object.assign(new Error('Return quantity for that line is too small to convert into stock units.'), { statusCode: 400 });
@@ -106,13 +114,18 @@ async function reverseLines(tx, { businessId, userId, entries }) {
   return { subtotal: +subtotal.toFixed(2), returnItemsData };
 }
 
+/** Identifies one returnable bucket: a product AS PURCHASED in a given unit. */
+const groupKey = (productId, unitId) => `${productId}|${unitId || ''}`;
+
 /**
- * What can still be returned to `supplierId` at `locationId`, per product.
+ * What can still be returned to `supplierId` at `locationId`, per product AND
+ * purchase unit.
  *
- * Only lines purchased in BASE units are offered here: a line bought in a
- * multiple unit (e.g. Dozen) can only be returned in whole purchase units, which
- * a product-level quantity box cannot express. Those are returned from the
- * purchase itself, where the quantity is unambiguous.
+ * A line bought in a multiple unit (e.g. Dozen) is returned in whole Dozens —
+ * `purchase_order_items.returned_qty` and `purchase_return_items.quantity` are
+ * both integers counted in PURCHASE units. So a product bought as Pieces on one
+ * purchase and as Dozens on another yields two buckets, each with its own cap
+ * and its own per-purchase-unit cost. The caller picks a bucket, not a product.
  */
 async function returnableForSupplier(businessId, supplierId, locationId, search) {
   const items = await prisma.purchaseOrderItem.findMany({
@@ -128,12 +141,24 @@ async function returnableForSupplier(businessId, supplierId, locationId, search)
     orderBy: { purchaseOrder: { createdAt: 'asc' } },   // FIFO across purchases
   });
 
-  const usable = items.filter((i) => i.receivedQty - i.returnedQty > 0 && multiplierOf(i.unit) === 1);
+  // Lines of the same product on the same purchase share one cost-layer pool, and
+  // the loop below drains it as it goes. Take the LARGEST purchase unit first: 16
+  // pieces in the pool can yield "1 Dozen + 4 loose", but if the loose line drains
+  // 5 first, floor(11/12) = 0 and the Dozen becomes un-returnable. Ties on
+  // createdAt (same purchase) would otherwise be ordered arbitrarily by Postgres,
+  // so `id` pins it down and the endpoint stops being nondeterministic.
+  const usable = items
+    .filter((i) => i.receivedQty - i.returnedQty > 0)
+    .sort((a, b) =>
+      a.purchaseOrder.createdAt - b.purchaseOrder.createdAt
+      || multiplierOf(b.unit) - multiplierOf(a.unit)
+      || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   if (!usable.length) return [];
 
   // Remaining cost-layer stock per (purchase, product) — the real cap — along
   // with the weighted LANDED cost, which is what a return actually relieves.
   // (The PO line's unitPrice excludes freight capitalised at receipt.)
+  // Layers are counted in BASE units, so compare against qty × multiplier.
   const poIds = [...new Set(usable.map((i) => i.poId))];
   const layers = await prisma.$queryRaw`
     SELECT po_id, product_id,
@@ -146,36 +171,48 @@ async function returnableForSupplier(businessId, supplierId, locationId, search)
       AND po_id = ANY(${poIds}::uuid[])
     GROUP BY po_id, product_id
   `;
-  const pool = new Map();
-  const costOf = new Map();
+  const pool = new Map();    // (po, product) → base units still in stock
+  const costOf = new Map();  // (po, product) → weighted landed cost per BASE unit
   for (const l of layers) {
     const key = `${l.po_id}:${l.product_id}`;
     pool.set(key, Number(l.qty) || 0);
     costOf.set(key, parseFloat(l.unit_cost) || 0);
   }
 
-  const byProduct = new Map();
+  const byGroup = new Map();
   for (const it of usable) {
-    const key = `${it.poId}:${it.productId}`;
-    const left = pool.get(key) || 0;
-    if (left <= 0) continue;
-    const qty = Math.min(it.receivedQty - it.returnedQty, left);
-    if (qty <= 0) continue;
-    pool.set(key, left - qty);   // several lines of the same product share one pool
+    const poKey = `${it.poId}:${it.productId}`;
+    const leftBase = pool.get(poKey) || 0;
+    if (leftBase <= 0) continue;
 
-    const unitCost = costOf.get(key) || parseFloat(it.unitPrice);
-    const entry = byProduct.get(it.productId) || {
+    const mult = multiplierOf(it.unit);
+    // Only whole purchase units can be returned, so the layer cap floors.
+    const qty = Math.min(it.receivedQty - it.returnedQty, Math.floor(leftBase / mult));
+    if (qty <= 0) continue;
+    // Lines of the same product on the same purchase share one layer pool,
+    // whatever unit each was bought in.
+    pool.set(poKey, leftBase - qty * mult);
+
+    const baseCost = costOf.get(poKey) || parseFloat(it.unitPrice) / mult;
+    const unitCost = +(baseCost * mult).toFixed(4);   // per PURCHASE unit
+
+    const key = groupKey(it.productId, it.unitId);
+    const entry = byGroup.get(key) || {
       product_id: it.productId, name: it.product.name, sku: it.product.sku || '',
+      unit_id: it.unitId || null,
+      unit_name: it.unit ? it.unit.shortName || it.unit.actualName : '',
+      base_multiplier: mult,
       returnable: 0, cost_total: 0, candidates: [],
     };
     entry.returnable += qty;
     entry.cost_total += qty * unitCost;
     entry.candidates.push({ po_item_id: it.id, po_id: it.poId, po_number: it.purchaseOrder.poNumber, qty, unit_cost: unitCost });
-    byProduct.set(it.productId, entry);
+    byGroup.set(key, entry);
   }
 
-  return [...byProduct.values()].map((e) => ({
+  return [...byGroup.values()].map((e) => ({
     product_id: e.product_id, name: e.name, sku: e.sku,
+    unit_id: e.unit_id, unit_name: e.unit_name, base_multiplier: e.base_multiplier,
     returnable: e.returnable,
     unit_cost: e.returnable > 0 ? +(e.cost_total / e.returnable).toFixed(4) : 0,
     candidates: e.candidates,
@@ -183,23 +220,25 @@ async function returnableForSupplier(businessId, supplierId, locationId, search)
 }
 
 /**
- * Spread a requested quantity across a product's purchase lines, oldest first.
+ * Spread a requested quantity across a bucket's purchase lines, oldest first.
+ * `requested` and every candidate qty are in the bucket's PURCHASE unit.
  * Throws when the supplier simply doesn't have that much left to return.
  */
-function allocate(productName, requested, candidates) {
+function allocate(entry, requested) {
   let left = requested;
   const picked = [];
-  for (const c of candidates) {
+  for (const c of entry.candidates) {
     if (left <= 0) break;
     const take = Math.min(left, c.qty);
     picked.push({ po_item_id: c.po_item_id, qty: take });
     left -= take;
   }
   if (left > 0) {
-    const have = candidates.reduce((s, c) => s + c.qty, 0);
-    throw Object.assign(new Error(`Only ${have} unit(s) of "${productName}" can still be returned to this supplier at this location.`), { statusCode: 400 });
+    const have = entry.candidates.reduce((s, c) => s + c.qty, 0);
+    const unit = entry.unit_name ? ` ${entry.unit_name}` : ' unit(s)';
+    throw Object.assign(new Error(`Only ${have}${unit} of "${entry.name}" can still be returned to this supplier at this location.`), { statusCode: 400 });
   }
   return picked;
 }
 
-module.exports = { reverseLines, returnableForSupplier, allocate, multiplierOf };
+module.exports = { reverseLines, returnableForSupplier, allocate, multiplierOf, groupKey };

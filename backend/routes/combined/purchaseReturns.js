@@ -4,7 +4,7 @@ const prisma = require('../../lib/prisma');
 const { auth, requireRole } = require('../../middleware/auth');
 const { validate, validateQuery } = require('../../middleware/validate');
 const { PurchaseReturnCreateSchema } = require('../../validation/schemas');
-const { reverseLines, returnableForSupplier, allocate } = require('../../lib/purchaseReturnService');
+const { reverseLines, returnableForSupplier, allocate, groupKey } = require('../../lib/purchaseReturnService');
 const accounting = require('../../lib/accounting');
 
 // ── Purchase returns, across every purchase ──────────────────────────────────
@@ -101,21 +101,39 @@ purchaseReturnsRouter.post('/', auth, requireRole('owner', 'manager'), validate(
       taxRate = parseFloat(tr.rate);
     }
 
-    // Merge duplicate products, then resolve each to purchase lines.
-    const wanted = new Map();
-    for (const it of items) wanted.set(it.product_id, (wanted.get(it.product_id) || 0) + it.quantity);
-
     const returnable = await returnableForSupplier(businessId, supplier_id, location_id);
-    const byProduct = new Map(returnable.map((p) => [p.product_id, p]));
+    const byGroup = new Map(returnable.map((p) => [groupKey(p.product_id, p.unit_id), p]));
 
-    const picks = [];
-    for (const [productId, qty] of wanted) {
-      const entry = byProduct.get(productId);
-      if (!entry) {
+    // Resolve each requested item to a (product, purchase unit) bucket.
+    //   unit_id: "<uuid>"  → that purchase unit
+    //   unit_id: null      → the product's own base unit (an explicit choice)
+    //   unit_id absent     → infer it, but only while the product is unambiguous
+    // null and absent must stay distinguishable, or a product bought both loose
+    // and by the Dozen could never have its loose units returned.
+    const wanted = new Map();   // bucket key → qty, in that bucket's purchase unit
+    for (const it of items) {
+      const stated = Object.prototype.hasOwnProperty.call(it, 'unit_id');
+      let unitId = stated ? it.unit_id : null;
+      if (!stated) {
+        const forProduct = returnable.filter((p) => p.product_id === it.product_id);
+        if (!forProduct.length) {
+          return res.status(400).json({ title: 'That product has nothing left to return to this supplier at this location.', status: 400 });
+        }
+        if (forProduct.length > 1) {
+          const units = forProduct.map((p) => p.unit_name || 'base unit').join(', ');
+          return res.status(400).json({ title: `"${forProduct[0].name}" was purchased in more than one unit (${units}). Say which unit you are returning.`, status: 400 });
+        }
+        unitId = forProduct[0].unit_id;
+      }
+      const key = groupKey(it.product_id, unitId);
+      if (!byGroup.has(key)) {
         return res.status(400).json({ title: 'That product has nothing left to return to this supplier at this location.', status: 400 });
       }
-      picks.push(...allocate(entry.name, qty, entry.candidates));
+      wanted.set(key, (wanted.get(key) || 0) + it.quantity);   // merge duplicates
     }
+
+    const picks = [];
+    for (const [key, qty] of wanted) picks.push(...allocate(byGroup.get(key), qty));
 
     const poItems = await prisma.purchaseOrderItem.findMany({
       where: { id: { in: picks.map((p) => p.po_item_id) } },
@@ -182,7 +200,8 @@ purchaseReturnsRouter.get('/:id', auth, async (req, res, next) => {
       include: {
         ...LIST_INCLUDE,
         supplier: true,
-        items: { include: { product: { select: { name: true, sku: true } }, purchaseOrderItem: { select: { purchaseOrder: { select: { id: true, poNumber: true } } } } } },
+        // quantity is in PURCHASE units, so the unit has to travel with it.
+        items: { include: { product: { select: { name: true, sku: true } }, purchaseOrderItem: { select: { purchaseOrder: { select: { id: true, poNumber: true } }, unit: { select: { shortName: true, actualName: true } } } } } },
         purchaseOrder: { select: { id: true, poNumber: true, orderDate: true } },
       },
     });
