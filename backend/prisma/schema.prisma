@@ -510,6 +510,7 @@ model Business {
   suppliers          Supplier[]
   purchaseOrders     PurchaseOrder[]
   purchaseReturns    PurchaseReturn[]
+  barcodeSettings    BarcodeSetting[]
   goodsReceivedNotes GoodsReceivedNote[]
   customers          Customer[]
   shifts             Shift[]
@@ -1199,6 +1200,7 @@ model User {
   purchaseOrdersApproved   PurchaseOrder[]         @relation("po_approver")
   purchaseOrdersCreated    PurchaseOrder[]         @relation("po_creator")
   purchaseReturnsCreated   PurchaseReturn[]        @relation("pr_creator")
+  barcodeSettingsCreated   BarcodeSetting[]        @relation("barcode_setting_creator")
   goodsReceivedNotes       GoodsReceivedNote[]
   poPayments               POPayment[]
   shifts                   Shift[]
@@ -4471,4 +4473,36 @@ model MaterialRequisitionItem {
   requisition MaterialRequisition @relation(fields: [requisitionId], references: [id], onDelete: Cascade)
   @@index([requisitionId])
   @@map("material_requisition_items")
+}
+
+
+// A barcode sticker-sheet layout: the physical geometry the label printer uses.
+// All lengths are inches. Continuous-feed rolls have no sheet, so paper size and
+// stickers-per-sheet are optional for them (see BarcodeSettingSchema).
+model BarcodeSetting {
+  id               String   @id @default(uuid()) @db.Uuid
+  businessId       String   @map("business_id") @db.Uuid
+  name             String   @db.VarChar(120)
+  description      String?
+  isContinuous     Boolean  @default(false) @map("is_continuous")
+  topMargin        Decimal  @default(0) @map("top_margin") @db.Decimal(6, 3)
+  leftMargin       Decimal  @default(0) @map("left_margin") @db.Decimal(6, 3)
+  stickerWidth     Decimal  @map("sticker_width") @db.Decimal(6, 3)
+  stickerHeight    Decimal  @map("sticker_height") @db.Decimal(6, 3)
+  paperWidth       Decimal? @map("paper_width") @db.Decimal(6, 3)
+  paperHeight      Decimal? @map("paper_height") @db.Decimal(6, 3)
+  stickersInOneRow Int      @map("stickers_in_one_row")
+  rowDistance      Decimal  @default(0) @map("row_distance") @db.Decimal(6, 3)
+  colDistance      Decimal  @default(0) @map("col_distance") @db.Decimal(6, 3)
+  stickersPerSheet Int      @default(0) @map("stickers_per_sheet")
+  isDefault        Boolean  @default(false) @map("is_default")
+  createdById      String?  @map("created_by") @db.Uuid
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @default(now()) @updatedAt @map("updated_at")
+
+  business  Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  createdBy User?    @relation("barcode_setting_creator", fields: [createdById], references: [id])
+
+  @@index([businessId])
+  @@map("barcode_settings")
 }

@@ -2241,6 +2241,30 @@ function toRealPOBody(b: any): any {
   };
 }
 
+// ── Barcode sticker sheet (/api/v1/barcode-settings) → UI view-model ──────────
+function adaptRealBarcodeSetting(b: any): any {
+  if (!b) return b;
+  const num = (v: any) => (v == null ? null : Number(v));
+  return {
+    id: b.id,
+    name: b.name,
+    description: b.description || '',
+    is_continuous: !!b.isContinuous,
+    top_margin: Number(b.topMargin || 0),
+    left_margin: Number(b.leftMargin || 0),
+    sticker_width: Number(b.stickerWidth || 0),
+    sticker_height: Number(b.stickerHeight || 0),
+    paper_width: num(b.paperWidth),
+    paper_height: num(b.paperHeight),
+    stickers_in_one_row: Number(b.stickersInOneRow || 1),
+    row_distance: Number(b.rowDistance || 0),
+    col_distance: Number(b.colDistance || 0),
+    stickers_per_sheet: Number(b.stickersPerSheet || 0),
+    is_default: !!b.isDefault,
+    _real: b,
+  };
+}
+
 // ── Stock transfers (/api/v1/stock/transfers) → UI view-model ──────────────────
 function adaptRealTransfer(t: any): any {
   if (!t) return t;
@@ -3566,6 +3590,28 @@ const API: any = {
     },
     async removeProductImage(productId: string): Promise<any> {
       return realReq('DELETE', '/upload/product/' + productId + '/image');
+    },
+  },
+  // Barcode sticker sheet layouts (physical geometry for the label printer).
+  barcodeSetting: {
+    async list() {
+      if (REAL_MODE) {
+        const res = await realReq('GET', '/barcode-settings');
+        return ((res && res.settings) || []).map(adaptRealBarcodeSetting);
+      }
+      return [];
+    },
+    async create(body: any) {
+      if (REAL_MODE) return adaptRealBarcodeSetting(await realReq('POST', '/barcode-settings', { body }));
+      throw new ApiError(501, 'Barcode settings need the live backend.');
+    },
+    async update(id: any, body: any) {
+      if (REAL_MODE) return adaptRealBarcodeSetting(await realReq('PUT', '/barcode-settings/' + id, { body }));
+      throw new ApiError(501, 'Barcode settings need the live backend.');
+    },
+    async remove(id: any) {
+      if (REAL_MODE) return await realReq('DELETE', '/barcode-settings/' + id);
+      return null;
     },
   },
   discount: {

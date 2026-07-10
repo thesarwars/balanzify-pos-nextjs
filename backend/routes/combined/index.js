@@ -13,6 +13,7 @@ module.exports = {
   ...require('./expenses'),
   ...require('./customer-groups'),
   ...require('./catalog-refs'),
+  ...require('./barcodeSettings'),
   ...require('./discounts'),
   ...require('./invoicing'),
   ...require('./service-types'),

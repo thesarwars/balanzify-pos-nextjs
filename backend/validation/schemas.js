@@ -524,6 +524,40 @@ const SettingsSchema = z.object({
   settings: BusinessSettingsBag.optional(),
 });
 
+// ── Barcode sticker sheet ─────────────────────────────────────────────────────
+// Lengths are inches. A continuous-feed roll has no sheet, so paper size and
+// stickers-per-sheet only apply (and are only required) for sheet stock.
+const inches = z.coerce.number().min(0).max(100);
+const BarcodeSettingSchema = z.object({
+  name: shortStr(120),
+  description: optStr(500),
+  is_continuous: z.boolean().default(false),
+  top_margin: inches.default(0),
+  left_margin: inches.default(0),
+  sticker_width: inches.refine(v => v > 0, 'Sticker width must be greater than 0'),
+  sticker_height: inches.refine(v => v > 0, 'Sticker height must be greater than 0'),
+  paper_width: inches.optional().nullable(),
+  paper_height: inches.optional().nullable(),
+  stickers_in_one_row: z.coerce.number().int().min(1).max(20),
+  row_distance: inches.default(0),
+  col_distance: inches.default(0),
+  stickers_per_sheet: z.coerce.number().int().min(0).max(500).default(0),
+  is_default: z.boolean().default(false),
+}).superRefine((d, ctx) => {
+  if (d.is_continuous) return;   // rolls: no sheet geometry to validate
+  const need = (field, label) => ctx.addIssue({ code: z.ZodIssueCode.custom, path: [field], message: `${label} is required for sheet stock` });
+  if (!d.paper_width) need('paper_width', 'Paper width');
+  if (!d.paper_height) need('paper_height', 'Paper height');
+  if (!d.stickers_per_sheet) need('stickers_per_sheet', 'Stickers per sheet');
+  // The row must physically fit the paper.
+  if (d.paper_width && d.sticker_width) {
+    const used = d.left_margin + d.stickers_in_one_row * d.sticker_width + (d.stickers_in_one_row - 1) * d.col_distance;
+    if (used > d.paper_width + 0.001) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['stickers_in_one_row'], message: `${d.stickers_in_one_row} stickers of ${d.sticker_width}" need ${used.toFixed(2)}" but the paper is ${d.paper_width}" wide` });
+    }
+  }
+});
+
 const CategorySchema = z.object({
   name: shortStr(100),
   code: optStr(50),           // category / HSN code
@@ -907,6 +941,7 @@ module.exports = {
   SettingsSchema, CategorySchema, LocationSchema, CustomerSchema,
   ExpenseSchema, ExpenseCategorySchema,
   PaymentAccountSchema, AccountTransferSchema, AccountDepositSchema,
+  BarcodeSettingSchema,
   CustomerGroupSchema, UnitSchema, BrandSchema, VariationTemplateSchema, DiscountSchema,
   CommissionAgentSchema,
   PriceGroupSchema, InvoiceLayoutSchema, InvoiceSchemeSchema, CommissionSettingsSchema,

@@ -112,6 +112,7 @@ export const NAV = [
           { key: 'settings', activeId: 'settings', label: 'General', route: '/settings' },
           { key: 'business-settings', activeId: 'business-settings', label: 'Business Settings', route: '/business-settings' },
           { key: 'invoice-settings', activeId: 'invoice-settings', label: 'Invoice Settings', route: '/invoice-settings' },
+      { key: 'barcode-settings',  activeId: 'barcode-settings',  label: 'Barcode Settings', route: '/barcode-settings' },
         ]
       },
       { id: 'modules', label: 'Plan & Modules', icon: LuLayers },
