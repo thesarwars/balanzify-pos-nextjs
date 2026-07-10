@@ -45,6 +45,11 @@ export function BarcodeSettings({ T }: { T: any }) {
     stickers_per_sheet: String(r.stickers_per_sheet),
   });
 
+  async function restoreDefaults() {
+    try { const r: any = await API.barcodeSetting.restoreDefaults(); show((r && r.message) || 'Defaults restored'); reload(); }
+    catch (e: any) { show(e.message || 'Could not restore defaults.'); }
+  }
+
   async function doDelete(r: any) {
     try { await API.barcodeSetting.remove(r.id); setDelFor(null); show('Barcode setting deleted'); reload(); }
     catch (e: any) { show(e.message || 'Could not delete.'); }
@@ -57,7 +62,10 @@ export function BarcodeSettings({ T }: { T: any }) {
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: T.paperAlt }}>
       <Topbar T={T} title="Barcode Settings" subtitle={`${rows.length} sticker sheet${rows.length === 1 ? '' : 's'}`}
-        right={<Btn T={T} kind="accent" onClick={() => setEdit(blank())}>+ Add barcode sticker setting</Btn>} />
+        right={<>
+          <Btn T={T} kind="ghost" onClick={restoreDefaults}>↺ Restore defaults</Btn>
+          <Btn T={T} kind="accent" onClick={() => setEdit(blank())}>+ Add barcode sticker setting</Btn>
+        </>} />
       <div style={{ flex: 1, overflowY: 'auto', padding: 28 }}>
         <div style={{ maxWidth: 1000, margin: '0 auto' }}>
           <Panel T={T} pad={false}>
@@ -81,7 +89,12 @@ export function BarcodeSettings({ T }: { T: any }) {
               </tbody>
             </table>
             {loading && <div style={{ padding: 44, textAlign: 'center', fontFamily: T.fMono, fontSize: 12.5, color: T.inkSub } as React.CSSProperties}>Loading…</div>}
-            {!loading && !rows.length && <div style={{ padding: 44, textAlign: 'center', color: T.inkMute, fontSize: 13 } as React.CSSProperties}>No barcode settings yet. Add one to control the sticker sheet the label printer uses.</div>}
+            {!loading && !rows.length && (
+              <div style={{ padding: 44, textAlign: 'center', color: T.inkMute, fontSize: 13 } as React.CSSProperties}>
+                No barcode settings yet.
+                <div style={{ marginTop: 12 }}><Btn T={T} kind="accent" onClick={restoreDefaults}>↺ Restore the default sheets</Btn></div>
+              </div>
+            )}
           </Panel>
         </div>
       </div>

@@ -11,6 +11,7 @@ const { audit, security } = require('../lib/logger');
 const { trackLogin } = require('../lib/metrics');
 const { isLockedOut, recordFailedAttempt, recordSuccess } = require('../lib/bruteforce');
 const { seedPredefinedRoles } = require('../lib/permissions');
+const { seedBarcodeSettings } = require('../lib/barcodeSettingDefaults');
 const {
   RegisterSchema, LoginSchema, PinLoginSchema,
   ChangePasswordSchema, RefreshTokenSchema, VerifyMfaSchema,
@@ -58,6 +59,8 @@ router.post('/register', validate(RegisterSchema), async (req, res, next) => {
       await tx.location.create({
         data: { businessId: business.id, name: 'Main Store', type: 'store', isActive: true },
       });
+      // Seed the stock barcode sticker sheets so Print Labels works out of the box.
+      await seedBarcodeSettings(tx, business.id, user.id);
       // Seed the five predefined roles (Admin, Manager, Cashier, Accountant, Stock Keeper).
       await seedPredefinedRoles(tx, business.id);
       return { business, user };

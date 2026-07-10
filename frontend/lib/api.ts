@@ -3613,6 +3613,11 @@ const API: any = {
       if (REAL_MODE) return await realReq('DELETE', '/barcode-settings/' + id);
       return null;
     },
+    // Re-create any missing stock sheets (idempotent; never steals an existing default).
+    async restoreDefaults() {
+      if (REAL_MODE) return await realReq('POST', '/barcode-settings/restore-defaults');
+      return { created: 0 };
+    },
   },
   discount: {
     async list() {
