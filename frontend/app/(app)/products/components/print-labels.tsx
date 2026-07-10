@@ -45,11 +45,13 @@ function toLabelItems(p: any): any[] {
   return [{ key: String(p.id), name: p.name, sku: p.sku, price: Number(p.price || 0), qty: 1 }];
 }
 
-export function PrintLabels({ T, onClose, initial, products }: any) {
+// `initial` seeds one label per product; `initialItems` seeds pre-built rows so a
+// caller (e.g. a purchase) can set its own per-row quantities.
+export function PrintLabels({ T, onClose, initial, initialItems, products }: any) {
   const session = useSession();
   const bizName = (session && session.business_name) || BUSINESS.name;
   const catalog = (products && products.length) ? products : PRODUCTS;
-  const [items, setItems] = useStateLb(() => (initial || []).flatMap((p: any) => toLabelItems(p)));
+  const [items, setItems] = useStateLb(() => (initialItems && initialItems.length) ? initialItems : (initial || []).flatMap((p: any) => toLabelItems(p)));
   const [q, setQ] = useStateLb('');
   const [opts, setOpts] = useStateLb<any>({ business: true, name: true, price: true, sku: true });
   const [perRow, setPerRow] = useStateLb(3);

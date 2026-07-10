@@ -5,6 +5,7 @@ const { auth, requireRole } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { PurchaseOrderSchema, PurchaseOrderUpdateSchema, POStatusSchema, POPaymentSchema, PurchaseReturnSchema } = require('../validation/schemas');
 const accounting = require('../lib/accounting');
+const email = require('../lib/email');
 const router = express.Router();
 
 router.get('/', auth, async (req, res, next) => {
@@ -684,6 +685,51 @@ router.get('/:id/returns', auth, async (req, res, next) => {
       orderBy: { createdAt: 'desc' },
     });
     res.json(returns);
+  } catch (err) { next(err); }
+});
+
+// Email the supplier confirming which items were received, and log it against
+// the supplier's communication history.
+router.post('/:id/notify-received', auth, requireRole('owner', 'manager'), async (req, res, next) => {
+  try {
+    const po = await prisma.purchaseOrder.findUnique({
+      where: { id: req.params.id },
+      include: {
+        supplier: true,
+        business: { select: { name: true } },
+        items: { include: { product: { select: { name: true } } } },
+      },
+    });
+    if (!po || po.businessId !== req.user.business_id) return res.status(404).json({ title: 'Not found', status: 404 });
+    if (!po.supplier) return res.status(400).json({ title: 'This purchase has no supplier.', status: 400 });
+    if (!po.supplier.email) return res.status(400).json({ title: `${po.supplier.name} has no email address on file.`, status: 400 });
+
+    const received = po.items.filter((i) => i.receivedQty > 0);
+    if (!received.length) return res.status(400).json({ title: 'Nothing has been received on this purchase yet.', status: 400 });
+
+    try {
+      await email.sendGoodsReceivedNotice(po.supplier.email, {
+        supplierName: po.supplier.name,
+        businessName: (po.business && po.business.name) || 'Balanzify',
+        poNumber: po.poNumber || '',
+        receivedDate: new Date().toISOString().slice(0, 10),
+        lines: received.map((i) => ({ name: (i.product && i.product.name) || 'Item', qty: i.receivedQty })),
+      });
+    } catch (mailErr) {
+      return res.status(502).json({ title: 'Could not send the email — check the mail server configuration.', status: 502 });
+    }
+
+    await prisma.supplierCommunication.create({
+      data: {
+        supplierId: po.supplierId,
+        type: 'email',
+        subject: `Items received — PO ${po.poNumber || ''}`.trim(),
+        notes: `Sent to ${po.supplier.email} — ${received.length} line(s) received.`,
+        createdById: req.user.id,
+      },
+    }).catch(() => {}); // the email already went out; don't fail the request on the log
+
+    res.json({ message: `Notification sent to ${po.supplier.email}.` });
   } catch (err) { next(err); }
 });
 

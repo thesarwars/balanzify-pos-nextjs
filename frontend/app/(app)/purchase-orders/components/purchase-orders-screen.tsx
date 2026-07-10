@@ -13,6 +13,7 @@ import { Topbar } from '@/components/shell';
 import { API } from '@/lib/api';
 import { PRODUCTS } from '@/lib/data';
 import { ActionsMenu } from '../../products/components/list-table';
+import { PrintLabels } from '../../products/components/print-labels';
 
 const { useState: useStatePu, useEffect: useEffectPu } = React;
 
@@ -30,6 +31,8 @@ export function Purchases({ T }: { T: any }) {
   const [paymentsFor, setPaymentsFor] = useStatePu<any>(null);
   const [statusFor, setStatusFor] = useStatePu<any>(null);
   const [returnFor, setReturnFor] = useStatePu<any>(null);
+  const [labelsFor, setLabelsFor] = useStatePu<any>(null);
+  const [notifyFor, setNotifyFor] = useStatePu<any>(null);
   const [delFor, setDelFor] = useStatePu<any>(null);
   const [show, node] = useToast();
 
@@ -44,16 +47,22 @@ export function Purchases({ T }: { T: any }) {
       { sep: true },
       { label: '＋ Add payment', on: () => setPayFor(p) },
       { label: '◍ View payments', on: () => setPaymentsFor(p) },
+      { label: '▥ Labels', on: () => openFull(p.id, (full: any) => setLabelsFor(full)) },
       { sep: true },
       { label: '↻ Update status', on: () => setStatusFor(p) },
     ];
     if (received) items.push({ label: '↩ Purchase return', on: () => openFull(p.id, (full: any) => setReturnFor(full)) });
+    if (received) items.push({ label: '✉ Items received notification', on: () => setNotifyFor(p) });
     if (!received) items.push({ label: '🗑 Delete', on: () => setDelFor(p), danger: true });
     return items;
   };
   async function doDelete(p: any) {
     try { await API.purchaseOrder.remove(p.id); setDelFor(null); show('Purchase cancelled'); reload(); }
     catch (e: any) { show(e.message || 'Could not cancel the purchase.'); }
+  }
+  async function doNotify(p: any) {
+    try { const r: any = await API.purchaseOrder.notifyReceived(p.id); setNotifyFor(null); show((r && r.message) || 'Notification sent'); }
+    catch (e: any) { setNotifyFor(null); show(e.message || 'Could not send the notification.'); }
   }
 
   const reload = React.useCallback(() => {
@@ -117,6 +126,10 @@ export function Purchases({ T }: { T: any }) {
       {paymentsFor && <PaymentsModal T={T} purchase={paymentsFor} onClose={() => setPaymentsFor(null)} onAddPayment={() => { const p = paymentsFor; setPaymentsFor(null); setPayFor(p); }} />}
       {statusFor && <UpdateStatusModal T={T} purchase={statusFor} onClose={() => setStatusFor(null)} onSaved={(msg: string) => { setStatusFor(null); show(msg || 'Status updated'); reload(); }} />}
       {returnFor && <PurchaseReturnModal T={T} purchase={returnFor} onClose={() => setReturnFor(null)} onSaved={() => { setReturnFor(null); show('Purchase return recorded · stock updated'); reload(); }} />}
+      {labelsFor && <PurchaseLabels T={T} purchase={labelsFor} onClose={() => setLabelsFor(null)} />}
+      {notifyFor && <ConfirmModal T={T} title="Items received notification" confirmKind="accent"
+        body={`Email ${notifyFor.supplier_name} a confirmation of the items received on ${notifyFor.ref_no}?`}
+        confirmLabel="Send notification" onConfirm={() => doNotify(notifyFor)} onClose={() => setNotifyFor(null)} />}
       {delFor && <ConfirmModal T={T} title="Cancel purchase?" body={`This cancels purchase ${delFor.ref_no}. This can't be undone.`} confirmLabel="Cancel purchase" onConfirm={() => doDelete(delFor)} onClose={() => setDelFor(null)} />}
       {node}
     </div>
@@ -964,14 +977,44 @@ function UpdateStatusModal({ T, purchase, onClose, onSaved }: { T: any; purchase
 }
 
 // ── Generic confirm ─────────────────────────────────────────────────
-function ConfirmModal({ T, title, body, confirmLabel, onConfirm, onClose }: { T: any; title: any; body: any; confirmLabel: any; onConfirm: () => void; onClose: () => void }) {
+function ConfirmModal({ T, title, body, confirmLabel, confirmKind, onConfirm, onClose }: { T: any; title: any; body: any; confirmLabel: any; confirmKind?: any; onConfirm: () => void; onClose: () => void }) {
   const [busy, setBusy] = useStatePu(false);
   return (
     <Modal T={T} title={title} width={420} onClose={onClose}
-      footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Close</Btn><Btn T={T} kind="danger" onClick={async () => { setBusy(true); await onConfirm(); }} disabled={busy}>{busy ? '…' : confirmLabel}</Btn></>}>
+      footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Close</Btn><Btn T={T} kind={confirmKind || 'danger'} onClick={async () => { setBusy(true); await onConfirm(); }} disabled={busy}>{busy ? '…' : confirmLabel}</Btn></>}>
       <div style={{ fontSize: 13.5, color: T.inkMid, lineHeight: 1.6 }}>{body}</div>
     </Modal>
   );
+}
+
+// ── Labels for a purchase ───────────────────────────────────────────
+// Seeds the shared label printer with this purchase's products, one label per
+// unit received (falling back to the ordered qty for a not-yet-received PO).
+function PurchaseLabels({ T, purchase, onClose }: { T: any; purchase: any; onClose: () => void }) {
+  const [catalog, setCatalog] = useStatePu<any[]>([]);
+  const [ready, setReady] = useStatePu(false);
+  useEffectPu(() => {
+    if (API.config?.isReal?.()) API.product.list({ per_page: 200 }).then((r: any) => setCatalog(r.items || [])).catch(() => setCatalog([])).finally(() => setReady(true));
+    else { setCatalog(PRODUCTS); setReady(true); }
+  }, []);
+
+  if (!ready) {
+    return <Modal T={T} title="Print labels" subtitle={purchase.ref_no} width={420} onClose={onClose} footer={null}>
+      <div style={{ padding: 20, textAlign: 'center', fontFamily: T.fMono, fontSize: 12.5, color: T.inkSub } as React.CSSProperties}>Loading products…</div>
+    </Modal>;
+  }
+
+  const byId = new Map(catalog.map((p: any) => [String(p.id), p]));
+  const initialItems = (purchase.lines || []).map((l: any) => {
+    const prod: any = byId.get(String(l.product_id));
+    const qty = Number(l.received_qty) > 0 ? Number(l.received_qty) : Number(l.qty) || 1;
+    const price = prod ? Number(prod.price || 0) : Number(l.selling_price || 0);
+    const sku = (prod && prod.sku) || l.sku || '';
+    if (!sku && !l.product_name) return null;
+    return { key: String(l.product_id), name: (prod && prod.name) || l.product_name, sku, price, qty: Math.max(1, qty) };
+  }).filter(Boolean);
+
+  return <PrintLabels T={T} products={catalog} initialItems={initialItems} onClose={onClose} />;
 }
 
 // ── Purchase return ─────────────────────────────────────────────────

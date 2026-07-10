@@ -148,6 +148,31 @@ const sendLowStockAlert = async (to, name, products, businessName) => {
   });
 };
 
+// ── Items received notification (to the supplier) ─────────────────────────────
+const sendGoodsReceivedNotice = async (to, { supplierName, businessName, poNumber, receivedDate, lines = [] }) => {
+  const rows = lines.map(l =>
+    `<tr><td>${l.name}</td><td>${l.qty}</td></tr>`
+  ).join('');
+
+  const html = baseTemplate(`
+    <p>Hi ${supplierName || 'there'},</p>
+    <p><strong>${businessName}</strong> has received the goods for purchase order <strong>${poNumber}</strong>${receivedDate ? ` on ${receivedDate}` : ''}.</p>
+    <table class="receipt">
+      <tr><td><strong>Item</strong></td><td><strong>Qty received</strong></td></tr>
+      ${rows}
+    </table>
+    <hr class="divider">
+    <p>Please treat this as confirmation of delivery. Reply to this email if anything looks wrong.</p>
+  `, businessName);
+
+  await getTransport().sendMail({
+    from: FROM, to,
+    subject: `Items received — PO ${poNumber}`,
+    html,
+  });
+  logger.info('email_sent', { type: 'goods_received', to, po: poNumber });
+};
+
 // ── Verify transport on startup ───────────────────────────────────────────────
 const verifyEmailConfig = async () => {
   if (!process.env.SMTP_USER && !process.env.AWS_SES_SMTP_USER) {
@@ -164,4 +189,4 @@ const verifyEmailConfig = async () => {
   }
 };
 
-module.exports = { sendPasswordReset, sendReceipt, sendLowStockAlert, verifyEmailConfig };
+module.exports = { sendPasswordReset, sendReceipt, sendLowStockAlert, sendGoodsReceivedNotice, verifyEmailConfig };

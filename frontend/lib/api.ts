@@ -4169,6 +4169,11 @@ const API: any = {
       if (REAL_MODE) return await realReq('GET', '/purchase-orders/' + id + '/returns');
       return [];
     },
+    // Email the supplier confirming which items were received.
+    async notifyReceived(id: any) {
+      if (REAL_MODE) return await realReq('POST', '/purchase-orders/' + id + '/notify-received');
+      return { message: 'Notification sent.' };
+    },
     async remove(id: any) {
       if (REAL_MODE) return await realReq('DELETE', '/purchase-orders/' + id);
       return (await transport('DELETE', '/connector/api/purchase-order/' + id)).data;
