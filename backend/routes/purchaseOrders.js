@@ -7,6 +7,7 @@ const { PurchaseOrderSchema, PurchaseOrderUpdateSchema, POStatusSchema, POPaymen
 const accounting = require('../lib/accounting');
 const email = require('../lib/email');
 const { assertWithinEditWindow, invalidateBusinessSettings } = require('../lib/businessSettings');
+const { reverseLines } = require('../lib/purchaseReturnService');
 const router = express.Router();
 
 router.get('/', auth, async (req, res, next) => {
@@ -528,16 +529,14 @@ router.post('/:id/payment', auth, requireRole('owner', 'manager'), validate(POPa
 router.post('/:id/returns', auth, requireRole('owner', 'manager'), validate(PurchaseReturnSchema), async (req, res, next) => {
   try {
     const { reference, notes, return_date, items, document_url, document_key } = req.body;
-    const po = await prisma.purchaseOrder.findUnique({ where: { id: req.params.id }, include: { items: true } });
+    const po = await prisma.purchaseOrder.findUnique({
+      where: { id: req.params.id },
+      include: { items: { include: { unit: true } } },
+    });
     if (!po || po.businessId !== req.user.business_id) return res.status(404).json({ title: 'Not found', status: 404 });
     if (!po.locationId) return res.status(400).json({ title: 'This purchase has no location, so its stock cannot be returned.', status: 400 });
 
     const itemsById = new Map(po.items.map((i) => [i.id, i]));
-
-    // Unit multipliers (a line purchased in Dozens stores stock in base units).
-    const lineUnitIds = [...new Set(po.items.map((i) => i.unitId).filter(Boolean))];
-    const lineUnits = lineUnitIds.length ? await prisma.unit.findMany({ where: { id: { in: lineUnitIds } } }) : [];
-    const multiplierOf = (unitId) => { const u = lineUnits.find((x) => x.id === unitId); return u && u.baseUnitId && u.baseMultiplier ? Number(u.baseMultiplier) : 1; };
 
     // Aggregate duplicate lines, then fast-fail against what's still returnable
     // (the authoritative cap is a guarded, row-locking UPDATE inside the tx).
@@ -547,100 +546,22 @@ router.post('/:id/returns', auth, requireRole('owner', 'manager'), validate(Purc
       if (!line || line.poId !== po.id) return res.status(400).json({ title: `Line ${it.po_item_id} is not part of this purchase.`, status: 400 });
       byLine.set(it.po_item_id, (byLine.get(it.po_item_id) || 0) + it.quantity);
     }
-    const prepared = [];
+    const entries = [];
     for (const [poItemId, qty] of byLine) {
       const line = itemsById.get(poItemId);
-      const returnable = line.receivedQty - line.returnedQty; // purchase units
+      const returnable = line.receivedQty - line.returnedQty;
       if (qty > returnable) {
         return res.status(400).json({ title: `Cannot return ${qty}; only ${returnable} returnable on that line (received ${line.receivedQty}, already returned ${line.returnedQty}).`, status: 400 });
       }
-      prepared.push({ line, qty });
+      entries.push({ line: { ...line, purchaseOrder: { locationId: po.locationId } }, qty });
     }
 
     const created = await prisma.$transaction(async (tx) => {
-      const locId = po.locationId;
-      let subtotal = 0;
-      const returnItemsData = [];
+      const { subtotal, returnItemsData } = await reverseLines(tx, { businessId: req.user.business_id, userId: req.user.id, entries });
 
-      for (const { line, qty } of prepared) {
-        const mult = multiplierOf(line.unitId);
-        const baseQty = Math.round(qty * mult);
-        if (baseQty <= 0) {
-          throw Object.assign(new Error('Return quantity for that line is too small to convert into stock units.'), { statusCode: 400 });
-        }
-
-        // Enforce the returnable cap ATOMICALLY. This guarded, row-locking update
-        // serialises concurrent returns of the same line and rejects over-returns
-        // (the pre-tx check above is only a friendly fast-fail).
-        const capped = await tx.$executeRaw`
-          UPDATE purchase_order_items SET returned_qty = returned_qty + ${qty}
-          WHERE id = ${line.id}::uuid AND received_qty - returned_qty >= ${qty}
-        `;
-        if (capped === 0) {
-          throw Object.assign(new Error('That quantity is no longer returnable — the line was modified concurrently.'), { statusCode: 409 });
-        }
-
-        // Lock this PO's own cost layers (FOR UPDATE) so a concurrent sale or return
-        // can't consume them from under us, then consume FEFO at their landed cost.
-        const layers = await tx.$queryRaw`
-          SELECT id, quantity_remaining, unit_cost FROM cost_layers
-          WHERE po_id = ${po.id}::uuid AND product_id = ${line.productId}::uuid AND location_id = ${locId}::uuid AND quantity_remaining > 0
-          ORDER BY expiry_date ASC NULLS LAST, received_at ASC
-          FOR UPDATE
-        `;
-        const available = layers.reduce((s, l) => s + Number(l.quantity_remaining), 0);
-        if (available < baseQty) {
-          throw Object.assign(new Error(`Only ${available} unit(s) from this purchase remain in stock — cannot return ${baseQty}.`), { statusCode: 400 });
-        }
-        let toPull = baseQty; let lineCost = 0;
-        for (const layer of layers) {
-          if (toPull <= 0) break;
-          const take = Math.min(toPull, Number(layer.quantity_remaining));
-          const dec = await tx.$executeRaw`UPDATE cost_layers SET quantity_remaining = quantity_remaining - ${take} WHERE id = ${layer.id}::uuid AND quantity_remaining >= ${take}`;
-          if (dec === 0) {
-            throw Object.assign(new Error('A cost layer changed during the return — please retry.'), { statusCode: 409 });
-          }
-          lineCost += take * parseFloat(layer.unit_cost);
-          toPull -= take;
-        }
-        lineCost = +lineCost.toFixed(2);
-        subtotal += lineCost;
-
-        // Reduce on-hand stock (guarded so it can never go negative under a race).
-        const affected = await tx.$executeRaw`
-          UPDATE stock_levels SET quantity = quantity - ${baseQty}, updated_at = NOW()
-          WHERE product_id = ${line.productId}::uuid AND location_id = ${locId}::uuid AND quantity >= ${baseQty}
-        `;
-        if (affected === 0) {
-          throw Object.assign(new Error(`Not enough stock on hand to return ${baseQty} unit(s).`), { statusCode: 400 });
-        }
-
-        // Outbound stock movement.
-        await tx.stockMovement.create({
-          data: { businessId: req.user.business_id, productId: line.productId, locationId: locId, type: 'return', quantity: -baseQty, referenceType: 'purchase_return', createdById: req.user.id },
-        });
-
-        // Reduce matching stock batches FEFO across as many as needed, so
-        // Σ batch quantity stays in step with stock_levels.
-        let batchToPull = baseQty;
-        const batches = await tx.stockBatch.findMany({ where: { productId: line.productId, locationId: locId, quantity: { gt: 0 } }, orderBy: [{ expiryDate: 'asc' }, { createdAt: 'asc' }] });
-        for (const b of batches) {
-          if (batchToPull <= 0) break;
-          const take = Math.min(batchToPull, b.quantity);
-          await tx.stockBatch.update({ where: { id: b.id }, data: { quantity: { decrement: take } } });
-          batchToPull -= take;
-        }
-
-        returnItemsData.push({
-          purchaseOrderItemId: line.id, productId: line.productId, variantId: line.variantId || null,
-          quantity: qty, unitPrice: qty > 0 ? +(lineCost / qty).toFixed(4) : 0, totalPrice: lineCost,
-        });
-      }
-
-      subtotal = +subtotal.toFixed(2);
       const ret = await tx.purchaseReturn.create({
         data: {
-          businessId: req.user.business_id, poId: po.id, supplierId: po.supplierId, locationId: locId,
+          businessId: req.user.business_id, poId: po.id, supplierId: po.supplierId, locationId: po.locationId,
           returnNumber: `PRET-${Date.now()}`, reference: reference || null,
           returnDate: return_date ? new Date(return_date) : new Date(),
           subtotal, taxAmount: 0, totalAmount: subtotal, notes: notes || null,
@@ -651,12 +572,9 @@ router.post('/:id/returns', auth, requireRole('owner', 'manager'), validate(Purc
         include: { items: true },
       });
 
-      // Reduce what we owe the supplier by the returned cost basis.
       if (po.supplierId && subtotal > 0) {
         await tx.supplier.update({ where: { id: po.supplierId }, data: { outstandingBalance: { decrement: subtotal } } });
       }
-
-      // GL: the exact reverse of the receipt — Dr AP / Cr Inventory at cost.
       if (subtotal > 0) {
         await accounting.postJournal(tx, {
           businessId: req.user.business_id,
@@ -668,7 +586,6 @@ router.post('/:id/returns', auth, requireRole('owner', 'manager'), validate(Purc
           ],
         });
       }
-
       return ret;
     });
 

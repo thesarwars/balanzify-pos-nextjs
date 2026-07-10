@@ -2269,13 +2269,26 @@ function adaptRealTaxGroup(g: any): any {
 // ── Purchase returns (/api/v1/purchase-returns) → UI view-model ──────────────
 function adaptRealPurchaseReturn(r: any): any {
   if (!r) return r;
+
+  // A return that spans several purchases has no header parent, so name the
+  // parents from the lines — each line carries the purchase it was bought on.
+  const lineParents: string[] = [];
+  for (const it of Array.isArray(r.items) ? r.items : []) {
+    const po = it.purchaseOrderItem && it.purchaseOrderItem.purchaseOrder;
+    if (po && po.poNumber && !lineParents.includes(po.poNumber)) lineParents.push(po.poNumber);
+  }
+  const headerRef = (r.purchaseOrder && r.purchaseOrder.poNumber) || '';
+  const parentRef = headerRef
+    || (lineParents.length > 1 ? `${lineParents[0]} +${lineParents.length - 1} more` : lineParents[0] || '');
+
   return {
     id: r.id,
     number: r.returnNumber || '',
     reference: r.reference || '',
     date: String(r.returnDate || r.createdAt || '').slice(0, 10),
     parent_po_id: r.poId || (r.purchaseOrder && r.purchaseOrder.id) || '',
-    parent_ref: (r.purchaseOrder && r.purchaseOrder.poNumber) || '',
+    parent_ref: parentRef,
+    parent_refs: lineParents,
     supplier_name: (r.supplier && r.supplier.name) || '—',
     location_name: (r.location && r.location.name) || '—',
     total: Number(r.totalAmount || 0),
@@ -2285,13 +2298,16 @@ function adaptRealPurchaseReturn(r: any): any {
     document_url: r.documentUrl || '',
     item_count: (r._count && r._count.items) != null ? r._count.items : (Array.isArray(r.items) ? r.items.length : 0),
     by: (r.createdBy && r.createdBy.name) || '',
-    items: Array.isArray(r.items) ? r.items.map((it: any) => ({
+    // The list payload's items only carry their parent purchase (used above);
+    // only the detail payload has products, so don't fabricate blank lines.
+    items: (Array.isArray(r.items) ? r.items : []).filter((it: any) => it.product).map((it: any) => ({
       product_name: (it.product && it.product.name) || '',
       sku: (it.product && it.product.sku) || '',
       quantity: Number(it.quantity || 0),
       unit_price: Number(it.unitPrice || 0),
       total_price: Number(it.totalPrice || 0),
-    })) : [],
+      parent_ref: (it.purchaseOrderItem && it.purchaseOrderItem.purchaseOrder && it.purchaseOrderItem.purchaseOrder.poNumber) || '',
+    })),
     _real: r,
   };
 }
@@ -3691,8 +3707,9 @@ const API: any = {
       return realReq('DELETE', '/upload/product/' + productId + '/image');
     },
   },
-  // Purchase returns across every purchase. A return is always CREATED against
-  // its parent purchase (that pins the cost basis) — see purchaseOrder.createReturn.
+  // Purchase returns across every purchase. Each returned unit is still pinned to
+  // the purchase LINE it came from (that fixes the cost basis), but the server
+  // does that allocation, so one return may span several purchases.
   purchaseReturn: {
     async list(params: any = {}) {
       if (REAL_MODE) {
@@ -3706,6 +3723,39 @@ const API: any = {
     async get(id: any) {
       if (REAL_MODE) return adaptRealPurchaseReturn(await realReq('GET', '/purchase-returns/' + id));
       return null;
+    },
+    // What this supplier delivered to this location that can still be returned.
+    // `unit_cost` is the LANDED cost — freight capitalised at receipt included.
+    async returnable(params: { supplier_id: string; location_id: string; search?: string }) {
+      if (REAL_MODE) {
+        const query: any = { supplier_id: params.supplier_id, location_id: params.location_id };
+        if (params.search) query.search = params.search;
+        const res = await realReq('GET', '/purchase-returns/returnable', { query });
+        return ((res && res.products) || []).map((p: any) => ({
+          product_id: p.product_id, name: p.name, sku: p.sku || '',
+          returnable: Number(p.returnable || 0), unit_cost: Number(p.unit_cost || 0),
+        }));
+      }
+      return [];
+    },
+    // Standalone debit note. Tax is computed server-side from tax_rate_id.
+    async create(body: any) {
+      if (REAL_MODE) {
+        return await realReq('POST', '/purchase-returns', {
+          body: {
+            supplier_id: body.supplier_id,
+            location_id: body.location_id,
+            reference: body.reference || undefined,
+            return_date: body.return_date || undefined,
+            notes: body.notes || undefined,
+            document_url: body.document_url || undefined,
+            document_key: body.document_key || undefined,
+            tax_rate_id: body.tax_rate_id || undefined,
+            items: (body.items || []).map((i: any) => ({ product_id: i.product_id, quantity: Number(i.quantity) })),
+          },
+        });
+      }
+      throw new ApiError(501, 'Purchase returns need the live backend.');
     },
   },
   // Thermal receipt printers. charactersPerLine drives the ESC/POS layout.

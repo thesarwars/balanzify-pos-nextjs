@@ -1,6 +1,7 @@
 'use client';
 import React from 'react';
 import { money } from '@/lib/theme';
+import { todayLocal } from '@/lib/business-settings';
 import { Btn, Modal, Field, TextField } from '@/components/kit';
 import { API } from '@/lib/api';
 import { miniNum } from './bits';
@@ -16,7 +17,7 @@ export function PurchaseReturnModal({ T, purchase, onClose, onSaved }: { T: any;
   const remainingOf = (l: any) => Number(l.received_qty || 0) - Number(l.returned_qty || 0);
   const returnable = (p.lines || []).filter((l: any) => remainingOf(l) > 0);
   const [reference, setReference] = useStatePu('');
-  const [date, setDate] = useStatePu(new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useStatePu(todayLocal());
   const [doc, setDoc] = useStatePu<any>(null);        // { url, key, name }
   const [docBusy, setDocBusy] = useStatePu(false);
   const docRef = React.useRef<any>(null);

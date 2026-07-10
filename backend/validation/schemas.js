@@ -218,6 +218,24 @@ const POPaymentSchema = z.object({
   paid_on: isoDate,                       // when the payment was actually made (defaults to now)
 });
 
+// Standalone purchase return: pick supplier + location + products. The server
+// resolves each product to the supplier's purchase lines (oldest first) so every
+// returned unit still relieves the exact cost layer it was received on.
+const PurchaseReturnCreateSchema = z.object({
+  supplier_id: uuid,
+  location_id: uuid,
+  reference: optStr(100),
+  notes: optStr(500),
+  return_date: isoDate,
+  document_url: optStr(500),
+  document_key: optStr(255),
+  tax_rate_id: uuid.optional().nullable(),   // tax is computed server-side from the rate
+  items: z.array(z.object({
+    product_id: uuid,
+    quantity: z.coerce.number().int().positive('Return quantity must be a positive whole number'),
+  })).min(1, 'Add at least one product to return'),
+});
+
 // Return goods to a supplier against a received purchase.
 const PurchaseReturnSchema = z.object({
   reference: optStr(100),
@@ -962,7 +980,7 @@ module.exports = {
   RefreshTokenSchema, VerifyMfaSchema,
   ProductSchema, SaleSchema, SaleItemSchema, RefundSchema,
   ShiftOpenSchema, ShiftCloseSchema, HoldSaleSchema,
-  PurchaseOrderSchema, PurchaseOrderUpdateSchema, POItemSchema, POStatusSchema, POPaymentSchema, PurchaseReturnSchema,
+  PurchaseOrderSchema, PurchaseOrderUpdateSchema, POItemSchema, POStatusSchema, POPaymentSchema, PurchaseReturnSchema, PurchaseReturnCreateSchema,
   SupplierSchema, SupplierCommSchema, SupplierProductSchema,
   AdjustmentSchema, TransferSchema,
   TaskSchema, CommentSchema, ProjectSchema, MilestoneSchema,

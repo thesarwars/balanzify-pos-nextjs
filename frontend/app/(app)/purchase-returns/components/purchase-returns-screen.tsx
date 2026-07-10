@@ -2,10 +2,10 @@
 // ─────────────────────────────────────────────────────────────────
 // Purchase Returns — every return, across every purchase.
 //
-// A return is always created against its PARENT PURCHASE: that is what
-// pins the cost basis (which cost layer to relieve) and what the stock
-// cap is measured against. So "Add" picks the purchase first, then
-// opens the same return form used from the purchase's row action.
+// You record a return against a supplier and a location, not against one
+// purchase. The cost basis still comes from a purchase LINE — the server
+// charges each returned unit back to the line it arrived on, oldest first —
+// so a return may span several purchases, and then has no single parent.
 // ─────────────────────────────────────────────────────────────────
 import React from 'react';
 import { Btn, Panel, Modal, Field, TextField, SelectField, useToast } from '@/components/kit';
@@ -13,7 +13,7 @@ import { Topbar } from '@/components/shell';
 import { money, money0 } from '@/lib/theme';
 import { formatDate } from '@/lib/business-settings';
 import { API } from '@/lib/api';
-import { PurchaseReturnModal } from '../../purchase-orders/components/purchase-return';
+import { AddPurchaseReturnModal } from './add-purchase-return';
 
 const { useState, useEffect, useCallback } = React;
 
@@ -25,19 +25,27 @@ export function PurchaseReturns({ T }: { T: any }) {
   const [locs, setLocs] = useState<any[]>([]);
   const [filters, setFilters] = useState<any>({ supplier_id: '', location_id: '', from: '', to: '', search: '' });
   const [showFilters, setShowFilters] = useState(false);
-  const [picking, setPicking] = useState(false);       // choose the parent purchase
-  const [returnFor, setReturnFor] = useState<any>(null); // full PO
+  const [adding, setAdding] = useState(false);
   const [view, setView] = useState<any>(null);
   const [show, node] = useToast();
 
-  const reload = useCallback(() => {
+  // Bumped to force a reload after a return is recorded, without touching filters.
+  const [nonce, setNonce] = useState(0);
+  const reload = useCallback(() => setNonce((n) => n + 1), []);
+
+  // Debounced, and the last response to arrive is ignored unless it is the last
+  // one asked for — otherwise typing "abc" can leave the grid showing "a".
+  useEffect(() => {
+    let dead = false;
     setLoading(true);
-    API.purchaseReturn.list(filters)
-      .then((r: any) => { setRows(r.rows || []); setTotals(r.totals || { count: 0, grand_total: 0 }); })
-      .catch(() => { setRows([]); setTotals({ count: 0, grand_total: 0 }); })
-      .finally(() => setLoading(false));
-  }, [filters]);
-  useEffect(() => { reload(); }, [reload]);
+    const t = setTimeout(() => {
+      API.purchaseReturn.list(filters)
+        .then((r: any) => { if (dead) return; setRows(r.rows || []); setTotals(r.totals || { count: 0, grand_total: 0 }); })
+        .catch(() => { if (dead) return; setRows([]); setTotals({ count: 0, grand_total: 0 }); })
+        .finally(() => { if (!dead) setLoading(false); });
+    }, 250);
+    return () => { dead = true; clearTimeout(t); };
+  }, [filters, nonce]);
   useEffect(() => {
     API.contact.list({ type: 'supplier' }).then(setSuppliers).catch(() => {});
     API.location.list().then(setLocs).catch(() => {});
@@ -53,7 +61,7 @@ export function PurchaseReturns({ T }: { T: any }) {
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: T.paperAlt }}>
       <Topbar T={T} title="Purchase Returns" subtitle={`${totals.count} return${totals.count === 1 ? '' : 's'} · ${money0(totals.grand_total)} returned`}
-        right={<Btn T={T} kind="accent" onClick={() => setPicking(true)}>+ Add</Btn>} />
+        right={<Btn T={T} kind="accent" onClick={() => setAdding(true)}>+ Add</Btn>} />
 
       <div style={{ flex: 1, overflowY: 'auto', padding: 28 }}>
         <div style={{ maxWidth: 1180, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -119,69 +127,18 @@ export function PurchaseReturns({ T }: { T: any }) {
             {loading && <div style={{ padding: 44, textAlign: 'center', fontFamily: T.fMono, fontSize: 12.5, color: T.inkSub } as React.CSSProperties}>Loading…</div>}
             {!loading && !rows.length && (
               <div style={{ padding: 44, textAlign: 'center', color: T.inkMute, fontSize: 13, lineHeight: 1.6 } as React.CSSProperties}>
-                {active ? 'No purchase returns match these filters.' : 'No purchase returns yet. A return is recorded against a received purchase.'}
+                {active ? 'No purchase returns match these filters.' : 'No purchase returns yet. Add one to send received goods back to a supplier.'}
               </div>
             )}
           </Panel>
         </div>
       </div>
 
-      {picking && <PickPurchase T={T} onClose={() => setPicking(false)} onPicked={(full: any) => { setPicking(false); setReturnFor(full); }} toast={show} />}
-      {returnFor && <PurchaseReturnModal T={T} purchase={returnFor} onClose={() => setReturnFor(null)} onSaved={() => { setReturnFor(null); show('Purchase return recorded · stock updated'); reload(); }} />}
+      {adding && <AddPurchaseReturnModal T={T} suppliers={suppliers} locations={locs} onClose={() => setAdding(false)}
+        onSaved={() => { setAdding(false); show('Purchase return recorded · stock updated'); reload(); }} />}
       {view && <ReturnView T={T} row={view} onClose={() => setView(null)} />}
       {node}
     </div>
-  );
-}
-
-// Step 1 of Add: choose the parent purchase. Only received purchases can be
-// returned, and only those with something still returnable.
-function PickPurchase({ T, onClose, onPicked, toast }: { T: any; onClose: () => void; onPicked: (p: any) => void; toast: any }) {
-  const [rows, setRows] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [q, setQ] = useState('');
-  const [busy, setBusy] = useState<any>(null);
-
-  useEffect(() => {
-    API.purchaseOrder.list()
-      .then((rs: any[]) => setRows((rs || []).filter((p: any) => ['received', 'partial', 'approved'].includes(p.status))))
-      .catch(() => setRows([])).finally(() => setLoading(false));
-  }, []);
-
-  const ql = q.trim().toLowerCase();
-  const shown = rows.filter((p: any) => !ql || String(p.ref_no || '').toLowerCase().includes(ql) || String(p.supplier_name || '').toLowerCase().includes(ql));
-
-  async function pick(p: any) {
-    setBusy(p.id);
-    try {
-      const full: any = await API.purchaseOrder.get(p.id);
-      const returnable = (full.lines || []).some((l: any) => Number(l.received_qty || 0) - Number(l.returned_qty || 0) > 0);
-      if (!returnable) { toast('Everything on that purchase has already been returned.'); setBusy(null); return; }
-      onPicked(full);
-    } catch (e: any) { toast(e.message || 'Could not load that purchase.'); setBusy(null); }
-  }
-
-  return (
-    <Modal T={T} title="Add purchase return" subtitle="Choose the purchase being returned" width={640} onClose={onClose}
-      footer={<><div style={{ flex: 1, fontSize: 11.5, color: T.inkMute }}>Returns are recorded against their purchase, so the goods are relieved at the cost they were received at.</div><Btn T={T} kind="ghost" onClick={onClose}>Cancel</Btn></>}>
-      <TextField T={T} value={q} onChange={setQ} placeholder="Search by reference or supplier…" />
-      <div style={{ marginTop: 12, border: `1px solid ${T.line}`, borderRadius: T.r, maxHeight: 340, overflowY: 'auto' }}>
-        {shown.map((p: any, i: number) => (
-          <button key={p.id} onClick={() => pick(p)} disabled={!!busy}
-            style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '11px 13px', background: 'none', border: 'none', borderTop: i ? `1px solid ${T.line}` : 'none', cursor: busy ? 'wait' : 'pointer', textAlign: 'left', fontFamily: T.fBody } as React.CSSProperties}
-            onMouseEnter={(e: any) => (e.currentTarget.style.background = T.paperAlt)}
-            onMouseLeave={(e: any) => (e.currentTarget.style.background = 'transparent')}>
-            <span style={{ minWidth: 0 }}>
-              <span style={{ display: 'block', fontSize: 13, fontWeight: 600, color: T.ink }}>{p.ref_no}</span>
-              <span style={{ display: 'block', fontSize: 11.5, color: T.inkSub }}>{p.supplier_name} · {p.location_name} · {formatDate(p.date)}</span>
-            </span>
-            <span style={{ fontFamily: T.fMono, fontSize: 12.5, color: T.inkSub, flexShrink: 0 }}>{busy === p.id ? 'Loading…' : money(p.grand_total)}</span>
-          </button>
-        ))}
-        {loading && <div style={{ padding: 26, textAlign: 'center', fontFamily: T.fMono, fontSize: 12.5, color: T.inkSub } as React.CSSProperties}>Loading purchases…</div>}
-        {!loading && !shown.length && <div style={{ padding: 26, textAlign: 'center', color: T.inkMute, fontSize: 12.5 }}>No received purchases{q ? ' match that search' : ''}.</div>}
-      </div>
-    </Modal>
   );
 }
 
@@ -192,8 +149,10 @@ function ReturnView({ T, row, onClose }: { T: any; row: any; onClose: () => void
   const th: React.CSSProperties = { textAlign: 'left', padding: '9px 11px', fontSize: 9.5, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', color: T.inkSub, background: T.paperAlt, borderBottom: `1px solid ${T.line}` };
   const td: React.CSSProperties = { padding: '8px 11px', fontSize: 12.5, borderBottom: `1px solid ${T.line}` };
 
+  const parents: string[] = r.parent_refs && r.parent_refs.length ? r.parent_refs : (r.parent_ref ? [r.parent_ref] : []);
+
   return (
-    <Modal T={T} title={`Purchase return · ${r.number}`} subtitle={`${r.supplier_name} · against ${r.parent_ref}`} width={640} onClose={onClose}
+    <Modal T={T} title={`Purchase return · ${r.number}`} subtitle={parents.length ? `${r.supplier_name} · against ${parents.join(', ')}` : r.supplier_name} width={680} onClose={onClose}
       footer={<><div style={{ flex: 1, fontSize: 13.5, color: T.inkSub }}>Returned <b style={{ color: T.redText, fontFamily: T.fMono, marginLeft: 6, fontSize: 15 }}>−{money(r.total)}</b></div><Btn T={T} kind="accent" onClick={onClose}>Close</Btn></>}>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, fontSize: 12.5, color: T.inkMid, marginBottom: 14 }}>
         <div><b style={{ color: T.inkSub }}>Date:</b> {formatDate(r.date)}</div>
@@ -203,12 +162,13 @@ function ReturnView({ T, row, onClose }: { T: any; row: any; onClose: () => void
       </div>
       <div style={{ border: `1px solid ${T.line}`, borderRadius: T.r, overflow: 'hidden' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead><tr><th style={th}>Product</th><th style={th}>SKU</th><th style={{ ...th, textAlign: 'right' }}>Qty</th><th style={{ ...th, textAlign: 'right' }}>Unit cost</th><th style={{ ...th, textAlign: 'right' }}>Subtotal</th></tr></thead>
+          <thead><tr><th style={th}>Product</th><th style={th}>SKU</th><th style={th}>Purchase</th><th style={{ ...th, textAlign: 'right' }}>Qty</th><th style={{ ...th, textAlign: 'right' }}>Unit cost</th><th style={{ ...th, textAlign: 'right' }}>Subtotal</th></tr></thead>
           <tbody>
             {(r.items || []).map((it: any, i: number) => (
               <tr key={i}>
                 <td style={{ ...td, fontWeight: 600, color: T.ink }}>{it.product_name}</td>
                 <td style={{ ...td, fontFamily: T.fMono, color: T.inkSub }}>{it.sku || '—'}</td>
+                <td style={{ ...td, fontFamily: T.fMono, color: T.inkSub }}>{it.parent_ref || '—'}</td>
                 <td style={{ ...td, textAlign: 'right', fontFamily: T.fMono, color: T.inkSub } as React.CSSProperties}>{it.quantity}</td>
                 <td style={{ ...td, textAlign: 'right', fontFamily: T.fMono, color: T.inkSub } as React.CSSProperties}>{money(it.unit_price)}</td>
                 <td style={{ ...td, textAlign: 'right', fontFamily: T.fMono, fontWeight: 600, color: T.ink } as React.CSSProperties}>{money(it.total_price)}</td>
@@ -217,6 +177,17 @@ function ReturnView({ T, row, onClose }: { T: any; row: any; onClose: () => void
           </tbody>
         </table>
       </div>
+
+      <div style={{ marginTop: 12, fontSize: 12.5, color: T.inkMid, lineHeight: 1.9, textAlign: 'right' }}>
+        <div>Subtotal <b style={{ fontFamily: T.fMono, color: T.ink, marginLeft: 8 }}>{money(r.subtotal)}</b></div>
+        {r.tax > 0 && <div>Purchase tax <b style={{ fontFamily: T.fMono, color: T.ink, marginLeft: 8 }}>{money(r.tax)}</b></div>}
+        <div style={{ fontWeight: 700, color: T.ink }}>Total <b style={{ fontFamily: T.fMono, marginLeft: 8 }}>{money(r.total)}</b></div>
+      </div>
+      {r.tax > 0 && (
+        <div style={{ fontSize: 11, color: T.inkMute, marginTop: 6, lineHeight: 1.55, textAlign: 'right' }}>
+          The ledger reversed the {money(r.subtotal)} goods cost — purchase tax was never posted when the goods were received.
+        </div>
+      )}
       {(r.document_url || r.notes) && (
         <div style={{ marginTop: 14, fontSize: 12.5, color: T.inkMid, lineHeight: 1.6 }}>
           {r.notes && <div><b style={{ color: T.inkSub }}>Notes:</b> {r.notes}</div>}

@@ -60,6 +60,17 @@ export function useSetting<T>(key: string, fallback: T): T {
 // The API adapters normalise timestamps to machine 'YYYY-MM-DD', and those same
 // strings feed <input type="date">, so they must never be reformatted upstream.
 
+/**
+ * Today as a machine 'YYYY-MM-DD' in the user's LOCAL day, for date inputs.
+ * `new Date().toISOString().slice(0, 10)` is the UTC day, which is already
+ * tomorrow for anyone west of Greenwich late in the evening.
+ */
+export function todayLocal(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
 /** Format a 'YYYY-MM-DD' (or ISO) value per `date_format`. Falls back to the input. */
 export function formatDate(value?: string | null): string {
   if (!value) return '';

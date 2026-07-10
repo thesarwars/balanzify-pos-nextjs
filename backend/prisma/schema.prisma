@@ -1856,7 +1856,9 @@ model PurchaseOrderItem {
 model PurchaseReturn {
   id           String   @id @default(uuid()) @db.Uuid
   businessId   String   @map("business_id") @db.Uuid
-  poId         String   @map("po_id") @db.Uuid
+  // Optional: a standalone debit note may span several purchases. Cost basis is
+  // pinned per LINE via PurchaseReturnItem.purchaseOrderItemId, never by this.
+  poId         String?  @map("po_id") @db.Uuid
   supplierId   String?  @map("supplier_id") @db.Uuid
   locationId   String?  @map("location_id") @db.Uuid
   returnNumber String?  @unique @map("return_number") @db.VarChar(50)
@@ -1872,7 +1874,7 @@ model PurchaseReturn {
   createdAt    DateTime @default(now()) @map("created_at")
 
   business      Business             @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  purchaseOrder PurchaseOrder        @relation(fields: [poId], references: [id])
+  purchaseOrder PurchaseOrder?       @relation(fields: [poId], references: [id])
   supplier      Supplier?            @relation(fields: [supplierId], references: [id])
   location      Location?            @relation(fields: [locationId], references: [id])
   createdBy     User?                @relation("pr_creator", fields: [createdById], references: [id])
