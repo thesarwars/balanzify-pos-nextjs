@@ -11,6 +11,15 @@ import { OfflineIndicator } from '@/components/offline-indicator';
 import { useLocale } from '@/lib/locale-context';
 import { navLabel } from '@/lib/i18n';
 import { isNavBlocked, setNavBlock, navBlockMessage, navBlockTitle } from '@/lib/nav-guard';
+import {
+  LuLayoutDashboard, LuScanLine, LuMapPin, LuPackage, LuBoxes, LuClipboardCheck,
+  LuShoppingCart, LuClipboardList, LuTruck, LuReceipt, LuUsers, LuGift, LuTag,
+  LuTicket, LuBedDouble, LuUtensils, LuPill, LuActivity, LuWarehouse, LuHardHat,
+  LuBike, LuLandmark, LuBanknote, LuCoins, LuSlidersHorizontal, LuArrowLeftRight,
+  LuHandCoins, LuPiggyBank, LuUserCog, LuFolderKanban, LuListTodo, LuRefreshCw,
+  LuChartColumn, LuSparkles, LuUsersRound, LuFileCheck, LuSettings, LuLayers,
+  LuShieldCheck, LuChevronRight,
+} from 'react-icons/lu';
 
 // ─────────────────────────────────────────────────────────────────
 // App shell: refined navy sidebar + content topbar.
@@ -18,12 +27,12 @@ import { isNavBlocked, setNavBlock, navBlockMessage, navBlockTitle } from '@/lib
 
 export const NAV = [
   { sect: null, items: [
-    { id: 'dashboard', label: 'Dashboard', icon: '▦' },
-    { id: 'pos', label: 'Point of Sale', icon: '⊞' },
+    { id: 'dashboard', label: 'Dashboard', icon: LuLayoutDashboard },
+    { id: 'pos', label: 'Point of Sale', icon: LuScanLine },
   ]},
   { sect: 'Inventory', items: [
-    { id: 'locations', label: 'Locations', icon: '☖' },
-    { id: 'products', label: 'Products', icon: '◫', children: [
+    { id: 'locations', label: 'Locations', icon: LuMapPin },
+    { id: 'products', label: 'Products', icon: LuPackage, children: [
       { key: 'products',    activeId: 'products',   label: 'All Products',        route: '/products' },
       { key: 'categories',  activeId: 'categories', label: 'Categories',          route: '/categories' },
       { key: 'brands',      activeId: 'brands',     label: 'Brands',              route: '/brands' },
@@ -32,61 +41,68 @@ export const NAV = [
       { key: 'variations',  activeId: '',           label: 'Variations',          route: '/products?tool=variations' },
       { key: 'units',       activeId: '',           label: 'Units',               route: '/products?tool=units' },
     ]},
-    { id: 'stock', label: 'Stock', icon: '◱' },
-    { id: 'stocktake', label: 'Stocktake', icon: '☑' },
-    { id: 'purchase-orders', label: 'Purchase Orders', icon: '◨' },
-    { id: 'orders', label: 'Orders', icon: '◵' },
-    { id: 'suppliers', label: 'Suppliers', icon: '◈' },
+    { id: 'stock', label: 'Stock', icon: LuBoxes },
+    { id: 'stocktake', label: 'Stocktake', icon: LuClipboardCheck },
+    { id: 'purchase-orders', label: 'Purchase Orders', icon: LuShoppingCart },
+    { id: 'orders', label: 'Orders', icon: LuClipboardList },
+    { id: 'suppliers', label: 'Suppliers', icon: LuTruck },
   ]},
   { sect: 'Sales', items: [
-    { id: 'sales', label: 'Sales History', icon: '◎' },
-    { id: 'customers', label: 'Customers', icon: '◉' },
-    { id: 'loyalty', label: 'Loyalty', icon: '◆' },
-    { id: 'discounts', label: 'Discounts', icon: '◌' },
-    { id: 'coupons', label: 'Coupons', icon: '◇' },
+    { id: 'sales', label: 'Sales History', icon: LuReceipt },
+    { id: 'customers', label: 'Customers', icon: LuUsers },
+    { id: 'loyalty', label: 'Loyalty', icon: LuGift },
+    { id: 'discounts', label: 'Discounts', icon: LuTag },
+    { id: 'coupons', label: 'Coupons', icon: LuTicket },
   ]},
   { sect: 'Hospitality', items: [
-    { id: 'hotel', label: 'Hotel', icon: '⌂' },
-    { id: 'restaurant', label: 'Restaurant', icon: '♨' },
+    { id: 'hotel', label: 'Hotel', icon: LuBedDouble },
+    { id: 'restaurant', label: 'Restaurant', icon: LuUtensils },
   ]},
   { sect: 'Verticals', items: [
-    { id: 'pharmacy', label: 'Pharmacy', icon: '✚' },
-    { id: 'interactions', label: 'Drug Interactions', icon: '⚕' },
-    { id: 'wholesale', label: 'Wholesale', icon: '⊟' },
-    { id: 'construction', label: 'Construction', icon: '◭' },
-    { id: 'delivery', label: 'Delivery', icon: '⊳' },
+    { id: 'pharmacy', label: 'Pharmacy', icon: LuPill },
+    { id: 'interactions', label: 'Drug Interactions', icon: LuActivity },
+    { id: 'wholesale', label: 'Wholesale', icon: LuWarehouse },
+    { id: 'construction', label: 'Construction', icon: LuHardHat },
+    { id: 'delivery', label: 'Delivery', icon: LuBike },
   ]},
   { sect: 'Finance', items: [
-    { id: 'payment-accounts', label: 'Payment Accounts', icon: '▭' },
-    { id: 'expenses', label: 'Expenses', icon: '◔' },
-    { id: 'petty-cash', label: 'Petty Cash', icon: '◐' },
-    { id: 'adjustments', label: 'Adjustments', icon: '◑' },
-    { id: 'transfers', label: 'Transfers', icon: '⇄' },
-    { id: 'zakat', label: 'Zakat', icon: '☪' },
-    { id: 'lending', label: 'Financing', icon: '◈' },
+    { id: 'payment-accounts', label: 'Payment Accounts', icon: LuLandmark },
+    { id: 'expenses', label: 'Expenses', icon: LuBanknote },
+    { id: 'petty-cash', label: 'Petty Cash', icon: LuCoins },
+    { id: 'adjustments', label: 'Adjustments', icon: LuSlidersHorizontal },
+    { id: 'transfers', label: 'Transfers', icon: LuArrowLeftRight },
+    { id: 'zakat', label: 'Zakat', icon: LuHandCoins },
+    { id: 'lending', label: 'Financing', icon: LuPiggyBank },
   ]},
   { sect: 'Operations', items: [
-    { id: 'hrm', label: 'HRM / Staff', icon: '⚇' },
-    { id: 'projects', label: 'Projects', icon: '◳' },
-    { id: 'tasks', label: 'Tasks', icon: '◻' },
-    { id: 'sync', label: 'Offline Sync', icon: '⇅' },
+    { id: 'hrm', label: 'HRM / Staff', icon: LuUserCog },
+    { id: 'projects', label: 'Projects', icon: LuFolderKanban },
+    { id: 'tasks', label: 'Tasks', icon: LuListTodo },
+    { id: 'sync', label: 'Offline Sync', icon: LuRefreshCw },
   ]},
   { sect: 'Analytics', items: [
-    { id: 'reports', label: 'Reports', icon: '◳' },
-    { id: 'insights', label: 'AI Insights', icon: '✦', badge: 'AI' },
+    { id: 'reports', label: 'Reports', icon: LuChartColumn },
+    { id: 'insights', label: 'AI Insights', icon: LuSparkles, badge: 'AI' },
   ]},
   { sect: 'Admin', items: [
-    { id: 'users', label: 'Users', icon: '◉' },
-    { id: 'fiscal', label: 'Fiscalization', icon: '▤' },
-    { id: 'settings', label: 'Settings', icon: '⚙', children: [
+    { id: 'users', label: 'Users', icon: LuUsersRound },
+    { id: 'fiscal', label: 'Fiscalization', icon: LuFileCheck },
+    { id: 'settings', label: 'Settings', icon: LuSettings, children: [
       { key: 'settings',          activeId: 'settings',          label: 'General',           route: '/settings' },
       { key: 'business-settings', activeId: 'business-settings', label: 'Business Settings', route: '/business-settings' },
       { key: 'invoice-settings',  activeId: 'invoice-settings',  label: 'Invoice Settings',  route: '/invoice-settings' },
     ]},
-    { id: 'modules', label: 'Plan & Modules', icon: '▣' },
-    { id: 'superadmin', label: 'Superadmin', icon: '⚿' },
+    { id: 'modules', label: 'Plan & Modules', icon: LuLayers },
+    { id: 'superadmin', label: 'Superadmin', icon: LuShieldCheck },
   ]},
 ];
+
+// Nav icons are react-icons components; a plain string is still tolerated so an
+// item can fall back to a glyph.
+function NavIcon({ icon, size = 17 }: { icon: any; size?: number }) {
+  if (!icon) return null;
+  return typeof icon === 'string' ? <>{icon}</> : React.createElement(icon, { size });
+}
 
 // Nav items that belong to a paid/optional module — hidden from the sidebar
 // unless that module is enabled for the business. Everything else is core.
@@ -186,9 +202,9 @@ export function Sidebar({ T, screen, setScreen, collapsed, setCollapsed, onLogou
                       onMouseEnter={e => { if (!inGroup) e.currentTarget.style.background = S.hover; }}
                       onMouseLeave={e => { if (!inGroup) e.currentTarget.style.background = 'transparent'; }}
                     >
-                      <span style={{ fontSize: 16, width: 20, textAlign: 'center', flexShrink: 0, opacity: inGroup ? 1 : 0.8 } as React.CSSProperties}>{item.icon}</span>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 20, flexShrink: 0, opacity: inGroup ? 1 : 0.8 } as React.CSSProperties}><NavIcon icon={item.icon} /></span>
                       {!collapsed && <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{navLabel(locale, item.id, item.label)}</span>}
-                      {!collapsed && <span style={{ fontSize: 10, color: S.chev, transition: 'transform .15s', transform: isOpen ? 'rotate(90deg)' : 'none' }}>▸</span>}
+                      {!collapsed && <span style={{ display: 'inline-flex', color: S.chev, transition: 'transform .15s', transform: isOpen ? 'rotate(90deg)' : 'none' }}><LuChevronRight size={13} /></span>}
                     </button>
                     {!collapsed && isOpen && item.children.map((c: any) => {
                       const cActive = c.activeId && c.activeId === screen;
@@ -235,7 +251,7 @@ export function Sidebar({ T, screen, setScreen, collapsed, setCollapsed, onLogou
                   onMouseEnter={e => { if (!active) e.currentTarget.style.background = S.hover; }}
                   onMouseLeave={e => { if (!active) e.currentTarget.style.background = item.highlight ? S.highlight : 'transparent'; }}
                 >
-                  <span style={{ fontSize: 16, width: 20, textAlign: 'center', flexShrink: 0, opacity: active ? 1 : 0.8 } as React.CSSProperties}>{item.icon}</span>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 20, flexShrink: 0, opacity: active ? 1 : 0.8 } as React.CSSProperties}><NavIcon icon={item.icon} /></span>
                   {!collapsed && <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{navLabel(locale, item.id, item.label)}</span>}
                   {!collapsed && item.badge && (
                     <span style={{
