@@ -114,6 +114,7 @@ export const NAV = [
           { key: 'invoice-settings', activeId: 'invoice-settings', label: 'Invoice Settings', route: '/invoice-settings' },
       { key: 'barcode-settings',  activeId: 'barcode-settings',  label: 'Barcode Settings', route: '/barcode-settings' },
           { key: 'receipt-printers', activeId: 'receipt-printers', label: 'Receipt Printers', route: '/receipt-printers' },
+          { key: 'tax-rates', activeId: 'tax-rates', label: 'Tax Rates', route: '/tax-rates' },
         ]
       },
       { id: 'modules', label: 'Plan & Modules', icon: LuLayers },

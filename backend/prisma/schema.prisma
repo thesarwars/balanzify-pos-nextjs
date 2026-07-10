@@ -3194,6 +3194,11 @@ model TaxRate {
   isDefault   Boolean  @default(false) @map("is_default")
   isInclusive Boolean  @default(false) @map("is_inclusive") // true = tax already in price
   isActive    Boolean  @default(true) @map("is_active")
+  // A tax group is a TaxRate whose `rate` is the sum of its sub-taxes (e.g.
+  // GST@18% = CGST@10% + SGST@8%), so every consumer that reads `rate` works
+  // unchanged. `forTaxGroupOnly` rates are components, hidden from the pickers.
+  isTaxGroup      Boolean @default(false) @map("is_tax_group")
+  forTaxGroupOnly Boolean @default(false) @map("for_tax_group_only")
   createdAt   DateTime @default(now()) @map("created_at")
 
   business       Business         @relation(fields: [businessId], references: [id], onDelete: Cascade)
@@ -3202,10 +3207,26 @@ model TaxRate {
   folioCharges   FolioCharge[]
   ProductVariant ProductVariant[]
   PurchaseOrder  PurchaseOrder[]
+  subTaxes       TaxGroupSubTax[] @relation("tax_group")
+  memberOfGroups TaxGroupSubTax[] @relation("tax_group_member")
 
   @@unique([businessId, name])
   @@index([businessId])
   @@map("tax_rates")
+}
+
+// Join between a tax group and its component rates.
+model TaxGroupSubTax {
+  id         String @id @default(uuid()) @db.Uuid
+  taxGroupId String @map("tax_group_id") @db.Uuid
+  taxRateId  String @map("tax_rate_id") @db.Uuid
+
+  taxGroup TaxRate @relation("tax_group", fields: [taxGroupId], references: [id], onDelete: Cascade)
+  taxRate  TaxRate @relation("tax_group_member", fields: [taxRateId], references: [id], onDelete: Cascade)
+
+  @@unique([taxGroupId, taxRateId])
+  @@index([taxRateId])
+  @@map("tax_group_sub_taxes")
 }
 
 // ═══════════════════════════════════════════════════════════════════

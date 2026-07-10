@@ -2084,8 +2084,10 @@ function realRegister(s: any): any {
 function adaptRealTaxRate(t: any): any {
   return {
     id: t.id, name: t.name,
-    amount: Number(t.rate || 0) * 100,
+    amount: +(Number(t.rate || 0) * 100).toFixed(4),
     is_default: !!t.isDefault, is_inclusive: !!t.isInclusive,
+    for_tax_group_only: !!t.forTaxGroupOnly,
+    is_tax_group: !!t.isTaxGroup,
     product_count: (t._count && t._count.products) || 0,
     _real: t,
   };
@@ -2238,6 +2240,29 @@ function toRealPOBody(b: any): any {
       selling_price: l.selling_price !== '' && l.selling_price != null ? Number(l.selling_price) : undefined,
       unit_id: isUuid(l.unit_id) ? l.unit_id : undefined,
     })),
+  };
+}
+
+// The backend stores a tax rate as a fraction (0.1000 = 10%); the UI speaks percent.
+function toRealTaxRateBody(b: any): any {
+  return {
+    name: b.name,
+    rate: Number(b.amount ?? b.rate ?? 0) / 100,
+    ...(b.for_tax_group_only !== undefined && { for_tax_group_only: !!b.for_tax_group_only }),
+    ...(b.is_default !== undefined && { is_default: !!b.is_default }),
+    ...(b.is_inclusive !== undefined && { is_inclusive: !!b.is_inclusive }),
+  };
+}
+function adaptRealTaxGroup(g: any): any {
+  if (!g) return g;
+  const subs = Array.isArray(g.subTaxes) ? g.subTaxes.map((s: any) => s.taxRate).filter(Boolean) : [];
+  return {
+    id: g.id,
+    name: g.name,
+    amount: +(Number(g.rate || 0) * 100).toFixed(4),
+    sub_taxes: subs.map((r: any) => ({ id: r.id, name: r.name, amount: +(Number(r.rate || 0) * 100).toFixed(4) })),
+    tax_ids: subs.map((r: any) => r.id),
+    _real: g,
   };
 }
 
@@ -3030,18 +3055,46 @@ const API: any = {
     },
   },
   taxRate: {
-    async list() {
+    // `all` also returns the group-only component rates (for the Tax Rates screen
+    // and the group builder); the default is only what a product/purchase may pick.
+    async list(opts: any = {}) {
       if (REAL_MODE) {
-        const res = await realReq('GET', '/tax/rates');
+        const res = await realReq('GET', '/tax/rates', opts.all ? { query: { all: '1' } } : {});
         return ((res && (res.rates || res.data)) || []).map(adaptRealTaxRate);
       }
       return (await transport('GET', '/connector/api/tax')).data;
     },
-    // Tax groups have no /api/v1 equivalent yet — return none in real mode so the
-    // settings screen renders without firing a request that would 404.
-    async groups() { if (REAL_MODE) return []; return (await transport('GET', '/connector/api/tax-group')).data; },
-    async createGroup(body: any) { return (await transport('POST', '/connector/api/tax-group', { body })).data; },
-    async removeGroup(id: any) { return (await transport('DELETE', '/connector/api/tax-group/' + id)).data; },
+    async create(body: any) {
+      if (REAL_MODE) return adaptRealTaxRate(await realReq('POST', '/tax/rates', { body: toRealTaxRateBody(body) }));
+      throw new ApiError(501, 'Tax rates need the live backend.');
+    },
+    async update(id: any, body: any) {
+      if (REAL_MODE) return adaptRealTaxRate(await realReq('PUT', '/tax/rates/' + id, { body: toRealTaxRateBody(body) }));
+      throw new ApiError(501, 'Tax rates need the live backend.');
+    },
+    async remove(id: any) {
+      if (REAL_MODE) return await realReq('DELETE', '/tax/rates/' + id);
+      return null;
+    },
+    async groups() {
+      if (REAL_MODE) {
+        const res = await realReq('GET', '/tax/groups');
+        return ((res && res.groups) || []).map(adaptRealTaxGroup);
+      }
+      return (await transport('GET', '/connector/api/tax-group')).data;
+    },
+    async createGroup(body: any) {
+      if (REAL_MODE) return adaptRealTaxGroup(await realReq('POST', '/tax/groups', { body: { name: body.name, tax_rate_ids: body.tax_ids || body.tax_rate_ids } }));
+      return (await transport('POST', '/connector/api/tax-group', { body })).data;
+    },
+    async updateGroup(id: any, body: any) {
+      if (REAL_MODE) return adaptRealTaxGroup(await realReq('PUT', '/tax/groups/' + id, { body: { name: body.name, tax_rate_ids: body.tax_ids || body.tax_rate_ids } }));
+      throw new ApiError(501, 'Tax groups need the live backend.');
+    },
+    async removeGroup(id: any) {
+      if (REAL_MODE) return await realReq('DELETE', '/tax/groups/' + id);
+      return (await transport('DELETE', '/connector/api/tax-group/' + id)).data;
+    },
   },
   stockAdjustment: {
     async list() {

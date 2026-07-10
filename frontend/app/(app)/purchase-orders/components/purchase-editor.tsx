@@ -59,7 +59,12 @@ export function PurchaseEditor({ T, suppliers, locs, existing, onClose, onSaved 
   useEffectPu(() => {
     if (API.config?.isReal?.()) API.product.list({ per_page: 200 }).then((r: any) => setCatalog(r.items || [])).catch(() => {});
     API.unit.list().then((us: any) => setUnits(Array.isArray(us) ? us : [])).catch(() => {});
-    API.taxRate.list().then((ts: any) => setTaxRates(Array.isArray(ts) ? ts : [])).catch(() => {});
+    // Purchase tax may be a single rate or a tax group (e.g. GST@18%). A group's
+    // `amount` is already the sum of its components, so both behave identically.
+    Promise.all([
+      API.taxRate.list().catch(() => []),
+      API.taxRate.groups().catch(() => []),
+    ]).then(([rs, gs]: any[]) => setTaxRates([...(rs || []), ...(gs || [])]));
   }, []);
   // Editing: once tax rates load, pre-select the one that reproduces the stored tax.
   useEffectPu(() => {

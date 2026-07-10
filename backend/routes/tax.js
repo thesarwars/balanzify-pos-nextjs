@@ -28,6 +28,7 @@ const TaxRateSchema = z.object({
   is_default:   z.boolean().optional(),
   is_inclusive: z.boolean().optional(),
   is_active:    z.boolean().optional(),
+  for_tax_group_only: z.boolean().optional(),
   isDefault:    z.boolean().optional(),
   isInclusive:  z.boolean().optional(),
   isActive:     z.boolean().optional(),
@@ -40,14 +41,118 @@ const taxFlags = (b) => ({
 });
 
 // GET /api/v1/tax/rates
+// GET /api/v1/tax/rates
+// Default: the rates that may actually be picked on a product/purchase — active,
+// not a group, and not a group-only component. (Deactivated rates used to leak
+// into every picker.) `?all=1` returns every active rate for the Tax Rates
+// screen and the group builder.
 router.get('/rates', auth, async (req, res, next) => {
   try {
+    const all = req.query.all === '1' || req.query.all === 'true';
     const rates = await prisma.taxRate.findMany({
-      where: { businessId: req.user.business_id },
+      where: {
+        businessId: req.user.business_id,
+        isActive: true,
+        isTaxGroup: false,
+        ...(all ? {} : { forTaxGroupOnly: false }),
+      },
       orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
       include: { _count: { select: { products: true } } },
     });
     res.json({ rates });
+  } catch (err) { next(err); }
+});
+
+// ── Tax groups ───────────────────────────────────────────────────────────────
+// A group is a TaxRate with isTaxGroup=true whose `rate` is the sum of its
+// components, so tax maths anywhere else needs no special case.
+const TaxGroupSchema = z.object({
+  name: z.string().trim().min(1).max(100),
+  tax_rate_ids: z.array(z.string().uuid()).min(2, 'A tax group needs at least two taxes').max(10),
+});
+
+const groupInclude = { subTaxes: { include: { taxRate: { select: { id: true, name: true, rate: true } } } } };
+
+/** Load + validate the components, and return their summed rate. */
+async function loadSubTaxes(businessId, ids) {
+  const unique = [...new Set(ids)];
+  if (unique.length !== ids.length) {
+    throw Object.assign(new Error('The same tax cannot be added to a group twice.'), { statusCode: 400 });
+  }
+  const rates = await prisma.taxRate.findMany({ where: { id: { in: unique }, businessId, isActive: true } });
+  if (rates.length !== unique.length) {
+    throw Object.assign(new Error('One or more taxes were not found.'), { statusCode: 400 });
+  }
+  const group = rates.find((r) => r.isTaxGroup);
+  if (group) {
+    throw Object.assign(new Error(`"${group.name}" is itself a tax group and cannot be nested.`), { statusCode: 400 });
+  }
+  const total = rates.reduce((s, r) => s + parseFloat(r.rate), 0);
+  return { rates, total: +total.toFixed(4) };
+}
+
+router.get('/groups', auth, async (req, res, next) => {
+  try {
+    const groups = await prisma.taxRate.findMany({
+      where: { businessId: req.user.business_id, isTaxGroup: true, isActive: true },
+      orderBy: { name: 'asc' },
+      include: groupInclude,
+    });
+    res.json({ groups });
+  } catch (err) { next(err); }
+});
+
+router.post('/groups', auth, requireRole('owner', 'manager'), validate(TaxGroupSchema), async (req, res, next) => {
+  try {
+    const { name, tax_rate_ids } = req.body;
+    const { total } = await loadSubTaxes(req.user.business_id, tax_rate_ids);
+    const group = await prisma.taxRate.create({
+      data: {
+        businessId: req.user.business_id, name, rate: total, isTaxGroup: true, isActive: true,
+        subTaxes: { create: [...new Set(tax_rate_ids)].map((taxRateId) => ({ taxRateId })) },
+      },
+      include: groupInclude,
+    });
+    res.status(201).json(group);
+  } catch (err) {
+    if (err.statusCode) return res.status(err.statusCode).json({ title: err.message, status: err.statusCode });
+    if (err.code === 'P2002') return res.status(409).json({ title: 'A tax with that name already exists', status: 409 });
+    next(err);
+  }
+});
+
+router.put('/groups/:id', auth, requireRole('owner', 'manager'), validate(TaxGroupSchema), async (req, res, next) => {
+  try {
+    const existing = await prisma.taxRate.findFirst({ where: { id: req.params.id, businessId: req.user.business_id, isTaxGroup: true } });
+    if (!existing) return res.status(404).json({ title: 'Tax group not found', status: 404 });
+    const { name, tax_rate_ids } = req.body;
+    const ids = [...new Set(tax_rate_ids)];
+    if (ids.includes(req.params.id)) {
+      return res.status(400).json({ title: 'A tax group cannot contain itself.', status: 400 });
+    }
+    const { total } = await loadSubTaxes(req.user.business_id, tax_rate_ids);
+    const group = await prisma.$transaction(async (tx) => {
+      await tx.taxGroupSubTax.deleteMany({ where: { taxGroupId: req.params.id } });
+      return tx.taxRate.update({
+        where: { id: req.params.id },
+        data: { name, rate: total, subTaxes: { create: ids.map((taxRateId) => ({ taxRateId })) } },
+        include: groupInclude,
+      });
+    });
+    res.json(group);
+  } catch (err) {
+    if (err.statusCode) return res.status(err.statusCode).json({ title: err.message, status: err.statusCode });
+    if (err.code === 'P2002') return res.status(409).json({ title: 'A tax with that name already exists', status: 409 });
+    next(err);
+  }
+});
+
+router.delete('/groups/:id', auth, requireRole('owner', 'manager'), async (req, res, next) => {
+  try {
+    const existing = await prisma.taxRate.findFirst({ where: { id: req.params.id, businessId: req.user.business_id, isTaxGroup: true } });
+    if (!existing) return res.status(404).json({ title: 'Tax group not found', status: 404 });
+    await prisma.taxRate.update({ where: { id: req.params.id }, data: { isActive: false } });
+    res.json({ message: 'Tax group deleted.' });
   } catch (err) { next(err); }
 });
 
@@ -79,7 +184,8 @@ router.post('/rates', auth, requireRole('owner', 'manager'), validate(TaxRateSch
     }
 
     const taxRate = await prisma.taxRate.create({
-      data: { businessId: req.user.business_id, name, rate, region: region || null, isDefault, isInclusive, isActive },
+      data: { businessId: req.user.business_id, name, rate, region: region || null, isDefault, isInclusive, isActive,
+              forTaxGroupOnly: !!req.body.for_tax_group_only },
     });
     res.status(201).json(taxRate);
   } catch (err) { next(err); }
@@ -107,6 +213,7 @@ router.put('/rates/:id', auth, requireRole('owner', 'manager'), validate(TaxRate
         ...(isDefault   !== undefined && { isDefault }),
         ...(isInclusive !== undefined && { isInclusive }),
         ...(isActive    !== undefined && { isActive }),
+        ...(req.body.for_tax_group_only !== undefined && { forTaxGroupOnly: req.body.for_tax_group_only }),
       },
     });
     if (!updated.count) return res.status(404).json({ title: 'Not found', status: 404 });
@@ -117,10 +224,21 @@ router.put('/rates/:id', auth, requireRole('owner', 'manager'), validate(TaxRate
 // DELETE /api/v1/tax/rates/:id — deactivate only, never delete (audit trail)
 router.delete('/rates/:id', auth, requireRole('owner'), async (req, res, next) => {
   try {
-    await prisma.taxRate.updateMany({
+    // A group's rate is the sum of its components; removing one silently would
+    // leave the group overstating its rate. Make the caller fix the group first.
+    const usedBy = await prisma.taxGroupSubTax.findMany({
+      where: { taxRateId: req.params.id, taxGroup: { businessId: req.user.business_id, isActive: true } },
+      include: { taxGroup: { select: { name: true } } },
+    });
+    if (usedBy.length) {
+      const names = usedBy.map((u) => u.taxGroup.name).join(', ');
+      return res.status(409).json({ title: `This tax is part of the tax group${usedBy.length > 1 ? 's' : ''}: ${names}. Remove it from the group first.`, status: 409 });
+    }
+    const updated = await prisma.taxRate.updateMany({
       where: { id: req.params.id, businessId: req.user.business_id },
       data: { isActive: false },
     });
+    if (!updated.count) return res.status(404).json({ title: 'Not found', status: 404 });
     res.json({ message: 'Tax rate deactivated.' });
   } catch (err) { next(err); }
 });
