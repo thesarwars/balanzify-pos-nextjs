@@ -14,6 +14,7 @@ module.exports = {
   ...require('./customer-groups'),
   ...require('./catalog-refs'),
   ...require('./barcodeSettings'),
+  ...require('./receiptPrinters'),
   ...require('./discounts'),
   ...require('./invoicing'),
   ...require('./service-types'),

@@ -524,6 +524,33 @@ const SettingsSchema = z.object({
   settings: BusinessSettingsBag.optional(),
 });
 
+// ── Receipt printers ──────────────────────────────────────────────────────────
+// Only a network printer has an address; Windows/Linux printers go through a
+// local spooler, so their IP/port are ignored (and stored NULL).
+const HOST_RE = /^(?:\d{1,3}(?:\.\d{1,3}){3}|[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*)$/;
+const ipv4Octets = (h) => !/^\d{1,3}(\.\d{1,3}){3}$/.test(h) || h.split('.').every((o) => Number(o) <= 255);
+
+const ReceiptPrinterSchema = z.object({
+  name: shortStr(120),
+  connection_type: z.enum(['network', 'windows', 'linux']).default('network'),
+  capability_profile: z.enum(['default', 'simple', 'sp2000', 'tep200m', 'p822d']).default('default'),
+  // 58mm paper is ~32 chars, 80mm is ~42-48. Guard the ESC/POS layout maths.
+  characters_per_line: z.coerce.number().int().min(24).max(64),
+  ip_address: optStr(120),
+  port: z.coerce.number().int().min(1).max(65535).optional().nullable(),
+  is_default: z.boolean().default(false),
+}).superRefine((d, ctx) => {
+  if (d.connection_type !== 'network') return;
+  if (!d.ip_address) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['ip_address'], message: 'IP address is required for a network printer' });
+  } else if (!HOST_RE.test(d.ip_address) || !ipv4Octets(d.ip_address)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['ip_address'], message: 'Enter a valid IP address or hostname' });
+  }
+  if (!d.port) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['port'], message: 'Port is required for a network printer (most printers use 9100)' });
+  }
+});
+
 // ── Barcode sticker sheet ─────────────────────────────────────────────────────
 // Lengths are inches. A continuous-feed roll has no sheet, so paper size and
 // stickers-per-sheet only apply (and are only required) for sheet stock.
@@ -941,7 +968,7 @@ module.exports = {
   SettingsSchema, CategorySchema, LocationSchema, CustomerSchema,
   ExpenseSchema, ExpenseCategorySchema,
   PaymentAccountSchema, AccountTransferSchema, AccountDepositSchema,
-  BarcodeSettingSchema,
+  BarcodeSettingSchema, ReceiptPrinterSchema,
   CustomerGroupSchema, UnitSchema, BrandSchema, VariationTemplateSchema, DiscountSchema,
   CommissionAgentSchema,
   PriceGroupSchema, InvoiceLayoutSchema, InvoiceSchemeSchema, CommissionSettingsSchema,

@@ -511,6 +511,7 @@ model Business {
   purchaseOrders     PurchaseOrder[]
   purchaseReturns    PurchaseReturn[]
   barcodeSettings    BarcodeSetting[]
+  receiptPrinters    ReceiptPrinter[]
   goodsReceivedNotes GoodsReceivedNote[]
   customers          Customer[]
   shifts             Shift[]
@@ -1201,6 +1202,7 @@ model User {
   purchaseOrdersCreated    PurchaseOrder[]         @relation("po_creator")
   purchaseReturnsCreated   PurchaseReturn[]        @relation("pr_creator")
   barcodeSettingsCreated   BarcodeSetting[]        @relation("barcode_setting_creator")
+  receiptPrintersCreated   ReceiptPrinter[]        @relation("receipt_printer_creator")
   goodsReceivedNotes       GoodsReceivedNote[]
   poPayments               POPayment[]
   shifts                   Shift[]
@@ -4505,4 +4507,28 @@ model BarcodeSetting {
 
   @@index([businessId])
   @@map("barcode_settings")
+}
+
+// A thermal receipt printer. `charactersPerLine` drives the ESC/POS layout
+// (58mm ≈ 32, 80mm ≈ 42-48). Network printers carry an address; Windows/Linux
+// printers are driven by a local print spooler and have none.
+model ReceiptPrinter {
+  id                String   @id @default(uuid()) @db.Uuid
+  businessId        String   @map("business_id") @db.Uuid
+  name              String   @db.VarChar(120)
+  connectionType    String   @default("network") @map("connection_type") @db.VarChar(20)  // network | windows | linux
+  capabilityProfile String   @default("default") @map("capability_profile") @db.VarChar(30)
+  charactersPerLine Int      @default(42) @map("characters_per_line")
+  ipAddress         String?  @map("ip_address") @db.VarChar(120)
+  port              Int?
+  isDefault         Boolean  @default(false) @map("is_default")
+  createdById       String?  @map("created_by") @db.Uuid
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @default(now()) @updatedAt @map("updated_at")
+
+  business  Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  createdBy User?    @relation("receipt_printer_creator", fields: [createdById], references: [id])
+
+  @@index([businessId])
+  @@map("receipt_printers")
 }

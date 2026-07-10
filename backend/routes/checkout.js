@@ -28,6 +28,7 @@ const { auth } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { generatePaymentQR } = require('../lib/qrpayment');
 const { generateEscPos, generateWhatsAppReceipt, generateReceiptToken, receiptUrl } = require('../lib/receipt');
+const { resolvePrinter } = require('./combined/receiptPrinters');
 const wa = require('../lib/whatsapp');
 const { logger } = require('../lib/logger');
 const { escapeHtml } = require('../lib/html');
@@ -181,7 +182,9 @@ router.get('/receipt/:saleId/escpos', auth, async (req, res, next) => {
       notes:       i.notes,
     }));
 
-    const bytes = await generateEscPos({ sale, items, business, receiptUrl: url });
+    // Lay the receipt out for the requested printer, else the business default.
+    const printer = await resolvePrinter(req.user.business_id, req.query.printer_id);
+    const bytes = await generateEscPos({ sale, items, business, receiptUrl: url, width: printer && printer.charactersPerLine });
 
     // Return as binary — frontend sends directly to printer via Web Bluetooth or USB
     res.set('Content-Type', 'application/octet-stream');

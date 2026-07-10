@@ -47,7 +47,7 @@ function padEnd(str, width) {
 /**
  * Left-align label, right-align value on same line
  */
-function labelValue(label, value, width = RECEIPT_WIDTH) {
+function labelValueOf(label, value, width = RECEIPT_WIDTH) {
   const l = String(label);
   const v = String(value);
   const gap = width - l.length - v.length;
@@ -58,7 +58,7 @@ function labelValue(label, value, width = RECEIPT_WIDTH) {
 /**
  * Center a string within width
  */
-function center(str, width = RECEIPT_WIDTH) {
+function centerOf(str, width = RECEIPT_WIDTH) {
   const s = String(str);
   if (s.length >= width) return s;
   const pad = Math.floor((width - s.length) / 2);
@@ -68,7 +68,7 @@ function center(str, width = RECEIPT_WIDTH) {
 /**
  * Dashed divider line
  */
-function divider(width = RECEIPT_WIDTH) {
+function dividerOf(width = RECEIPT_WIDTH) {
   return '-'.repeat(width);
 }
 
@@ -90,8 +90,17 @@ function fmt(amount, currency = 'USD') {
  * @param {string} [receiptUrl] - digital receipt URL (printed as QR if provided)
  * @returns {Promise<Buffer>}
  */
-async function generateEscPos({ sale, items, business, receiptUrl }) {
+async function generateEscPos({ sale, items, business, receiptUrl, width }) {
   const parts = [];
+
+  // The receipt printer's characters-per-line drives every layout helper below.
+  // 58mm paper is ~32 chars, 80mm ~42-48. Falls back to RECEIPT_WIDTH.
+  const W = Math.min(64, Math.max(24, Number(width) || RECEIPT_WIDTH));
+  // Shadow the module helpers with width-bound versions so the ~25 call sites
+  // below stay unchanged and can never drift from the configured width.
+  const divider = () => dividerOf(W);
+  const center = (str) => centerOf(str, W);
+  const labelValue = (label, value) => labelValueOf(label, value, W);
 
   const push = (buf) => parts.push(Buffer.isBuffer(buf) ? buf : Buffer.from(buf + '\n', 'ascii'));
 
@@ -130,7 +139,7 @@ async function generateEscPos({ sale, items, business, receiptUrl }) {
 
   // ── Items ─────────────────────────────────────────────────────────
   for (const item of items) {
-    const name     = (item.productName || item.product_name || item.name || 'Item').slice(0, 20);
+    const name     = (item.productName || item.product_name || item.name || 'Item').slice(0, Math.max(10, W - 12));
     const qty      = item.quantity;
     const price    = parseFloat(item.unitPrice || item.unit_price || 0);
     const total    = parseFloat(item.totalPrice || item.total_price || price * qty);

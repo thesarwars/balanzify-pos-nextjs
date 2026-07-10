@@ -2241,6 +2241,22 @@ function toRealPOBody(b: any): any {
   };
 }
 
+// ── Receipt printers (/api/v1/receipt-printers) → UI view-model ──────────────
+function adaptRealPrinter(p: any): any {
+  if (!p) return p;
+  return {
+    id: p.id,
+    name: p.name,
+    connection_type: p.connectionType,
+    capability_profile: p.capabilityProfile,
+    characters_per_line: Number(p.charactersPerLine || 42),
+    ip_address: p.ipAddress || '',
+    port: p.port == null ? null : Number(p.port),
+    is_default: !!p.isDefault,
+    _real: p,
+  };
+}
+
 // ── Barcode sticker sheet (/api/v1/barcode-settings) → UI view-model ──────────
 function adaptRealBarcodeSetting(b: any): any {
   if (!b) return b;
@@ -3590,6 +3606,28 @@ const API: any = {
     },
     async removeProductImage(productId: string): Promise<any> {
       return realReq('DELETE', '/upload/product/' + productId + '/image');
+    },
+  },
+  // Thermal receipt printers. charactersPerLine drives the ESC/POS layout.
+  receiptPrinter: {
+    async list() {
+      if (REAL_MODE) {
+        const res = await realReq('GET', '/receipt-printers');
+        return ((res && res.printers) || []).map(adaptRealPrinter);
+      }
+      return [];
+    },
+    async create(body: any) {
+      if (REAL_MODE) return adaptRealPrinter(await realReq('POST', '/receipt-printers', { body }));
+      throw new ApiError(501, 'Receipt printers need the live backend.');
+    },
+    async update(id: any, body: any) {
+      if (REAL_MODE) return adaptRealPrinter(await realReq('PUT', '/receipt-printers/' + id, { body }));
+      throw new ApiError(501, 'Receipt printers need the live backend.');
+    },
+    async remove(id: any) {
+      if (REAL_MODE) return await realReq('DELETE', '/receipt-printers/' + id);
+      return null;
     },
   },
   // Barcode sticker sheet layouts (physical geometry for the label printer).
