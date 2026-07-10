@@ -65,9 +65,14 @@ router.delete('/product/:id/image', auth, requireRole('owner', 'manager'), async
   } catch (err) { next(err); }
 });
 
+// Raster images only — an SVG (or HTML) would be stored unprocessed at a public
+// URL and could execute script when opened, so keep the same allowlist the
+// product/layout image endpoints use.
+const LOGO_MIMES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 router.post('/logo', auth, requireRole('owner'), upload.single('logo'), async (req, res, next) => {
   try {
     if (!req.file) return res.status(400).json({ title: 'No file uploaded', status: 400 });
+    if (!LOGO_MIMES.has(req.file.mimetype)) return res.status(400).json({ title: 'Logo must be a JPG, PNG or WebP image', status: 400 });
     const biz = await prisma.business.findUnique({ where: { id: req.user.business_id } });
     if (biz?.logoKey) await deleteFile(biz.logoKey).catch(() => {});
     const { url, key } = await uploadBuffer(req.file.buffer, req.file.mimetype, `logos/${req.user.business_id}`);

@@ -78,8 +78,11 @@ export const NAV = [
   { sect: 'Admin', items: [
     { id: 'users', label: 'Users', icon: '◉' },
     { id: 'fiscal', label: 'Fiscalization', icon: '▤' },
-    { id: 'settings', label: 'Settings', icon: '⚙' },
-    { id: 'invoice-settings', label: 'Invoice Settings', icon: '▤' },
+    { id: 'settings', label: 'Settings', icon: '⚙', children: [
+      { key: 'settings',          activeId: 'settings',          label: 'General',           route: '/settings' },
+      { key: 'business-settings', activeId: 'business-settings', label: 'Business Settings', route: '/business-settings' },
+      { key: 'invoice-settings',  activeId: 'invoice-settings',  label: 'Invoice Settings',  route: '/invoice-settings' },
+    ]},
     { id: 'modules', label: 'Plan & Modules', icon: '▣' },
     { id: 'superadmin', label: 'Superadmin', icon: '⚿' },
   ]},

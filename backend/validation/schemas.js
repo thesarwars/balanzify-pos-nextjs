@@ -482,6 +482,42 @@ const PayslipSettingsSchema = z.object({
 });
 
 // ── Settings ──────────────────────────────────────────────────────────────────
+// UltimatePOS-style Business Settings preference bag. Every field optional so
+// partial saves work; the route shallow-merges into the stored settings JSON.
+const BusinessSettingsBag = z.object({
+  start_date: isoDate,
+  currency_symbol_placement: z.enum(['before', 'after']),
+  fy_start_month: z.coerce.number().int().min(1).max(12),
+  transaction_edit_days: z.coerce.number().int().min(0).max(3650),
+  date_format: z.enum(['mm/dd/yyyy', 'dd/mm/yyyy', 'yyyy-mm-dd', 'dd-mm-yyyy', 'mm-dd-yyyy']),
+  time_format: z.enum(['12', '24']),
+  currency_precision: z.coerce.number().int().min(0).max(4),
+  quantity_precision: z.coerce.number().int().min(0).max(4),
+  default_profit_percent: z.coerce.number().min(0).max(100000),
+  timezone: optStr(64),
+  stock_accounting_method: z.enum(['fifo', 'lifo']),
+  // Tax
+  tax1_name: optStr(60),
+  tax2_name: optStr(60),
+  tax2_number: optStr(100),
+  enable_inline_tax: z.boolean(),
+  // Product
+  sku_prefix: optStr(20),
+  enable_product_expiry: z.boolean(),
+  product_expiry_type: z.enum(['add_expiry', 'add_mfg_expiry']),
+  enable_brands: z.boolean(),
+  enable_categories: z.boolean(),
+  enable_sub_categories: z.boolean(),
+  enable_price_tax: z.boolean(),
+  enable_sub_units: z.boolean(),
+  enable_racks: z.boolean(),
+  enable_row: z.boolean(),
+  enable_position: z.boolean(),
+  enable_warranty: z.boolean(),
+  product_image_required: z.boolean(),
+  default_unit_id: z.string().uuid().nullable(),
+}).partial();
+
 const SettingsSchema = z.object({
   name: shortStr(200),
   phone,
@@ -493,6 +529,7 @@ const SettingsSchema = z.object({
   receipt_footer: optStr(500),
   tax_number: optStr(100),
   language: z.enum(['en', 'so', 'ar']).optional(),
+  settings: BusinessSettingsBag.optional(),
 });
 
 const CategorySchema = z.object({

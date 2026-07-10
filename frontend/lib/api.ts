@@ -3544,6 +3544,16 @@ const API: any = {
       if (!res.ok) throw new ApiError(res.status, (json && (json.title || json.message || json.detail)) || 'Upload failed', null);
       return json;
     },
+    // Business logo — dedicated endpoint sets the business logoUrl/logoKey.
+    async logo(file: any): Promise<{ url: string; key: string }> {
+      const fd = new FormData();
+      fd.append('logo', file);
+      const tok = getAccessToken();
+      const res = await fetch(BACKEND_BASE + '/api/v1/upload/logo', { method: 'POST', headers: tok ? { Authorization: 'Bearer ' + tok } : {}, body: fd });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new ApiError(res.status, (json && (json.title || json.message || json.detail)) || 'Upload failed', null);
+      return json;
+    },
     // Product photo — dedicated endpoint sets imageUrl and cleans up the old object.
     async productImage(productId: string, file: any): Promise<{ url: string; key: string }> {
       const fd = new FormData();

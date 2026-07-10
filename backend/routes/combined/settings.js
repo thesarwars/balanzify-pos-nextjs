@@ -30,19 +30,27 @@ settingsRouter.get('/', auth, async (req, res, next) => {
       select: {
         id: true, name: true, phone: true, address: true, city: true, country: true,
         currency: true, receiptHeader: true, receiptFooter: true, taxNumber: true, language: true,
+        logoUrl: true, settings: true,
       },
     });
-    res.json(biz);
+    res.json({ ...biz, settings: (biz && biz.settings) || {} });
   } catch (err) { next(err); }
 });
 
 settingsRouter.put('/', auth, requireRole('owner'), validate(SettingsSchema), async (req, res, next) => {
   try {
-    const biz = await prisma.business.update({
-      where: { id: req.user.business_id },
-      data: { name: req.body.name, phone: req.body.phone, address: req.body.address, city: req.body.city, country: req.body.country, currency: req.body.currency, receiptHeader: req.body.receipt_header, receiptFooter: req.body.receipt_footer, taxNumber: req.body.tax_number, ...(req.body.language !== undefined && { language: req.body.language }) },
-    });
-    res.json(biz);
+    const data = {
+      name: req.body.name, phone: req.body.phone, address: req.body.address, city: req.body.city, country: req.body.country,
+      currency: req.body.currency, receiptHeader: req.body.receipt_header, receiptFooter: req.body.receipt_footer,
+      taxNumber: req.body.tax_number, ...(req.body.language !== undefined && { language: req.body.language }),
+    };
+    // Shallow-merge the settings bag so a partial save never drops other keys.
+    if (req.body.settings && typeof req.body.settings === 'object') {
+      const current = await prisma.business.findUnique({ where: { id: req.user.business_id }, select: { settings: true } });
+      data.settings = { ...((current && current.settings) || {}), ...req.body.settings };
+    }
+    const biz = await prisma.business.update({ where: { id: req.user.business_id }, data });
+    res.json({ ...biz, settings: biz.settings || {} });
   } catch (err) { next(err); }
 });
 

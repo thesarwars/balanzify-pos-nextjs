@@ -493,6 +493,7 @@ model Business {
   taxNumber     String?  @map("tax_number") @db.VarChar(100)
   serviceChargePct Decimal? @map("service_charge_pct") @db.Decimal(6, 4) // accepts 10 or 0.10
   enforceRxOnSale Boolean @default(false) @map("enforce_rx_on_sale") // pharmacy: block Rx-only drugs at POS without a valid prescription
+  settings      Json?    @map("settings")  // business-settings preference bag (start date, precisions, prefixes, product toggles, stock method, tax names, date/time format, etc.)
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @default(now()) @updatedAt @map("updated_at")
 
