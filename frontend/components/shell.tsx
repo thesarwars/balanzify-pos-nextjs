@@ -26,75 +26,97 @@ import {
 // ─────────────────────────────────────────────────────────────────
 
 export const NAV = [
-  { sect: null, items: [
-    { id: 'dashboard', label: 'Dashboard', icon: LuLayoutDashboard },
-    { id: 'pos', label: 'Point of Sale', icon: LuScanLine },
-  ]},
-  { sect: 'Inventory', items: [
-    { id: 'locations', label: 'Locations', icon: LuMapPin },
-    { id: 'products', label: 'Products', icon: LuPackage, children: [
-      { key: 'products',    activeId: 'products',   label: 'All Products',        route: '/products' },
-      { key: 'categories',  activeId: 'categories', label: 'Categories',          route: '/categories' },
-      { key: 'brands',      activeId: 'brands',     label: 'Brands',              route: '/brands' },
-      { key: 'labels',      activeId: '',           label: 'Print Labels',        route: '/products?tool=labels' },
-      { key: 'price-groups',activeId: '',           label: 'Selling Price Groups',route: '/products?tool=price-groups' },
-      { key: 'variations',  activeId: '',           label: 'Variations',          route: '/products?tool=variations' },
-      { key: 'units',       activeId: '',           label: 'Units',               route: '/products?tool=units' },
-    ]},
-    { id: 'stock', label: 'Stock', icon: LuBoxes },
-    { id: 'stocktake', label: 'Stocktake', icon: LuClipboardCheck },
-    { id: 'purchase-orders', label: 'Purchase Orders', icon: LuShoppingCart },
-    { id: 'orders', label: 'Orders', icon: LuClipboardList },
-    { id: 'suppliers', label: 'Suppliers', icon: LuTruck },
-  ]},
-  { sect: 'Sales', items: [
-    { id: 'sales', label: 'Sales History', icon: LuReceipt },
-    { id: 'customers', label: 'Customers', icon: LuUsers },
-    { id: 'loyalty', label: 'Loyalty', icon: LuGift },
-    { id: 'discounts', label: 'Discounts', icon: LuTag },
-    { id: 'coupons', label: 'Coupons', icon: LuTicket },
-  ]},
-  { sect: 'Hospitality', items: [
-    { id: 'hotel', label: 'Hotel', icon: LuBedDouble },
-    { id: 'restaurant', label: 'Restaurant', icon: LuUtensils },
-  ]},
-  { sect: 'Verticals', items: [
-    { id: 'pharmacy', label: 'Pharmacy', icon: LuPill },
-    { id: 'interactions', label: 'Drug Interactions', icon: LuActivity },
-    { id: 'wholesale', label: 'Wholesale', icon: LuWarehouse },
-    { id: 'construction', label: 'Construction', icon: LuHardHat },
-    { id: 'delivery', label: 'Delivery', icon: LuBike },
-  ]},
-  { sect: 'Finance', items: [
-    { id: 'payment-accounts', label: 'Payment Accounts', icon: LuLandmark },
-    { id: 'expenses', label: 'Expenses', icon: LuBanknote },
-    { id: 'petty-cash', label: 'Petty Cash', icon: LuCoins },
-    { id: 'adjustments', label: 'Adjustments', icon: LuSlidersHorizontal },
-    { id: 'transfers', label: 'Transfers', icon: LuArrowLeftRight },
-    { id: 'zakat', label: 'Zakat', icon: LuHandCoins },
-    { id: 'lending', label: 'Financing', icon: LuPiggyBank },
-  ]},
-  { sect: 'Operations', items: [
-    { id: 'hrm', label: 'HRM / Staff', icon: LuUserCog },
-    { id: 'projects', label: 'Projects', icon: LuFolderKanban },
-    { id: 'tasks', label: 'Tasks', icon: LuListTodo },
-    { id: 'sync', label: 'Offline Sync', icon: LuRefreshCw },
-  ]},
-  { sect: 'Analytics', items: [
-    { id: 'reports', label: 'Reports', icon: LuChartColumn },
-    { id: 'insights', label: 'AI Insights', icon: LuSparkles, badge: 'AI' },
-  ]},
-  { sect: 'Admin', items: [
-    { id: 'users', label: 'Users', icon: LuUsersRound },
-    { id: 'fiscal', label: 'Fiscalization', icon: LuFileCheck },
-    { id: 'settings', label: 'Settings', icon: LuSettings, children: [
-      { key: 'settings',          activeId: 'settings',          label: 'General',           route: '/settings' },
-      { key: 'business-settings', activeId: 'business-settings', label: 'Business Settings', route: '/business-settings' },
-      { key: 'invoice-settings',  activeId: 'invoice-settings',  label: 'Invoice Settings',  route: '/invoice-settings' },
-    ]},
-    { id: 'modules', label: 'Plan & Modules', icon: LuLayers },
-    { id: 'superadmin', label: 'Superadmin', icon: LuShieldCheck },
-  ]},
+  {
+    sect: null, items: [
+      { id: 'dashboard', label: 'Dashboard', icon: LuLayoutDashboard },
+      { id: 'pos', label: 'Point of Sale', icon: LuScanLine },
+    ]
+  },
+  {
+    sect: 'Inventory', items: [
+      { id: 'locations', label: 'Locations', icon: LuMapPin },
+      {
+        id: 'products', label: 'Products', icon: LuPackage, children: [
+          { key: 'products', activeId: 'products', label: 'All Products', route: '/products' },
+          { key: 'categories', activeId: 'categories', label: 'Categories', route: '/categories' },
+          { key: 'brands', activeId: 'brands', label: 'Brands', route: '/brands' },
+          { key: 'labels', activeId: '', label: 'Print Labels', route: '/products?tool=labels' },
+          { key: 'price-groups', activeId: '', label: 'Selling Price Groups', route: '/products?tool=price-groups' },
+          { key: 'variations', activeId: '', label: 'Variations', route: '/products?tool=variations' },
+          { key: 'units', activeId: '', label: 'Units', route: '/products?tool=units' },
+        ]
+      },
+      { id: 'stock', label: 'Stock', icon: LuBoxes },
+      { id: 'stocktake', label: 'Stocktake', icon: LuClipboardCheck },
+      { id: 'purchase-orders', label: 'Purchase Orders', icon: LuShoppingCart },
+      { id: 'orders', label: 'Orders', icon: LuClipboardList },
+      { id: 'suppliers', label: 'Suppliers', icon: LuTruck },
+    ]
+  },
+  {
+    sect: 'Sales', items: [
+      { id: 'sales', label: 'Sales History', icon: LuReceipt },
+      { id: 'customers', label: 'Customers', icon: LuUsers },
+      { id: 'loyalty', label: 'Loyalty', icon: LuGift },
+      { id: 'discounts', label: 'Discounts', icon: LuTag },
+      { id: 'coupons', label: 'Coupons', icon: LuTicket },
+    ]
+  },
+  {
+    sect: 'Hospitality', items: [
+      { id: 'hotel', label: 'Hotel', icon: LuBedDouble },
+      { id: 'restaurant', label: 'Restaurant', icon: LuUtensils },
+    ]
+  },
+  {
+    sect: 'Verticals', items: [
+      { id: 'pharmacy', label: 'Pharmacy', icon: LuPill },
+      { id: 'interactions', label: 'Drug Interactions', icon: LuActivity },
+      { id: 'wholesale', label: 'Wholesale', icon: LuWarehouse },
+      { id: 'construction', label: 'Construction', icon: LuHardHat },
+      { id: 'delivery', label: 'Delivery', icon: LuBike },
+    ]
+  },
+  {
+    sect: 'Finance', items: [
+      { id: 'payment-accounts', label: 'Payment Accounts', icon: LuLandmark },
+      { id: 'expenses', label: 'Expenses', icon: LuBanknote },
+      { id: 'petty-cash', label: 'Petty Cash', icon: LuCoins },
+      { id: 'adjustments', label: 'Adjustments', icon: LuSlidersHorizontal },
+      { id: 'transfers', label: 'Transfers', icon: LuArrowLeftRight },
+      { id: 'zakat', label: 'Zakat', icon: LuHandCoins },
+      { id: 'lending', label: 'Financing', icon: LuPiggyBank },
+    ]
+  },
+  {
+    sect: 'Operations', items: [
+      { id: 'hrm', label: 'HRM / Staff', icon: LuUserCog },
+      { id: 'projects', label: 'Projects', icon: LuFolderKanban },
+      { id: 'tasks', label: 'Tasks', icon: LuListTodo },
+      { id: 'sync', label: 'Offline Sync', icon: LuRefreshCw },
+    ]
+  },
+  {
+    sect: 'Analytics', items: [
+      { id: 'reports', label: 'Reports', icon: LuChartColumn },
+      { id: 'insights', label: 'AI Insights', icon: LuSparkles, badge: 'AI' },
+    ]
+  },
+  {
+    sect: 'Admin', items: [
+      { id: 'users', label: 'Users', icon: LuUsersRound },
+      { id: 'fiscal', label: 'Fiscalization', icon: LuFileCheck },
+      {
+        id: 'settings', label: 'Settings', icon: LuSettings, children: [
+          { key: 'settings', activeId: 'settings', label: 'General', route: '/settings' },
+          { key: 'business-settings', activeId: 'business-settings', label: 'Business Settings', route: '/business-settings' },
+          { key: 'invoice-settings', activeId: 'invoice-settings', label: 'Invoice Settings', route: '/invoice-settings' },
+        ]
+      },
+      { id: 'modules', label: 'Plan & Modules', icon: LuLayers },
+      { id: 'superadmin', label: 'Superadmin', icon: LuShieldCheck },
+    ]
+  },
 ];
 
 // Nav icons are react-icons components; a plain string is still tolerated so an
@@ -350,7 +372,7 @@ const TWEAK_DEFAULTS = {
 const ThemeCtx = React.createContext<Theme>(makeTheme());
 export const useTheme = () => React.useContext(ThemeCtx);
 
-const TweaksCtx = React.createContext<[any, (key: string, value: any) => void]>([TWEAK_DEFAULTS, () => {}]);
+const TweaksCtx = React.createContext<[any, (key: string, value: any) => void]>([TWEAK_DEFAULTS, () => { }]);
 export function useTweaks() { return React.useContext(TweaksCtx); }
 
 // The signed-in identity (real mode) — null until loaded / in mock mode.
@@ -437,10 +459,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [enabledMods, setEnabledMods] = React.useState<any>(null);   // Set<key> | 'all' | null(loading)
   React.useEffect(() => {
     let ok = false;
-    try { ok = localStorage.getItem('bz_authed') === '1'; } catch {}
+    try { ok = localStorage.getItem('bz_authed') === '1'; } catch { }
     if (!ok) { router.replace('/login'); setAuthed(false); return; }
     setAuthed(true);
-    API.auth.me().then(setSession).catch(() => {});
+    API.auth.me().then(setSession).catch(() => { });
   }, [router]);
 
   // Enabled modules drive which nav items show. Reloads when a module is
@@ -470,7 +492,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     setTweaks((prev: any) => {
       const next = { ...prev, [key]: value };
       if (typeof window !== 'undefined') {
-        try { localStorage.setItem('bz_tweaks', JSON.stringify(next)); } catch {}
+        try { localStorage.setItem('bz_tweaks', JSON.stringify(next)); } catch { }
       }
       return next;
     });
@@ -494,7 +516,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   function doLogout() {
     if (typeof window !== 'undefined') {
-      try { localStorage.setItem('bz_authed', '0'); } catch {}
+      try { localStorage.setItem('bz_authed', '0'); } catch { }
     }
     if (API.auth && typeof (API.auth as any).logout === 'function') (API.auth as any).logout();
     router.push('/login');
@@ -529,27 +551,27 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <ThemeCtx.Provider value={T}>
-     <SessionCtx.Provider value={session}>
-      <TweaksCtx.Provider value={[tweaks, setTweak]}>
-        <div style={{ display: 'flex', height: '100vh', overflow: 'hidden', background: T.paperAlt, fontFamily: T.fBody } as React.CSSProperties}>
-          {isMobile ? (
-            <>
-              {drawerOpen && <div onClick={() => setDrawerOpen(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(8,12,20,0.5)', backdropFilter: 'blur(2px)', zIndex: 60 } as React.CSSProperties} />}
-              <div style={{ position: 'fixed', top: 0, bottom: 0, left: 0, zIndex: 70, transform: drawerOpen ? 'none' : 'translateX(-100%)', transition: 'transform .24s cubic-bezier(.4,0,.2,1)', boxShadow: drawerOpen ? '8px 0 30px rgba(0,0,0,0.3)' : 'none' } as React.CSSProperties}>
-                <Sidebar T={T} screen={active} setScreen={go} collapsed={false} setCollapsed={() => {}} onLogout={logout} onLock={() => setLocked(true)} enabledMods={enabledMods} mobile />
-              </div>
-            </>
-          ) : (
-            <Sidebar T={T} screen={active} setScreen={go} collapsed={collapsed} setCollapsed={setCollapsed} onLogout={logout} onLock={() => setLocked(true)} enabledMods={enabledMods} />
-          )}
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>{children}</div>
-          {/* Dev/debug overlay — only in mock mode; hidden in the real (production) build. */}
-          {!(API.config?.isReal?.()) && <ApiPanel T={T} />}
-          {pendingNav && <ConfirmDialog T={T} onCancel={() => setPendingNav(null)} onConfirm={confirmPendingNav} />}
-          {locked && <LockScreen T={T} session={session} onCancel={() => setLocked(false)} />}
-        </div>
-      </TweaksCtx.Provider>
-     </SessionCtx.Provider>
+      <SessionCtx.Provider value={session}>
+        <TweaksCtx.Provider value={[tweaks, setTweak]}>
+          <div style={{ display: 'flex', height: '100vh', overflow: 'hidden', background: T.paperAlt, fontFamily: T.fBody } as React.CSSProperties}>
+            {isMobile ? (
+              <>
+                {drawerOpen && <div onClick={() => setDrawerOpen(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(8,12,20,0.5)', backdropFilter: 'blur(2px)', zIndex: 60 } as React.CSSProperties} />}
+                <div style={{ position: 'fixed', top: 0, bottom: 0, left: 0, zIndex: 70, transform: drawerOpen ? 'none' : 'translateX(-100%)', transition: 'transform .24s cubic-bezier(.4,0,.2,1)', boxShadow: drawerOpen ? '8px 0 30px rgba(0,0,0,0.3)' : 'none' } as React.CSSProperties}>
+                  <Sidebar T={T} screen={active} setScreen={go} collapsed={false} setCollapsed={() => { }} onLogout={logout} onLock={() => setLocked(true)} enabledMods={enabledMods} mobile />
+                </div>
+              </>
+            ) : (
+              <Sidebar T={T} screen={active} setScreen={go} collapsed={collapsed} setCollapsed={setCollapsed} onLogout={logout} onLock={() => setLocked(true)} enabledMods={enabledMods} />
+            )}
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>{children}</div>
+            {/* Dev/debug overlay — only in mock mode; hidden in the real (production) build. */}
+            {!(API.config?.isReal?.()) && <ApiPanel T={T} />}
+            {pendingNav && <ConfirmDialog T={T} onCancel={() => setPendingNav(null)} onConfirm={confirmPendingNav} />}
+            {locked && <LockScreen T={T} session={session} onCancel={() => setLocked(false)} />}
+          </div>
+        </TweaksCtx.Provider>
+      </SessionCtx.Provider>
     </ThemeCtx.Provider>
   );
 }
