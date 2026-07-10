@@ -14,14 +14,17 @@ import { money } from '@/lib/theme';
 import { Btn, Badge, Panel, Modal, Field, TextField, SelectField, FormGrid, useToast } from '@/components/kit';
 import { Topbar, useSession } from '@/components/shell';
 import { API } from '@/lib/api';
+import { todayLocal, toLocalYmd } from '@/lib/business-settings';
 
 const TABS = [
   ['ledger', '▤ Ledger'], ['purchases', '◨ Purchases'], ['stock', '◱ Stock Report'],
   ['docs', '◎ Documents & Note'], ['payments', '▭ Payments'], ['activities', '↻ Activities'],
 ] as const;
 
-const yearStart = () => new Date(new Date().getFullYear(), 0, 1).toISOString().slice(0, 10);
-const yearEnd = () => new Date(new Date().getFullYear(), 11, 31).toISOString().slice(0, 10);
+// These are LOCAL midnights, which land on the previous day in UTC for anyone
+// east of Greenwich — so format them in the local calendar, not via toISOString.
+const yearStart = () => toLocalYmd(new Date(new Date().getFullYear(), 0, 1));
+const yearEnd = () => toLocalYmd(new Date(new Date().getFullYear(), 11, 31));
 const fmtDate = (d: any) => (d ? String(d).slice(0, 10) : '');
 
 export function ContactView({ T }: { T: Theme }) {
@@ -377,7 +380,7 @@ export function ContactView({ T }: { T: Theme }) {
         <Modal T={T} title="Add discount" subtitle={contact.name} width={440} onClose={() => setDiscountOpen(false)}
           footer={<><div style={{ flex: 1, fontSize: 11.5, color: T.inkMute }}>Connects when supplier discounts land.</div><Btn T={T} kind="ghost" onClick={() => setDiscountOpen(false)}>Close</Btn><Btn T={T} kind="accent" onClick={() => { setDiscountOpen(false); toast('Supplier discounts are on the way — nothing saved yet.'); }}>Submit</Btn></>}>
           <FormGrid>
-            <Field T={T} label="Date" full><TextField T={T} type="date" value={new Date().toISOString().slice(0, 10)} onChange={() => {}} /></Field>
+            <Field T={T} label="Date" full><TextField T={T} type="date" value={todayLocal()} onChange={() => {}} /></Field>
             <Field T={T} label="Amount" full><TextField T={T} type="number" value={''} onChange={() => {}} placeholder="0.00" /></Field>
             <Field T={T} label="Note" full>
               <textarea rows={3} placeholder="Optional note" style={{ width: '100%', padding: '10px 13px', fontSize: 13.5, fontFamily: T.fBody, color: T.ink, background: T.paper, border: `1.5px solid ${T.line}`, borderRadius: T.r, outline: 'none', resize: 'vertical', boxSizing: 'border-box' }} />

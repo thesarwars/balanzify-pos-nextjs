@@ -11,6 +11,7 @@ import { useRouter } from 'next/navigation';
 import { useTheme } from '@/components/shell';
 import { AuthBrand } from '@/components/auth-brand';
 import { API } from '@/lib/api';
+import { todayLocal } from '@/lib/business-settings';
 
 const { useState: useStateRg, useEffect: useEffectRg } = React;
 
@@ -44,7 +45,7 @@ function RegisterBusiness({ T, onRegistered, onBackToLogin }: { T: Theme; onRegi
   const [timezones, setTimezones] = useStateRg<any[]>([]);
   const [showPw, setShowPw] = useStateRg(false);
 
-  const [biz, setBiz] = useStateRg<any>({ name: '', start_date: new Date().toISOString().slice(0, 10), currency_id: 1, time_zone: '' });
+  const [biz, setBiz] = useStateRg<any>({ name: '', start_date: todayLocal(), currency_id: 1, time_zone: '' });
   const [tax, setTax] = useStateRg<any>({ tax_label_1: 'VAT', tax_number_1: '', tax_label_2: '', tax_number_2: '' });
   const [user, setUser] = useStateRg<any>({ name: '', email: '', username: '', password: '' });
 

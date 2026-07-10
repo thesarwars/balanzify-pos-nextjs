@@ -10,6 +10,7 @@ import { Btn, Badge, Panel, Modal, Field, TextField, SelectField, FormGrid, useT
 import { Topbar, useSession } from '@/components/shell';
 import { API } from '@/lib/api';
 import { BUSINESS } from '@/lib/data';
+import { todayLocal } from '@/lib/business-settings';
 
 const { useState: useStateHr, useEffect: useEffectHr } = React;
 
@@ -251,7 +252,7 @@ export function HRM({ T }: { T: any }) {
 
           {/* ATTENDANCE */}
           {tab === 'attendance' && (() => {
-            const today = new Date().toISOString().slice(0, 10);
+            const today = todayLocal();
             const todayRec = (id: any) => att.find((a: any) => a.employee_id === id && a.date === today);
             return (
             <>
@@ -508,7 +509,7 @@ export function HRM({ T }: { T: any }) {
 }
 
 function EmployeeModal({ T, meta, locs, onClose, onSaved }: { T: any; meta: any; locs: any[]; onClose: () => void; onSaved: () => void }) {
-  const [f, setF] = useStateHr<any>({ name: '', email: '', department: meta.departments[0] || '', designation: meta.designations[0] || '', location_id: (locs[0] || {}).id || 1, salary: '', joined: new Date().toISOString().slice(0, 10) });
+  const [f, setF] = useStateHr<any>({ name: '', email: '', department: meta.departments[0] || '', designation: meta.designations[0] || '', location_id: (locs[0] || {}).id || 1, salary: '', joined: todayLocal() });
   const [busy, setBusy] = useStateHr(false); const [err, setErr] = useStateHr<any>(null);
   const set = (k: string, v: any) => setF((s: any) => ({ ...s, [k]: v }));
   // Keep numeric ids numeric (mock) but pass uuid ids through unchanged (real backend).
@@ -699,7 +700,7 @@ function PayslipSettings({ T, onClose, onSaved }: { T: any; onClose: () => void;
 }
 
 function ShiftModal({ T, emps, locs, onClose, onSaved }: { T: any; emps: any[]; locs: any[]; onClose: () => void; onSaved: () => void }) {
-  const [f, setF] = useStateHr<any>({ employee_id: (emps[0] || {}).id || '', location_id: (locs[0] || {}).id || 1, date: new Date().toISOString().slice(0, 10), start: '08:00', end: '16:00', role: '' });
+  const [f, setF] = useStateHr<any>({ employee_id: (emps[0] || {}).id || '', location_id: (locs[0] || {}).id || 1, date: todayLocal(), start: '08:00', end: '16:00', role: '' });
   const [busy, setBusy] = useStateHr(false);
   const set = (k: string, v: any) => setF((s: any) => ({ ...s, [k]: v }));
   return (
@@ -822,7 +823,7 @@ function EmployeeProfile({ T, profile: p, onClose }: { T: any; profile: any; onC
 }
 
 function AdvanceModal({ T, emps, onClose, onSaved }: { T: any; emps: any[]; onClose: () => void; onSaved: () => void }) {
-  const [f, setF] = useStateHr<any>({ employee_id: (emps[0] || {}).id || '', amount: '', date: new Date().toISOString().slice(0, 10), account_id: '', note: '' });
+  const [f, setF] = useStateHr<any>({ employee_id: (emps[0] || {}).id || '', amount: '', date: todayLocal(), account_id: '', note: '' });
   const [accounts, setAccounts] = useStateHr<any[]>([]);
   const [busy, setBusy] = useStateHr(false); const [err, setErr] = useStateHr<any>(null);
   React.useEffect(() => { API.paymentAccount.list().then((a: any[]) => { setAccounts(a); setF((s: any) => ({ ...s, account_id: (a[0] || {}).id || '' })); }).catch(() => {}); }, []);

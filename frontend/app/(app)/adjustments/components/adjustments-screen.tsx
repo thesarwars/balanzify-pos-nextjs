@@ -10,6 +10,7 @@ import { money, money0 } from '@/lib/theme';
 import { Btn, Badge, Panel, Modal, Field, TextField, SelectField, FormGrid, useToast } from '@/components/kit';
 import { Topbar } from '@/components/shell';
 import { API } from '@/lib/api';
+import { todayLocal } from '@/lib/business-settings';
 
 const { useState: useStateAj, useEffect: useEffectAj } = React;
 
@@ -75,7 +76,7 @@ export function Adjustments({ T }: { T: Theme }) {
 
 function AdjustmentEditor({ T, locs, onClose, onSaved }: { T: Theme; locs: any[]; onClose: () => void; onSaved: () => void }) {
   const [locId, setLocId] = useStateAj((locs[0] || {}).id || 1);
-  const [date, setDate] = useStateAj(new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useStateAj(todayLocal());
   const [type, setType] = useStateAj('normal');
   const [reason, setReason] = useStateAj('');
   const [lines, setLines] = useStateAj<any[]>([{ product_id: '', qty: '' }]);

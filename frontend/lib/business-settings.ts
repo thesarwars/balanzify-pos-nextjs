@@ -61,14 +61,19 @@ export function useSetting<T>(key: string, fallback: T): T {
 // strings feed <input type="date">, so they must never be reformatted upstream.
 
 /**
- * Today as a machine 'YYYY-MM-DD' in the user's LOCAL day, for date inputs.
- * `new Date().toISOString().slice(0, 10)` is the UTC day, which is already
- * tomorrow for anyone west of Greenwich late in the evening.
+ * A Date as machine 'YYYY-MM-DD' in the LOCAL calendar day, for date inputs.
+ * `d.toISOString().slice(0, 10)` is the UTC day instead, which is already
+ * tomorrow for anyone west of Greenwich in the evening — and already yesterday
+ * for a locally-constructed midnight like `new Date(y, 0, 1)` east of it.
  */
-export function todayLocal(): string {
-  const d = new Date();
+export function toLocalYmd(d: Date): string {
   const p = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/** Today as machine 'YYYY-MM-DD' in the user's local day. */
+export function todayLocal(): string {
+  return toLocalYmd(new Date());
 }
 
 /** Format a 'YYYY-MM-DD' (or ISO) value per `date_format`. Falls back to the input. */

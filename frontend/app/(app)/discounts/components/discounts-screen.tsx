@@ -11,6 +11,7 @@ import { Btn, Badge, Panel, Modal, Field, TextField, SelectField, FormGrid, useT
 import { Topbar } from '@/components/shell';
 import { API } from '@/lib/api';
 import { CATEGORIES } from '@/lib/data';
+import { todayLocal } from '@/lib/business-settings';
 
 const { useState: useStateDc, useEffect: useEffectDc } = React;
 
@@ -28,7 +29,7 @@ export function Discounts({ T }: { T: Theme }) {
   useEffectDc(() => { reload(); }, [reload]);
   useEffectDc(() => { Promise.all([API.brand.list(), API.location.list(), API.category.list()]).then(([brands, locs, cats]: any) => setRefs({ brands, locs, cats })).catch(() => {}); }, []);
 
-  const now = new Date().toISOString().slice(0, 10);
+  const now = todayLocal();
   const live = (d: any) => d.is_active && (!d.ends_at || d.ends_at >= now) && (!d.starts_at || d.starts_at <= now);
 
   async function toggleActive(d: any) { try { await API.discount.update(d.id, { is_active: !d.is_active }); reload(); } catch (e: any) { show(e.message); } }

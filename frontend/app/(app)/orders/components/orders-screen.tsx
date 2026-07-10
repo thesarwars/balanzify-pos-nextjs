@@ -12,6 +12,7 @@ import { Btn, Badge, Panel, Modal, Field, TextField, SelectField, FormGrid, useT
 import { Topbar } from '@/components/shell';
 import { API } from '@/lib/api';
 import { PRODUCTS } from '@/lib/data';
+import { todayLocal } from '@/lib/business-settings';
 
 const { useState: useStateOr, useEffect: useEffectOr } = React;
 
@@ -108,7 +109,7 @@ function OrderEditor({ T, isPO, parties, locs, onClose, onSaved }: { T: Theme; i
   const list = isPO ? parties.suppliers : parties.customers;
   const [partyId, setPartyId] = useStateOr<any>('');
   const [locId, setLocId] = useStateOr<any>((locs[0] || {}).id || 1);
-  const [date, setDate] = useStateOr<any>(new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useStateOr<any>(todayLocal());
   const [lines, setLines] = useStateOr<any[]>([{ product_id: '', qty: '', price: '' }]);
   const [busy, setBusy] = useStateOr<any>(false);
   const [err, setErr] = useStateOr<any>(null);

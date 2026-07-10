@@ -12,6 +12,7 @@ import { Btn, Badge, Panel, Modal, Field, TextField, SelectField, FormGrid, useT
 import { Topbar, useSession } from '@/components/shell';
 import { API } from '@/lib/api';
 import { BUSINESS } from '@/lib/data';
+import { todayLocal } from '@/lib/business-settings';
 
 const { useState: useStateFn, useEffect: useEffectFn } = React;
 
@@ -129,7 +130,7 @@ export function Finance({ T, tab: initial }: { T: Theme; tab?: string }) {
 }
 
 function ExpenseModal({ T, cats, locs, accounts, onClose, onSaved, onAddCat }: { T: Theme; cats: any[]; locs: any[]; accounts: any[]; onClose: () => void; onSaved: () => void; onAddCat: (n: string) => any }) {
-  const [f, setF] = useStateFn<any>({ date: new Date().toISOString().slice(0, 10), category_id: (cats[0] || {}).id || '', location_id: (locs[0] || {}).id || 1, account_id: (accounts[0] || {}).id || '', amount: '', payment_status: 'paid', expense_for: '', note: '', is_refund: false });
+  const [f, setF] = useStateFn<any>({ date: todayLocal(), category_id: (cats[0] || {}).id || '', location_id: (locs[0] || {}).id || 1, account_id: (accounts[0] || {}).id || '', amount: '', payment_status: 'paid', expense_for: '', note: '', is_refund: false });
   const [busy, setBusy] = useStateFn(false);
   const [err, setErr] = useStateFn<any>(null);
   const [newCat, setNewCat] = useStateFn('');

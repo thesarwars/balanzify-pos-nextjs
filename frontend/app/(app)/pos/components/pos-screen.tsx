@@ -14,6 +14,7 @@ import { outbox } from '@/lib/use-offline-sync';
 import { money } from '@/lib/theme';
 import { CASHIER, CATEGORIES, PRODUCTS, PAYMENT_METHODS } from '@/lib/data';
 import { setNavBlock } from '@/lib/nav-guard';
+import { todayLocal } from '@/lib/business-settings';
 
 const { useState: useStateP, useMemo, useRef, useEffect: useEffectP } = React;
 
@@ -161,7 +162,7 @@ export function POS({ T, tweaks }: { T: any; tweaks: any }) {
   // ── Auto-apply matching discount rules (by brand / category / location, in
   //    date window, highest priority wins per line). Zero impact if no rules. ──
   const locId = (register && register.location_id) || null;
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = todayLocal();
   const ruleMatches = (r: any, l: any) =>
     r.is_active && (!r.starts_at || r.starts_at <= todayStr) && (!r.ends_at || r.ends_at >= todayStr)
     && (!r.brand_id || String(r.brand_id) === String(l.brand_id))

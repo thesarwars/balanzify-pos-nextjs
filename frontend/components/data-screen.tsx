@@ -10,6 +10,7 @@ import { Btn, Badge, Panel, Modal, Field, TextField, FormGrid, useToast } from '
 import { Topbar, useSession } from '@/components/shell';
 import { API } from '@/lib/api';
 import { BUSINESS, CATEGORIES, DASH, DATA } from '@/lib/data';
+import { toLocalYmd } from '@/lib/business-settings';
 
 const { useState: useStateD } = React;
 
@@ -278,7 +279,8 @@ export function Reports({ T }: { T: Theme }) {
   const [ov, setOv] = useStateD<any>(null);
   React.useEffect(() => {
     const now = new Date();
-    const from = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
+    // Local midnight on the 1st is the previous month in UTC east of Greenwich.
+    const from = toLocalYmd(new Date(now.getFullYear(), now.getMonth(), 1));
     Promise.all([API.report.profit({ from }), API.report.dashboard()])
       .then(([p, d]: any[]) => setOv({ summary: p && p.summary, top: d && d.topProducts }))
       .catch(() => {});

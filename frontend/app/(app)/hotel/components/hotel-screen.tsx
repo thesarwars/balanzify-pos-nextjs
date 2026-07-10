@@ -11,6 +11,7 @@ import { money, money0 } from '@/lib/theme';
 import { Btn, Badge, Panel, Modal, Field, TextField, SelectField, FormGrid, useToast } from '@/components/kit';
 import { Topbar } from '@/components/shell';
 import { API } from '@/lib/api';
+import { todayLocal } from '@/lib/business-settings';
 
 const { useState: useS, useEffect: useE, useCallback: useCb } = React;
 
@@ -20,7 +21,7 @@ const HK_TONE: any = { pending: 'amber', in_progress: 'blue', done: 'green', ins
 const ROOM_STATUSES = ['available', 'cleaning', 'maintenance', 'blocked', 'occupied', 'reserved'];
 const CHARGE_TYPES = ['restaurant', 'laundry', 'minibar', 'transport', 'spa', 'telephone', 'damage', 'service_charge', 'other'];
 
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => todayLocal();
 const addDays = (d: string, n: number) => { const x = new Date(d); x.setDate(x.getDate() + n); return x.toISOString().slice(0, 10); };
 const dstr = (d: any) => (d ? String(d).slice(0, 10) : '—');
 

@@ -7,6 +7,7 @@ import { PRODUCTS } from '@/lib/data';
 import { blankLine, sub, formStatus, StaticVal, miniNum } from './bits';
 import { ProductCombo } from './product-combo';
 import { readSheet, mapImportRows } from './import-lines';
+import { todayLocal } from '@/lib/business-settings';
 
 const { useState: useStatePu, useEffect: useEffectPu } = React;
 
@@ -30,7 +31,7 @@ export function PurchaseEditor({ T, suppliers, locs, existing, onClose, onSaved 
   const [reference, setReference] = useStatePu(ex ? (ex.ref_no || '') : '');
   const [status, setStatus] = useStatePu(ex ? formStatus(ex.status) : 'received');   // received | ordered | pending
   const [location_id, setLocation] = useStatePu<any>(ex ? (ex.location_id || '') : ((locs[0] || {}).id || ''));
-  const [date, setDate] = useStatePu(ex ? (ex.date || new Date().toISOString().slice(0, 10)) : new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useStatePu(ex ? (ex.date || todayLocal()) : todayLocal());
   const [payTerm, setPayTerm] = useStatePu(ex && ex.payment_terms ? String(ex.payment_terms) : '');
   const [notes, setNotes] = useStatePu(ex ? (ex.notes || '') : '');
   const [lines, setLines] = useStatePu<any[]>(exLines);
@@ -45,7 +46,7 @@ export function PurchaseEditor({ T, suppliers, locs, existing, onClose, onSaved 
   const [paid, setPaid] = useStatePu<any>('');
   const [payMethod, setPayMethod] = useStatePu('cash');
   const [payNote, setPayNote] = useStatePu('');
-  const [paidOn, setPaidOn] = useStatePu(new Date().toISOString().slice(0, 10));
+  const [paidOn, setPaidOn] = useStatePu(todayLocal());
   const [doc, setDoc] = useStatePu<any>(ex && ex.document_url ? { url: ex.document_url, key: '', name: 'Attached document' } : null);
   const [docBusy, setDocBusy] = useStatePu(false);
   const [importMsg, setImportMsg] = useStatePu('');

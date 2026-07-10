@@ -10,6 +10,7 @@ import { money } from '@/lib/theme';
 import { Btn, Badge, Panel, Modal, Field, TextField, SelectField, FormGrid, useToast } from '@/components/kit';
 import { Topbar, useTheme } from '@/components/shell';
 import { API } from '@/lib/api';
+import { todayLocal } from '@/lib/business-settings';
 
 const { useState: useS, useEffect: useE, useCallback: useCb } = React;
 
@@ -22,7 +23,7 @@ export function Coupons({ T }: { T: Theme }) {
   const reload = useCb(() => { setLoading(true); API.coupon.list().then(setRows).catch(() => setRows([])).finally(() => setLoading(false)); }, []);
   useE(() => { reload(); }, [reload]);
 
-  const now = new Date().toISOString().slice(0, 10);
+  const now = todayLocal();
   const live = (c: any) => c.is_active && (!c.valid_until || c.valid_until >= now) && (!c.valid_from || c.valid_from <= now);
   const fmtVal = (c: any) => c.type === 'pct' ? c.value + '%' : c.type === 'flat' ? money(c.value) : 'Free item';
   async function toggle(c: any) { try { await API.coupon.update(c.id, { is_active: !c.is_active }); reload(); } catch (e: any) { show(e.message); } }

@@ -9,6 +9,7 @@ import { API } from '@/lib/api';
 import { PRODUCTS } from '@/lib/data';
 import { PrintLabels } from '../../products/components/print-labels';
 import { MiniStat, formStatus } from './bits';
+import { todayLocal } from '@/lib/business-settings';
 
 const { useState: useStatePu, useEffect: useEffectPu } = React;
 
@@ -17,7 +18,7 @@ export function AddPaymentModal({ T, purchase, onClose, onSaved }: { T: any; pur
   const due = Math.max(0, Number(purchase.due) || 0);
   const [amount, setAmount] = useStatePu(due ? String(due) : '');
   const [method, setMethod] = useStatePu('cash');
-  const [paidOn, setPaidOn] = useStatePu(new Date().toISOString().slice(0, 10));
+  const [paidOn, setPaidOn] = useStatePu(todayLocal());
   const [note, setNote] = useStatePu('');
   const [busy, setBusy] = useStatePu(false);
   const [err, setErr] = useStatePu<any>(null);

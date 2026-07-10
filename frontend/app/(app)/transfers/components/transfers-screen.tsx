@@ -12,6 +12,7 @@ import { Btn, Badge, Panel, Modal, Field, TextField, SelectField, FormGrid, useT
 import { Topbar } from '@/components/shell';
 import { API } from '@/lib/api';
 import { PRODUCTS } from '@/lib/data';
+import { todayLocal } from '@/lib/business-settings';
 
 const { useState: useStateTr, useEffect: useEffectTr } = React;
 
@@ -92,7 +93,7 @@ export function Transfers({ T }: { T: Theme }) {
 function TransferEditor({ T, locs, onClose, onSaved }: { T: Theme; locs: any[]; onClose: () => void; onSaved: () => void }) {
   const [from, setFrom] = useStateTr((locs[0] || {}).id || 1);
   const [to, setTo] = useStateTr((locs[1] || {}).id || 2);
-  const [date, setDate] = useStateTr(new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useStateTr(todayLocal());
   const [status, setStatus] = useStateTr('pending');
   const [lines, setLines] = useStateTr<any[]>([{ product_id: '', qty: '' }]);
   const [busy, setBusy] = useStateTr(false);

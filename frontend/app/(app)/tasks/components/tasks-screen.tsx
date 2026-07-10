@@ -9,6 +9,7 @@ import type { Theme } from '@/lib/theme';
 import { Btn, Badge, Panel, Modal, Field, TextField, SelectField, FormGrid, useToast } from '@/components/kit';
 import { Topbar } from '@/components/shell';
 import { API } from '@/lib/api';
+import { todayLocal } from '@/lib/business-settings';
 
 const { useState: useS, useEffect: useE, useCallback: useCb } = React;
 
@@ -18,7 +19,7 @@ const PRIORITY_TONE: any = { critical: 'red', high: 'amber', medium: 'blue', low
 const PRIORITIES = ['critical', 'high', 'medium', 'low'];
 const FILTERS = [['', 'All'], ['not_started', 'To do'], ['in_progress', 'In progress'], ['blocked', 'Blocked'], ['completed', 'Done']];
 
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => todayLocal();
 const addDays = (d: string, n: number) => { const x = new Date(d); x.setDate(x.getDate() + n); return x.toISOString().slice(0, 10); };
 
 export function Tasks({ T }: { T: Theme }) {

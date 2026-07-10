@@ -12,6 +12,7 @@ import { money, money0 } from '@/lib/theme';
 import { Btn, Badge, Panel, Modal, Field, TextField, SelectField, FormGrid, useToast } from '@/components/kit';
 import { Topbar } from '@/components/shell';
 import { API } from '@/lib/api';
+import { todayLocal } from '@/lib/business-settings';
 
 const { useState: useS, useEffect: useE, useCallback: useCb } = React;
 
@@ -25,7 +26,7 @@ const TASK_TONE: any = { not_started: 'gray', in_progress: 'blue', blocked: 'amb
 const PRIORITY_TONE: any = { critical: 'red', high: 'amber', medium: 'blue', low: 'gray' };
 const PRIORITIES = ['critical', 'high', 'medium', 'low'];
 
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => todayLocal();
 const addDays = (d: string, n: number) => { const x = new Date(d); x.setDate(x.getDate() + n); return x.toISOString().slice(0, 10); };
 const dstr = (d: any) => (d ? String(d).slice(0, 10) : '—');
 
