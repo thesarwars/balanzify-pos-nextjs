@@ -2770,11 +2770,116 @@ function adaptRealAdjustment(a: any): any {
   };
 }
 
+// ── Sales list (/api/v1/sales) → the grid row ────────────────────────────────
+export const EMPTY_SALE_TOTALS = {
+  count: 0, total_amount: 0, total_paid: 0, total_due: 0, sell_return: 0,
+  by_payment_status: {} as Record<string, number>,
+  by_payment_method: {} as Record<string, number>,
+};
+
+// Non-posting documents are not owed yet, so they have no payment status.
+const NON_POSTING_SALE = ['draft', 'quotation', 'proforma'];
+
+function salePaymentStatus(s: any): string {
+  if (NON_POSTING_SALE.includes(s.status)) return '';
+  const due = Number(s.amountDue || 0);
+  const paid = Number(s.amountPaid || 0);
+  if (due <= 0) return 'paid';
+  return paid > 0 ? 'partial' : 'due';
+}
+
+function adaptRealSaleListRow(s: any): any {
+  return {
+    id: s.id,
+    date: String(s.saleDate || s.createdAt || '').slice(0, 10),
+    invoice_no: s.saleNumber || '',
+    customer_name: (s.customer && s.customer.name) || 'Walk-In Customer',
+    contact_number: (s.customer && s.customer.phone) || '',
+    location_name: (s.location && s.location.name) || '—',
+    status: s.status,
+    payment_status: salePaymentStatus(s),
+    payment_method: s.paymentMethod || '',
+    total: Number(s.totalAmount || 0),
+    paid: Number(s.amountPaid || 0),
+    due: Number(s.amountDue || 0),
+    sell_return: Number(s.sellReturn || 0),
+    shipping_status: s.shippingStatus || '',
+    total_items: Number(s.totalItems || 0),
+    added_by: (s.cashier && s.cashier.name) || '—',
+    sell_note: s.notes || '',
+    staff_note: s.staffNote || '',
+    _real: s,
+  };
+}
+
+// ── UI form → POST /sales/invoice ────────────────────────────────────────────
+function toSaleTender(p: any): any {
+  return {
+    method: p.method,
+    amount: Number(p.amount),
+    payment_account_id: p.payment_account_id || undefined,
+    paid_on: p.paid_on || undefined,
+    note: p.note || undefined,
+    tendered: p.tendered != null ? Number(p.tendered) : undefined,
+  };
+}
+
+function toSaleInvoiceBody(b: any): any {
+  return {
+    location_id: b.location_id,
+    customer_id: b.customer_id || undefined,
+    status: b.status || 'completed',
+    sale_date: b.sale_date || undefined,
+    pay_term: b.pay_term ? Number(b.pay_term) : undefined,
+    pay_term_period: b.pay_term_period || undefined,
+    invoice_scheme_id: b.invoice_scheme_id || undefined,
+    invoice_no: b.invoice_no || undefined,
+    document_url: b.document_url || undefined,
+    document_key: b.document_key || undefined,
+    discount_type: b.discount_type || 'pct',
+    discount_value: Number(b.discount_value || 0),
+    tax_rate_id: b.tax_rate_id || undefined,
+    notes: b.notes || undefined,
+    staff_note: b.staff_note || undefined,
+    shipping_details: b.shipping_details || undefined,
+    shipping_address: b.shipping_address || undefined,
+    shipping_charges: Number(b.shipping_charges || 0),
+    shipping_status: b.shipping_status || undefined,
+    delivered_to: b.delivered_to || undefined,
+    delivery_person_id: b.delivery_person_id || undefined,
+    shipping_document_url: b.shipping_document_url || undefined,
+    shipping_document_key: b.shipping_document_key || undefined,
+    expenses: (b.expenses || []).filter((e: any) => e.name && Number(e.amount) > 0)
+      .map((e: any) => ({ name: e.name, amount: Number(e.amount) })),
+    items: (b.items || []).map((i: any) => ({
+      product_id: i.product_id,
+      variant_id: i.variant_id || undefined,
+      quantity: Number(i.quantity),
+      unit_price: Number(i.unit_price),
+      discount: Number(i.discount || 0),
+      tax_rate_id: i.tax_rate_id || undefined,
+    })),
+    payments: (b.payments || []).filter((p: any) => Number(p.amount) > 0).map(toSaleTender),
+  };
+}
+
 // ── Sale detail (/api/v1/sales/:id) → expose sell_lines for the returns modal ──
 // Carries sale_item_id + real product uuid so a refund can be posted per line.
 function adaptRealSaleDetail(s: any): any {
   if (!s) return s;
   const items = Array.isArray(s.items) ? s.items : [];
+
+  // How much of each line has already gone back. RefundItem carries saleItemId,
+  // so a partly-returned line offers only what remains — the server enforces the
+  // same cap, but the operator should never be shown quantities they cannot take.
+  const returned = new Map<string, number>();
+  for (const r of (Array.isArray(s.refunds) ? s.refunds : [])) {
+    for (const ri of (Array.isArray(r.items) ? r.items : [])) {
+      if (!ri.saleItemId) continue;
+      returned.set(ri.saleItemId, (returned.get(ri.saleItemId) || 0) + Number(ri.quantity || 0));
+    }
+  }
+
   return {
     ...s,
     sell_lines: items.map((it: any) => ({
@@ -2783,7 +2888,7 @@ function adaptRealSaleDetail(s: any): any {
       product_name: (it.product && it.product.name) || '',
       product_id: 0,                 // numeric id is only meaningful in mock mode
       quantity: Number(it.quantity || 0),
-      quantity_returned: 0,          // backend doesn't track per-line refunds
+      quantity_returned: returned.get(it.id) || 0,
       unit_price: Number(it.unitPrice || 0),
     })),
   };
@@ -3189,10 +3294,28 @@ const API: any = {
     async list(params: any = {}) {
       if (REAL_MODE) {
         const res = await realReq('GET', '/sales', { query: params });
-        return { items: (res && (res.sales || res.data)) || [], meta: res.meta };
+        return { items: (res && (res.sales || res.data)) || [], meta: res.meta, totals: (res && res.totals) || null };
       }
       const res = await transport('GET', '/connector/api/sell', { query: params });
-      return { items: res.data, meta: res.meta };
+      return { items: res.data, meta: res.meta, totals: null };
+    },
+    // The Sales list: rows shaped for the grid, plus footer totals over the
+    // filtered set (not the page).
+    async rows(params: any = {}) {
+      if (REAL_MODE) {
+        const query: any = {};
+        for (const k of ['location_id', 'customer_id', 'payment_status', 'payment_method', 'status',
+                         'shipping_status', 'cashier_id', 'from', 'to', 'search', 'page', 'limit']) {
+          if (params[k]) query[k] = params[k];
+        }
+        const res = await realReq('GET', '/sales', { query });
+        return {
+          rows: ((res && res.sales) || []).map(adaptRealSaleListRow),
+          totals: (res && res.totals) || EMPTY_SALE_TOTALS,
+          pages: (res && res.pages) || 1,
+        };
+      }
+      return { rows: [], totals: EMPTY_SALE_TOTALS, pages: 1 };
     },
     async get(id: any) {
       if (REAL_MODE) {
@@ -3234,6 +3357,25 @@ const API: any = {
       };
       const res = await transport('POST', '/connector/api/sell', { body: { sells: [sell] } });
       return res.data[0];
+    },
+
+    // ── The back-office "Add Sale" invoice ────────────────────────────────
+    // `status` decides whether it reaches the books: draft / quotation /
+    // proforma save the document only. Tax is computed server-side from the
+    // rate ids; never send a percentage.
+    async createInvoice(body: any) {
+      if (REAL_MODE) return await realReq('POST', '/sales/invoice', { body: toSaleInvoiceBody(body) });
+      throw new ApiError(501, 'Sales invoices need the live backend.');
+    },
+    /** Turn a draft / quotation / proforma into a posted sale. */
+    async finalize(id: any, payments: any[] = []) {
+      if (REAL_MODE) return await realReq('POST', '/sales/' + id + '/finalize', { body: { payments: payments.map(toSaleTender) } });
+      throw new ApiError(501, 'Sales invoices need the live backend.');
+    },
+    /** Take a payment against an invoice already on the books. */
+    async addPayment(id: any, payment: any) {
+      if (REAL_MODE) return await realReq('POST', '/sales/' + id + '/payment', { body: toSaleTender(payment) });
+      throw new ApiError(501, 'Sales invoices need the live backend.');
     },
   },
 

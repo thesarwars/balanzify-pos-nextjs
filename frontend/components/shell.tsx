@@ -62,7 +62,12 @@ export const NAV = [
   },
   {
     sect: 'Sales', items: [
-      { id: 'sales', label: 'Sales History', icon: LuReceipt },
+      {
+        id: 'sales', label: 'Sales', icon: LuReceipt, children: [
+          { key: 'list-sales', activeId: 'sales', label: 'List Sales', route: '/sales' },
+          { key: 'add-sale',   activeId: '',      label: 'Add Sale',   route: '/sales?new=1' },
+        ],
+      },
       { id: 'customers', label: 'Customers', icon: LuUsers },
       { id: 'loyalty', label: 'Loyalty', icon: LuGift },
       { id: 'discounts', label: 'Discounts', icon: LuTag },

@@ -37,6 +37,7 @@ const CHART = [
   { code: '3000', name: "Owner's Equity",      type: 'equity',    normal: 'credit' },
   { code: '4000', name: 'Sales Revenue',       type: 'revenue',   normal: 'credit' },
   { code: '4100', name: 'Delivery Revenue',    type: 'revenue',   normal: 'credit' },
+  { code: '4200', name: 'Other Income',        type: 'revenue',   normal: 'credit' },
   { code: '5000', name: 'Cost of Goods Sold',  type: 'expense',   normal: 'debit'  },
   { code: '5050', name: 'Inventory Shrinkage/Adjustments', type: 'expense', normal: 'debit' },
   { code: '5100', name: 'Salaries & Wages',     type: 'expense',   normal: 'debit'  },
@@ -144,6 +145,78 @@ async function postSale(tx, { businessId, sale, tenders, taxAmount = 0, cogs = 0
   return postJournal(tx, {
     businessId, description: `Sale ${sale.saleNumber || ''}`.trim(),
     sourceType: 'sale', sourceId: sale.id, createdById, lines,
+  });
+}
+
+/**
+ * Post an INVOICE sale (the "Add Sale" document), which differs from a POS
+ * checkout in two ways postSale cannot express:
+ *
+ *   1. It may be only partly paid. Whatever the tenders do not cover becomes a
+ *      receivable, so the debits still add up to the total.
+ *   2. Its total is not all product revenue. Shipping recovery and named
+ *      surcharges are credited to their own income accounts, so the P&L does not
+ *      quietly report freight as merchandise sales.
+ *
+ *   Dr  tender accounts        amountPaid          (split across the tender legs)
+ *   Dr  1100 Accounts Rec.     amountDue
+ *     Cr 4000 Sales revenue    goods, net of discount
+ *     Cr 4100 Delivery revenue shipping
+ *     Cr 4200 Other income     Σ named expenses
+ *     Cr 2100 Tax payable      tax
+ *   Dr  5000 COGS              cost        }  omitted for a service-only invoice
+ *     Cr 1200 Inventory        cost        }  that consumed no stock
+ *
+ * `goods + shipping + otherIncome + tax` must equal `sale.totalAmount`, or
+ * postJournal throws GL_UNBALANCED and the whole sale rolls back.
+ */
+async function postInvoiceSale(tx, { businessId, sale, tenders, goods, shipping = 0, otherIncome = 0, taxAmount = 0, cogs = 0, amountDue = 0, createdById }) {
+  const tax  = round2(taxAmount);
+  const ship = round2(shipping);
+  const other = round2(otherIncome);
+  const rev  = round2(goods);
+  const cost = round2(cogs);
+  const due  = round2(amountDue);
+  const lines = [];
+
+  for (const t of (tenders || [])) {
+    const amt = round2(t.amount);
+    if (amt <= 0) continue;
+    const code = t.pending ? '1015' : tenderAccountCode(t.method);
+    lines.push({ code, debit: amt, credit: 0, description: t.pending ? `In-transit: ${t.method}` : `Tender: ${t.method}` });
+  }
+  if (due > 0) lines.push({ code: '1100', debit: due, credit: 0, description: 'Billed to customer' });
+
+  if (rev !== 0)  lines.push({ code: '4000', debit: 0, credit: rev,   description: 'Sales revenue' });
+  if (ship > 0)   lines.push({ code: '4100', debit: 0, credit: ship,  description: 'Shipping charges' });
+  if (other > 0)  lines.push({ code: '4200', debit: 0, credit: other, description: 'Additional expenses billed' });
+  if (tax > 0)    lines.push({ code: '2100', debit: 0, credit: tax,   description: 'Sales tax' });
+
+  if (cost > 0) {
+    lines.push({ code: '5000', debit: cost, credit: 0, description: 'COGS' });
+    lines.push({ code: '1200', debit: 0, credit: cost, description: 'Inventory relief' });
+  }
+
+  return postJournal(tx, {
+    businessId, description: `Invoice ${sale.saleNumber || ''}`.trim(),
+    sourceType: 'sale', sourceId: sale.id, createdById, lines,
+  });
+}
+
+/**
+ * A payment received against an already-invoiced sale: cash in, receivable down.
+ * The revenue was recognised when the invoice was posted, so nothing touches 4000.
+ */
+async function postSalePayment(tx, { businessId, saleId, method, amount, createdById, description }) {
+  const amt = round2(amount);
+  if (amt <= 0) return null;
+  return postJournal(tx, {
+    businessId, description: description || 'Payment received',
+    sourceType: 'sale_payment', sourceId: saleId, createdById,
+    lines: [
+      { code: tenderAccountCode(method), debit: amt, credit: 0, description: `Tender: ${method}` },
+      { code: '1100', debit: 0, credit: amt, description: 'Receivable settled' },
+    ],
   });
 }
 
@@ -331,4 +404,4 @@ async function accountBalances(businessId, { from, to } = {}) {
   });
 }
 
-module.exports = { CHART, ensureChart, postJournal, postSale, postFolioCharge, postFolioPayment, postInventoryAdjustment, postAdvance, postPayroll, postMilestoneBill, postMilestonePayment, postDeliveryRevenue, postExpense, accountBalances, tenderAccountCode, round2 };
+module.exports = { CHART, ensureChart, postJournal, postSale, postInvoiceSale, postSalePayment, postFolioCharge, postFolioPayment, postInventoryAdjustment, postAdvance, postPayroll, postMilestoneBill, postMilestonePayment, postDeliveryRevenue, postExpense, accountBalances, tenderAccountCode, round2 };

@@ -982,7 +982,86 @@ const SaleSchemaV3 = z.object({
   return true;
 }, { message: 'Split payment amounts must sum to more than zero' });
 
+// ── Sale invoice ("Add Sale") ─────────────────────────────────────────────────
+// A back-office sale document. `status` decides whether it posts: draft,
+// quotation and proforma write the document only. Tax RATES are resolved
+// server-side from tax_rate_id; a client-supplied percentage is never trusted.
+// Accepts 'YYYY-MM-DD' as well as a full ISO timestamp.
+const dateish = z.coerce.date().optional().nullable();
+
+// The tenders a payment may actually arrive as. These are exactly the
+// PaymentMethod enum members that name real money, so each one has an account
+// in accounting.tenderAccountCode(). 'credit' is not a tender — an unpaid
+// balance is expressed by leaving it unpaid — and 'split' is derived, not sent.
+const TENDER_METHODS = ['cash', 'zaad', 'evc', 'edahab', 'mpesa', 'telebirr', 'cbe_birr', 'mobile_money', 'visa', 'mastercard'];
+
+const SaleInvoicePaymentSchema = z.object({
+  method: z.enum(TENDER_METHODS),
+  amount: z.coerce.number().nonnegative(),
+  payment_account_id: uuid.optional().nullable(),
+  paid_on: dateish,
+  note: optStr(500),
+  tendered: z.coerce.number().nonnegative().optional().nullable(),
+});
+
+const SaleInvoiceSchema = z.object({
+  location_id: uuid,
+  customer_id: uuid.optional().nullable(),
+  status: z.enum(['draft', 'quotation', 'proforma', 'completed']).default('completed'),
+  sale_date: dateish,
+  pay_term: z.coerce.number().int().nonnegative().max(3650).optional().nullable(),
+  pay_term_period: z.enum(['days', 'months']).optional().nullable(),
+  invoice_scheme_id: uuid.optional().nullable(),
+  invoice_no: optStr(50),
+  document_url: optStr(500),
+  document_key: optStr(255),
+
+  discount_type: z.enum(['pct', 'flat']).default('pct'),
+  discount_value: z.coerce.number().nonnegative().default(0),
+  tax_rate_id: uuid.optional().nullable(),   // order tax; the amount is computed
+  // (a percentage over 100 is rejected below, not silently clamped)
+
+  notes: optStr(1000),        // sell note — printed on the invoice
+  staff_note: optStr(1000),   // internal
+
+  shipping_details: optStr(1000),
+  shipping_address: optStr(1000),
+  shipping_charges: z.coerce.number().nonnegative().default(0),
+  shipping_status: z.enum(['pending', 'packed', 'shipped', 'delivered', 'cancelled']).optional().nullable(),
+  delivered_to: optStr(255),
+  delivery_person_id: uuid.optional().nullable(),
+  shipping_document_url: optStr(500),
+  shipping_document_key: optStr(255),
+
+  expenses: z.array(z.object({
+    name: shortStr(255),
+    amount: z.coerce.number().nonnegative(),
+  })).max(20).default([]),
+
+  items: z.array(z.object({
+    product_id: uuid,
+    variant_id: uuid.optional().nullable(),
+    quantity: z.coerce.number().int().positive('Quantity must be a positive whole number'),
+    unit_price: z.coerce.number().nonnegative().optional().nullable(),
+    discount: z.coerce.number().nonnegative().default(0),   // flat, off the line total
+    tax_rate_id: uuid.optional().nullable(),
+  })).min(1, 'Add at least one product'),
+
+  payments: z.array(SaleInvoicePaymentSchema).max(10).default([]),
+}).refine((d) => d.discount_type !== 'pct' || d.discount_value <= 100, {
+  message: 'A percentage discount cannot exceed 100%', path: ['discount_value'],
+});
+
+const SaleFinalizeSchema = z.object({
+  payments: z.array(SaleInvoicePaymentSchema).max(10).default([]),
+});
+
+const SalePaymentSchema = SaleInvoicePaymentSchema.extend({
+  amount: z.coerce.number().positive('Payment amount must be greater than zero'),
+});
+
 module.exports = {
+  SaleInvoiceSchema, SaleFinalizeSchema, SalePaymentSchema, TENDER_METHODS,
   RegisterSchema, LoginSchema, PinLoginSchema, ChangePasswordSchema,
   RefreshTokenSchema, VerifyMfaSchema,
   ProductSchema, SaleSchema, SaleItemSchema, RefundSchema,

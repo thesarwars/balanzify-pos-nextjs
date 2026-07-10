@@ -110,12 +110,30 @@ enum SaleType {
 }
 
 enum SaleStatus {
+  // draft / quotation / proforma are NON-POSTING: the document exists, but no
+  // stock moves, no cost layer is consumed and no journal is written. Finalising
+  // one runs the same posting path as a sale created final in the first place.
   draft
+  quotation
+  proforma
   pending
   completed
   refunded
   partially_refunded
   cancelled
+}
+
+enum ShippingStatus {
+  pending
+  packed
+  shipped
+  delivered
+  cancelled
+}
+
+enum PayTermPeriod {
+  days
+  months
 }
 
 // Rotating savings group (hagbad / ayuuto / chama). Members contribute a fixed
@@ -1129,6 +1147,7 @@ model InvoiceScheme {
 
   business  Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
   locations Location[] @relation("location_invoice_scheme")
+  sales     Sale[]
 
   @@map("invoice_schemes")
 }
@@ -1160,7 +1179,8 @@ model PaymentAccount {
   createdAt     DateTime @default(now()) @map("created_at")
 
   business   Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  hrAdvances HrAdvance[]
+  hrAdvances   HrAdvance[]
+  salePayments SalePayment[]
 
   @@map("payment_accounts")
 }
@@ -1207,7 +1227,8 @@ model User {
   poPayments               POPayment[]
   shifts                   Shift[]
   heldSales                HeldSale[]
-  salesCashier             Sale[]
+  salesCashier             Sale[]                   @relation("sale_cashier")
+  salesDelivered           Sale[]                   @relation("sale_delivery_person")
   refunds                  Refund[]
   expenses                 Expense[]
   employeeRecords          Employee[]
@@ -2087,7 +2108,9 @@ model Sale {
   locationId            String?       @map("location_id") @db.Uuid
   customerId            String?       @map("customer_id") @db.Uuid
   couponId              String?       @map("coupon_id") @db.Uuid
-  saleNumber            String?       @unique @map("sale_number") @db.VarChar(50)
+  // Unique PER BUSINESS, not globally: two tenants both running the default
+  // invoice scheme will each mint "AS0001", and neither may block the other.
+  saleNumber            String?       @map("sale_number") @db.VarChar(50)
   receiptToken          String?       @unique @map("receipt_token") @db.VarChar(64)
   type                  SaleType      @default(pos)
   status                SaleStatus    @default(completed)
@@ -2117,12 +2140,38 @@ model Sale {
   cashierId             String?       @map("cashier_id") @db.Uuid
   createdAt             DateTime      @default(now()) @map("created_at")
 
+  // ── Invoice ("Add Sale") fields ────────────────────────────────────────────
+  // A POS sale leaves all of these null; they belong to the invoice document.
+  // The date the sale happened, which may not be when the row was written
+  // (back-dating an invoice). Defaults in the DB, so a POS checkout — which
+  // never sets it — still lands on the sales list's date filter.
+  saleDate            DateTime?       @default(now()) @map("sale_date")
+  payTerm             Int?            @map("pay_term")
+  payTermPeriod       PayTermPeriod?  @map("pay_term_period")
+  invoiceSchemeId     String?         @map("invoice_scheme_id") @db.Uuid
+  documentUrl         String?         @map("document_url")
+  documentKey         String?         @map("document_key")
+  // Order-level tax. `taxAmount` above is the money; this is which rate made it.
+  taxRateId           String?         @map("tax_rate_id") @db.Uuid
+  // `notes` is the customer-facing sell note; this one never leaves the office.
+  staffNote           String?         @map("staff_note")
+  shippingDetails     String?         @map("shipping_details")
+  shippingAddress     String?         @map("shipping_address")
+  shippingCharges     Decimal         @default(0) @map("shipping_charges") @db.Decimal(12, 2)
+  shippingStatus      ShippingStatus? @map("shipping_status")
+  deliveredTo         String?         @map("delivered_to")
+  deliveryPersonId    String?         @map("delivery_person_id") @db.Uuid
+  shippingDocumentUrl String?         @map("shipping_document_url")
+  shippingDocumentKey String?         @map("shipping_document_key")
+  // Denormalised Σ expenses[].amount, so the list can total without a join.
+  expensesTotal       Decimal         @default(0) @map("expenses_total") @db.Decimal(12, 2)
+
   business      Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
   shift         Shift?          @relation(fields: [shiftId], references: [id])
   location      Location?       @relation(fields: [locationId], references: [id])
   customer      Customer?       @relation(fields: [customerId], references: [id])
   coupon        Coupon?         @relation(fields: [couponId], references: [id])
-  cashier       User?           @relation(fields: [cashierId], references: [id])
+  cashier       User?           @relation("sale_cashier", fields: [cashierId], references: [id])
   items         SaleItem[]
   refunds       Refund[]
   saleKeys      SaleKey[]
@@ -2133,9 +2182,30 @@ model Sale {
   paymentPlans  PaymentPlan[]
   fiscalReceipt FiscalReceipt?
 
+  invoiceScheme  InvoiceScheme? @relation(fields: [invoiceSchemeId], references: [id])
+  taxRate        TaxRate?       @relation("sale_order_tax", fields: [taxRateId], references: [id])
+  deliveryPerson User?          @relation("sale_delivery_person", fields: [deliveryPersonId], references: [id])
+  expenses       SaleExpense[]
+
+  @@unique([businessId, saleNumber])
   @@index([businessId, createdAt])
   @@index([shiftId])
+  @@index([businessId, status])
   @@map("sales")
+}
+
+/// A named surcharge on an invoice (packing, insurance, handling…). Credited to
+/// other income, never to product revenue.
+model SaleExpense {
+  id     String  @id @default(uuid()) @db.Uuid
+  saleId String  @map("sale_id") @db.Uuid
+  name   String  @db.VarChar(255)
+  amount Decimal @db.Decimal(12, 2)
+
+  sale Sale @relation(fields: [saleId], references: [id], onDelete: Cascade)
+
+  @@index([saleId])
+  @@map("sale_expenses")
 }
 
 // Per-business fiscalization device. African tax authorities (Kenya eTIMS,
@@ -3170,9 +3240,14 @@ model SalePayment {
   note              String?       @db.VarChar(500)
   completedAt       DateTime?     @map("completed_at")
   createdAt         DateTime      @default(now()) @map("created_at")
+  // Which bank/till the money landed in, and the date the payer says they paid —
+  // which need not be the moment the row was written.
+  paymentAccountId  String?       @map("payment_account_id") @db.Uuid
+  paidOn            DateTime?     @map("paid_on")
 
-  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  sale     Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  business       Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  sale           Sale            @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  paymentAccount PaymentAccount? @relation(fields: [paymentAccountId], references: [id])
 
   @@index([saleId])
   @@index([provider, providerReference])
@@ -3208,6 +3283,7 @@ model TaxRate {
   business       Business         @relation(fields: [businessId], references: [id], onDelete: Cascade)
   products       Product[]
   saleItems      SaleItem[]
+  sales          Sale[]           @relation("sale_order_tax")
   folioCharges   FolioCharge[]
   ProductVariant ProductVariant[]
   PurchaseOrder  PurchaseOrder[]

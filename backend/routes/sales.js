@@ -3,7 +3,9 @@ const crypto = require('crypto');
 const prisma = require('../lib/prisma');
 const { auth, requireRole } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
-const { SaleSchemaV3, RefundSchema, ShiftOpenSchema, ShiftCloseSchema, HoldSaleSchema } = require('../validation/schemas');
+const { SaleSchemaV3, RefundSchema, ShiftOpenSchema, ShiftCloseSchema, HoldSaleSchema,
+        SaleInvoiceSchema, SaleFinalizeSchema, SalePaymentSchema, TENDER_METHODS } = require('../validation/schemas');
+const saleInvoice = require('../lib/saleInvoice');
 const { trackSale, trackFraudSignal } = require('../lib/metrics');
 const registry  = require('../lib/payments');
 const { computeTax }   = require('../lib/tax');
@@ -1032,32 +1034,167 @@ router.get('/summary/today', auth, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// Payment status is DERIVED from the stored money columns, never a separate flag
+// that could drift out of step with them.
+//
+// A draft / quotation / proforma owes nothing yet (amountDue = 0), so without
+// the NOT it would be counted as "Paid" — a document that was never a sale
+// inflating the paid tally while its own row correctly shows no status at all.
+// `NOT` rather than a `status` key, so it composes with a caller's status filter
+// instead of overwriting it.
+const NON_POSTING_STATUSES = ['draft', 'quotation', 'proforma'];
+const POSTED_ONLY = { NOT: { status: { in: NON_POSTING_STATUSES } } };
+const PAYMENT_STATUS_WHERE = {
+  paid:    { ...POSTED_ONLY, amountDue: { lte: 0 } },
+  partial: { ...POSTED_ONLY, amountPaid: { gt: 0 }, amountDue: { gt: 0 } },
+  due:     { ...POSTED_ONLY, amountPaid: { lte: 0 }, amountDue: { gt: 0 } },
+};
+
+// Query params that reach Prisma as enums have to be whitelisted here: an
+// unrecognised value is a client mistake (400), not a 500 from the query engine.
+const SALE_STATUSES = ['draft', 'quotation', 'proforma', 'pending', 'completed', 'refunded', 'partially_refunded', 'cancelled'];
+const SHIPPING_STATUSES = ['pending', 'packed', 'shipped', 'delivered', 'cancelled'];
+const PAYMENT_METHODS = [...TENDER_METHODS, 'split', 'credit'];
+const oneOf = (list, v, what) => {
+  if (!v) return undefined;
+  if (!list.includes(v)) throw Object.assign(new Error(`Unknown ${what}: "${v}".`), { statusCode: 400 });
+  return v;
+};
+
 // ── GET /api/v1/sales ─────────────────────────────────────────────────────────
 router.get('/', auth, async (req, res, next) => {
   try {
-    const { page = 1, limit = 50, from, to, payment_method, status, customer_id, cashier_id, search } = req.query;
+    const { page = 1, limit = 50, from, to, payment_method, payment_status, status,
+            customer_id, cashier_id, location_id, shipping_status, search } = req.query;
+
+    const method   = oneOf(PAYMENT_METHODS, payment_method, 'payment method');
+    const payState = oneOf(Object.keys(PAYMENT_STATUS_WHERE), payment_status, 'payment status');
+    const saleState = oneOf(SALE_STATUSES, status, 'sale status');
+    const shipState = oneOf(SHIPPING_STATUSES, shipping_status, 'shipping status');
+
+    // Filter on the document date. A POS sale never sets one, but the column
+    // defaults to now() in the DB and old rows were backfilled from created_at.
+    const dateFilter = {};
+    if (from) dateFilter.gte = new Date(from);
+    if (to) dateFilter.lte = new Date(new Date(to).setDate(new Date(to).getDate() + 1));
+
     const where = {
       businessId: req.user.business_id,
-      ...(from           && { createdAt:    { gte: new Date(from) } }),
-      ...(to             && { createdAt:    { lte: new Date(new Date(to).setDate(new Date(to).getDate() + 1)) } }),
-      ...(payment_method && { paymentMethod: payment_method }),
-      ...(status         && { status }),
-      ...(customer_id    && { customerId:   customer_id }),
-      ...(cashier_id     && { cashierId:    cashier_id }),
-      ...(search         && { saleNumber:   { contains: search, mode: 'insensitive' } }),
+      ...(Object.keys(dateFilter).length && { saleDate: dateFilter }),
+      ...(method     && { paymentMethod: method }),
+      ...(payState   && PAYMENT_STATUS_WHERE[payState]),
+      ...(saleState  && { status: saleState }),
+      ...(customer_id     && { customerId:   customer_id }),
+      ...(cashier_id      && { cashierId:    cashier_id }),
+      ...(location_id     && { locationId:   location_id }),
+      ...(shipState       && { shippingStatus: shipState }),
+      ...(search && {
+        OR: [
+          { saleNumber: { contains: search, mode: 'insensitive' } },
+          { customer: { name:  { contains: search, mode: 'insensitive' } } },
+          { customer: { phone: { contains: search, mode: 'insensitive' } } },
+        ],
+      }),
     };
-    const [sales, total] = await Promise.all([
+
+    const take = Math.min(500, parseInt(limit) || 50);
+    const skip = ((parseInt(page) || 1) - 1) * take;
+
+    const [sales, total, sums, methodCounts, statusCounts, returned] = await Promise.all([
       prisma.sale.findMany({
         where,
-        include: { cashier: { select: { name: true } }, customer: { select: { name: true } }, _count: { select: { items: true } } },
-        orderBy: { createdAt: 'desc' },
-        take:    parseInt(limit),
-        skip:    (parseInt(page) - 1) * parseInt(limit),
+        include: {
+          cashier:  { select: { name: true } },
+          customer: { select: { name: true, phone: true } },
+          location: { select: { name: true } },
+          items:    { select: { quantity: true } },
+          refunds:  { select: { totalRefunded: true } },
+        },
+        orderBy: [{ saleDate: 'desc' }, { createdAt: 'desc' }],
+        take, skip,
       }),
       prisma.sale.count({ where }),
+      // Footer totals span the whole FILTERED set, not just the page.
+      prisma.sale.aggregate({ where, _sum: { totalAmount: true, amountPaid: true, amountDue: true } }),
+      prisma.sale.groupBy({ by: ['paymentMethod'], where, _count: { _all: true } }),
+      // AND, not a spread: `where` may already carry amountPaid/amountDue from an
+      // active payment_status filter, and spreading would overwrite them — the
+      // footer would then advertise "Due - 1" while no due row is in the grid.
+      Promise.all(Object.entries(PAYMENT_STATUS_WHERE).map(async ([k, w]) =>
+        [k, await prisma.sale.count({ where: { AND: [where, w] } })])),
+      prisma.refund.aggregate({ where: { sale: where }, _sum: { totalRefunded: true } }),
     ]);
-    res.json({ sales, total, page: parseInt(page), pages: Math.ceil(total / parseInt(limit)) });
-  } catch (err) { next(err); }
+
+    const rows = sales.map(({ items, refunds, ...rest }) => ({
+      ...rest,
+      totalItems: items.reduce((n, i) => n + i.quantity, 0),
+      // What this customer sent back. Refunds are settled when recorded, so this
+      // is the value returned, not an outstanding credit.
+      sellReturn: refunds.reduce((n, r) => n + parseFloat(r.totalRefunded), 0),
+    }));
+
+    res.json({
+      sales: rows,
+      total, page: parseInt(page) || 1, pages: Math.ceil(total / take),
+      totals: {
+        count: total,
+        total_amount: Number(sums._sum.totalAmount || 0),
+        total_paid:   Number(sums._sum.amountPaid || 0),
+        total_due:    Number(sums._sum.amountDue || 0),
+        sell_return:  Number(returned._sum.totalRefunded || 0),
+        by_payment_status: Object.fromEntries(statusCounts),
+        by_payment_method: Object.fromEntries(methodCounts.map((m) => [m.paymentMethod, m._count._all])),
+      },
+    });
+  } catch (err) {
+    if (err.statusCode) return res.status(err.statusCode).json({ title: err.message, status: err.statusCode });
+    next(err);
+  }
+});
+
+// ── POST /api/v1/sales/invoice ────────────────────────────────────────────────
+// The back-office "Add Sale". `status` decides whether it reaches the books:
+// draft / quotation / proforma write the document and nothing else.
+router.post('/invoice', auth, validate(SaleInvoiceSchema), async (req, res, next) => {
+  try {
+    const sale = await prisma.$transaction((tx) => saleInvoice.createInvoice(tx, {
+      businessId: req.user.business_id, userId: req.user.id,
+      currency: req.user.currency || 'USD', body: req.body,
+    }));
+    res.status(201).json(sale);
+  } catch (err) {
+    if (err.statusCode) return res.status(err.statusCode).json({ title: err.message, status: err.statusCode });
+    next(err);
+  }
+});
+
+// Turn a draft / quotation / proforma into a posted sale. Same posting path as a
+// sale created final, so there is only one way for a sale to hit the books.
+router.post('/:id/finalize', auth, requireRole('owner', 'manager'), validate(SaleFinalizeSchema), async (req, res, next) => {
+  try {
+    const sale = await prisma.$transaction((tx) => saleInvoice.finalizeInvoice(tx, {
+      businessId: req.user.business_id, userId: req.user.id,
+      currency: req.user.currency || 'USD', saleId: req.params.id, payments: req.body.payments,
+    }));
+    res.json(sale);
+  } catch (err) {
+    if (err.statusCode) return res.status(err.statusCode).json({ title: err.message, status: err.statusCode });
+    next(err);
+  }
+});
+
+// Take a payment against an invoice already on the books: cash in, receivable down.
+router.post('/:id/payment', auth, validate(SalePaymentSchema), async (req, res, next) => {
+  try {
+    const sale = await prisma.$transaction((tx) => saleInvoice.addPayment(tx, {
+      businessId: req.user.business_id, userId: req.user.id,
+      currency: req.user.currency || 'USD', saleId: req.params.id, payment: req.body,
+    }));
+    res.json(sale);
+  } catch (err) {
+    if (err.statusCode) return res.status(err.statusCode).json({ title: err.message, status: err.statusCode });
+    next(err);
+  }
 });
 
 // ── GET /api/v1/sales/:id ─────────────────────────────────────────────────────
@@ -1067,10 +1204,18 @@ router.get('/:id', auth, async (req, res, next) => {
       where: { id: req.params.id },
       include: {
         cashier:  { select: { name: true } },
-        customer: { select: { name: true, phone: true, loyaltyPoints: true } },
+        customer: { select: { name: true, phone: true, email: true, address: true, loyaltyPoints: true } },
         coupon:   { select: { code: true, type: true, value: true } },
         items:    { include: { product: { select: { name: true, sku: true } }, variant: { select: { attributes: true, sku: true } } } },
-        refunds:  { select: { refundNumber: true, totalRefunded: true, createdAt: true, reason: true } },
+        // items[] lets the UI cap a further return at what has not gone back yet.
+        refunds:  { select: { refundNumber: true, totalRefunded: true, createdAt: true, reason: true,
+                              items: { select: { saleItemId: true, quantity: true } } } },
+        location:       { select: { name: true } },
+        expenses:       true,
+        payments:       { include: { paymentAccount: { select: { name: true } } }, orderBy: { createdAt: 'asc' } },
+        deliveryPerson: { select: { name: true } },
+        taxRate:        { select: { name: true, rate: true } },
+        invoiceScheme:  { select: { name: true } },
       },
     });
     if (!sale || sale.businessId !== req.user.business_id) {
