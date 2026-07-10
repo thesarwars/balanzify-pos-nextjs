@@ -12,8 +12,10 @@ import { BUSINESS, PRODUCTS } from '@/lib/data';
 // ─────────────────────────────────────────────────────────────────
 const { useState: useStateLb } = React;
 
-// deterministic Code128-ish bar pattern from a string (visual only)
-function barsFor(code: any) {
+// deterministic Code128-ish bar pattern from a string (visual only).
+// Exported so the Barcode Settings preview draws the exact same bars the
+// printer will emit — one source of truth for the label artwork.
+export function barsFor(code: any) {
   let seed = 0; const s = String(code || 'SKU');
   for (let i = 0; i < s.length; i++) seed = (seed * 31 + s.charCodeAt(i)) >>> 0;
   const bars = []; let x = seed;

@@ -7,7 +7,9 @@
 // ─────────────────────────────────────────────────────────────────
 import React from 'react';
 import { Btn, Badge, Panel, Modal, Field, TextField, FormGrid, useToast } from '@/components/kit';
-import { Topbar } from '@/components/shell';
+import { Topbar, useSession } from '@/components/shell';
+import { BUSINESS } from '@/lib/data';
+import { SheetPreview } from './sheet-preview';
 import { API } from '@/lib/api';
 
 const { useState, useEffect, useCallback } = React;
@@ -112,6 +114,8 @@ export function BarcodeSettings({ T }: { T: any }) {
 }
 
 function EditModal({ T, initial, onClose, onSaved }: { T: any; initial: any; onClose: () => void; onSaved: () => void }) {
+  const session = useSession();
+  const bizName = (session && session.business_name) || BUSINESS.name;
   const [f, setF] = useState<any>(initial);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<any>(null);
@@ -175,8 +179,10 @@ function EditModal({ T, initial, onClose, onSaved }: { T: any; initial: any; onC
   );
 
   return (
-    <Modal T={T} title={isEdit ? 'Edit barcode sticker setting' : 'Add barcode sticker setting'} width={720} onClose={onClose}
+    <Modal T={T} title={isEdit ? 'Edit barcode sticker setting' : 'Add barcode sticker setting'} width={920} onClose={onClose}
       footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Cancel</Btn><Btn T={T} kind="accent" onClick={save} disabled={busy}>{busy ? 'Saving…' : 'Save'}</Btn></>}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 330px', gap: 22, alignItems: 'start' }}>
+      <div>
       <FormGrid>
         <Field T={T} label="Sticker sheet setting name *" full><TextField T={T} value={f.name} onChange={(v: any) => set('name', v)} placeholder="e.g. 20 per sheet (Avery 5160)" /></Field>
         <Field T={T} label="Sticker sheet setting description" full>
@@ -211,6 +217,13 @@ function EditModal({ T, initial, onClose, onSaved }: { T: any; initial: any; onC
       </label>
 
       {err && <div style={{ marginTop: 16, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5, fontWeight: 500 }}>⚠ {err}</div>}
+      </div>
+
+      {/* Live preview — redraws as the geometry changes */}
+      <div style={{ position: 'sticky', top: 0 }}>
+        <SheetPreview T={T} f={f} bizName={bizName} />
+      </div>
+      </div>
     </Modal>
   );
 }
