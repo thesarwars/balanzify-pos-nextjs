@@ -1056,12 +1056,37 @@ const SaleFinalizeSchema = z.object({
   payments: z.array(SaleInvoicePaymentSchema).max(10).default([]),
 });
 
+// Edit Shipping — logistics only. Deliberately cannot touch money, stock or the
+// document itself, so it is safe on any sale, posted or not.
+const SaleShippingSchema = z.object({
+  shipping_details: optStr(1000),
+  shipping_address: optStr(1000),
+  shipping_status: z.enum(['pending', 'packed', 'shipped', 'delivered', 'cancelled']).optional().nullable(),
+  shipping_note: optStr(1000),
+  delivered_to: optStr(255),
+  delivery_person_id: uuid.optional().nullable(),
+  shipping_document_url: optStr(500),
+  shipping_document_key: optStr(255),
+});
+
+// New Sale / Payment Received notification. Subject and body may carry
+// {tags}; the server substitutes them from the sale itself, so the client
+// cannot claim amounts the record does not hold.
+const SaleNotifySchema = z.object({
+  to: z.string().trim().email('A valid recipient email is required'),
+  cc: z.string().trim().email().optional().nullable(),
+  bcc: z.string().trim().email().optional().nullable(),
+  subject: shortStr(200),
+  body: shortStr(5000),
+});
+
 const SalePaymentSchema = SaleInvoicePaymentSchema.extend({
   amount: z.coerce.number().positive('Payment amount must be greater than zero'),
 });
 
 module.exports = {
   SaleInvoiceSchema, SaleFinalizeSchema, SalePaymentSchema, TENDER_METHODS,
+  SaleShippingSchema, SaleNotifySchema,
   RegisterSchema, LoginSchema, PinLoginSchema, ChangePasswordSchema,
   RefreshTokenSchema, VerifyMfaSchema,
   ProductSchema, SaleSchema, SaleItemSchema, RefundSchema,

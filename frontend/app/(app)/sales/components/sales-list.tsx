@@ -15,7 +15,9 @@ import { formatDate, todayLocal } from '@/lib/business-settings';
 import { API } from '@/lib/api';
 import { ActionsMenu } from '../../products/components/list-table';
 import { SellReturnModal } from './sell-return-modal';
-import { SellDetailsModal, printInvoice, printPackingSlip } from './sell-details-modal';
+import { SellDetailsModal, printInvoice, printPackingSlip, printDeliveryNote } from './sell-details-modal';
+import { EditShippingModal } from './edit-shipping-modal';
+import { ViewPaymentsModal, InvoiceUrlModal, SendNotificationModal } from './sale-action-modals';
 
 const { useState, useEffect, useMemo, useCallback } = React;
 
@@ -67,6 +69,10 @@ export function SalesList({ T, onAdd, flash }: { T: any; onAdd: () => void; flas
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [returning, setReturning] = useState<any>(null);
   const [viewing, setViewing] = useState<any>(null);
+  const [shipping, setShipping] = useState<any>(null);
+  const [payments, setPayments] = useState<any>(null);
+  const [invoiceUrl, setInvoiceUrl] = useState<any>(null);
+  const [notify, setNotify] = useState<{ row: any; template: 'sale' | 'payment' } | null>(null);
   const [show, toastNode] = useToast();
 
   const reload = useCallback(() => setNonce((n) => n + 1), []);
@@ -139,11 +145,11 @@ export function SalesList({ T, onAdd, flash }: { T: any; onAdd: () => void; flas
   // Print straight from the row: fetch the full sale + the business header once,
   // then hand a self-contained page to the browser's print dialog.
   const bizRef = React.useRef<any>(undefined);
-  async function printDoc(row: any, kind: 'invoice' | 'packing') {
+  async function printDoc(row: any, kind: 'invoice' | 'packing' | 'delivery') {
     try {
       if (bizRef.current === undefined) bizRef.current = await API.business.get().catch(() => null);
       const s = await API.sell.get(row.id);
-      (kind === 'invoice' ? printInvoice : printPackingSlip)(s, bizRef.current);
+      ({ invoice: printInvoice, packing: printPackingSlip, delivery: printDeliveryNote })[kind](s, bizRef.current);
     } catch (e: any) { show(e.message || 'Could not load that sale.'); }
   }
 
@@ -246,10 +252,16 @@ export function SalesList({ T, onAdd, flash }: { T: any; onAdd: () => void; flas
                               { label: '👁 View', on: () => setViewing(r) },
                               ...(nonPosting
                                 ? [{ label: busyId === r.id ? 'Finalising…' : 'Finalise this document', on: () => finalize(r) }]
-                                : [{ label: 'Sell return', on: () => setReturning(r), danger: r.status === 'refunded' }]),
+                                : [{ label: '↩ Sell return', on: () => setReturning(r), danger: r.status === 'refunded' }]),
+                              { label: '🚚 Edit Shipping', on: () => setShipping(r) },
                               { sep: true },
                               { label: '⎙ Print Invoice', on: () => printDoc(r, 'invoice') },
                               { label: '⎙ Packing Slip', on: () => printDoc(r, 'packing') },
+                              { label: '⎙ Delivery Note', on: () => printDoc(r, 'delivery') },
+                              { sep: true },
+                              { label: '💰 View Payments', on: () => setPayments(r) },
+                              { label: '🔗 Invoice URL', on: () => setInvoiceUrl(r) },
+                              { label: '✉ New Sale Notification', on: () => setNotify({ row: r, template: 'sale' }) },
                             ]} />
                         </td>
                         {cols.map((c) => {
@@ -317,6 +329,19 @@ export function SalesList({ T, onAdd, flash }: { T: any; onAdd: () => void; flas
       {returning && (
         <SellReturnModal T={T} sale={returning} onClose={() => setReturning(null)}
           onDone={(msg: string) => { setReturning(null); show(msg); reload(); }} />
+      )}
+      {shipping && (
+        <EditShippingModal T={T} sale={shipping} onClose={() => setShipping(null)}
+          onSaved={(msg: string) => { setShipping(null); show(msg); reload(); }} />
+      )}
+      {payments && (
+        <ViewPaymentsModal T={T} sale={payments} onClose={() => setPayments(null)}
+          onNotify={() => { const row = payments; setPayments(null); setNotify({ row, template: 'payment' }); }} />
+      )}
+      {invoiceUrl && <InvoiceUrlModal T={T} sale={invoiceUrl} onClose={() => setInvoiceUrl(null)} />}
+      {notify && (
+        <SendNotificationModal T={T} sale={notify.row} template={notify.template} onClose={() => setNotify(null)}
+          onSent={(msg: string) => { setNotify(null); show(msg); }} />
       )}
       {toastNode}
     </div>

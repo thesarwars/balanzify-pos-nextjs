@@ -2159,6 +2159,7 @@ model Sale {
   shippingAddress     String?         @map("shipping_address")
   shippingCharges     Decimal         @default(0) @map("shipping_charges") @db.Decimal(12, 2)
   shippingStatus      ShippingStatus? @map("shipping_status")
+  shippingNote        String?         @map("shipping_note")
   deliveredTo         String?         @map("delivered_to")
   deliveryPersonId    String?         @map("delivery_person_id") @db.Uuid
   shippingDocumentUrl String?         @map("shipping_document_url")

@@ -4,8 +4,10 @@ const prisma = require('../lib/prisma');
 const { auth, requireRole } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { SaleSchemaV3, RefundSchema, ShiftOpenSchema, ShiftCloseSchema, HoldSaleSchema,
-        SaleInvoiceSchema, SaleFinalizeSchema, SalePaymentSchema, TENDER_METHODS } = require('../validation/schemas');
+        SaleInvoiceSchema, SaleFinalizeSchema, SalePaymentSchema, TENDER_METHODS,
+        SaleShippingSchema, SaleNotifySchema } = require('../validation/schemas');
 const saleInvoice = require('../lib/saleInvoice');
+const email = require('../lib/email');
 const { trackSale, trackFraudSignal } = require('../lib/metrics');
 const registry  = require('../lib/payments');
 const { computeTax }   = require('../lib/tax');
@@ -1181,6 +1183,82 @@ router.post('/:id/finalize', auth, requireRole('owner', 'manager'), validate(Sal
     if (err.statusCode) return res.status(err.statusCode).json({ title: err.message, status: err.statusCode });
     next(err);
   }
+});
+
+// ── PUT /api/v1/sales/:id/shipping ───────────────────────────────────────────
+// Edit Shipping: logistics only. It cannot touch money, stock or the document
+// itself, so it is safe on any sale — posted, draft or refunded.
+router.put('/:id/shipping', auth, validate(SaleShippingSchema), async (req, res, next) => {
+  try {
+    const sale = await prisma.sale.findFirst({ where: { id: req.params.id, businessId: req.user.business_id }, select: { id: true } });
+    if (!sale) return res.status(404).json({ title: 'Sale not found.', status: 404 });
+
+    if (req.body.delivery_person_id) {
+      const u = await prisma.user.findFirst({ where: { id: req.body.delivery_person_id, businessId: req.user.business_id }, select: { id: true } });
+      if (!u) return res.status(404).json({ title: 'Delivery person not found.', status: 404 });
+    }
+
+    const b = req.body;
+    const updated = await prisma.sale.update({
+      where: { id: sale.id },
+      data: {
+        shippingDetails: b.shipping_details ?? null,
+        shippingAddress: b.shipping_address ?? null,
+        shippingStatus: b.shipping_status ?? null,
+        shippingNote: b.shipping_note ?? null,
+        deliveredTo: b.delivered_to ?? null,
+        deliveryPersonId: b.delivery_person_id ?? null,
+        shippingDocumentUrl: b.shipping_document_url ?? null,
+        shippingDocumentKey: b.shipping_document_key ?? null,
+      },
+      include: { deliveryPerson: { select: { name: true } } },
+    });
+    res.json(updated);
+  } catch (err) { next(err); }
+});
+
+// ── POST /api/v1/sales/:id/notify ────────────────────────────────────────────
+// Email the customer about this sale. {tags} in the subject and body are
+// substituted HERE, from the sale row itself — the client cannot claim amounts
+// the record does not hold.
+router.post('/:id/notify', auth, validate(SaleNotifySchema), async (req, res, next) => {
+  try {
+    const sale = await prisma.sale.findFirst({
+      where: { id: req.params.id, businessId: req.user.business_id },
+      include: { customer: { select: { name: true } }, location: { select: { name: true, address: true } }, business: { select: { name: true } } },
+    });
+    if (!sale) return res.status(404).json({ title: 'Sale not found.', status: 404 });
+
+    const publicBase = (process.env.FRONTEND_URL || '').replace(/\/$/, '');
+    const tags = {
+      business_name: sale.business.name,
+      invoice_number: sale.saleNumber || '',
+      invoice_url: sale.receiptToken && publicBase ? `${publicBase}/api/v1/checkout/r/${sale.receiptToken}` : '',
+      total_amount: Number(sale.totalAmount).toFixed(2),
+      paid_amount: Number(sale.amountPaid).toFixed(2),
+      received_amount: Number(sale.amountPaid).toFixed(2),
+      due_amount: Number(sale.amountDue).toFixed(2),
+      contact_name: (sale.customer && sale.customer.name) || 'Customer',
+      location_name: (sale.location && sale.location.name) || '',
+      location_address: (sale.location && sale.location.address) || '',
+      sale_date: (sale.saleDate || sale.createdAt).toISOString().slice(0, 10),
+    };
+    // Object.hasOwn, not `in`: `in` walks the prototype, so {constructor} /
+    // {toString} / {hasOwnProperty} would otherwise leak JS internals into the email.
+    const fill = (s) => String(s).replace(/\{(\w+)\}/g, (m, k) => (Object.hasOwn(tags, k) ? tags[k] : m));
+
+    try {
+      await email.sendSaleNotification({
+        to: req.body.to, cc: req.body.cc || undefined, bcc: req.body.bcc || undefined,
+        subject: fill(req.body.subject), body: fill(req.body.body),
+        businessName: sale.business.name,
+      });
+    } catch (e) {
+      // A transport failure is an ops problem, not a validation problem — say so.
+      return res.status(502).json({ title: `The email could not be sent: ${e.message}. Check the SMTP settings on the server.`, status: 502 });
+    }
+    res.json({ sent: true, to: req.body.to });
+  } catch (err) { next(err); }
 });
 
 // Take a payment against an invoice already on the books: cash in, receivable down.

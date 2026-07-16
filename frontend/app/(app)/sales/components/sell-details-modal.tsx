@@ -15,7 +15,7 @@ import React from 'react';
 import type { Theme } from '@/lib/theme';
 import { Btn, Badge, Modal } from '@/components/kit';
 import { money } from '@/lib/theme';
-import { formatDate, formatDateTime } from '@/lib/business-settings';
+import { formatDate, formatDateTime, toLocalYmd } from '@/lib/business-settings';
 import { API } from '@/lib/api';
 
 const { useState, useEffect } = React;
@@ -27,6 +27,9 @@ const STATUS_LABEL: Record<string, string> = {
 const PAY_TONE: Record<string, any> = { paid: 'green', partial: 'amber', due: 'red' };
 const title = (s: any) => (s ? String(s)[0].toUpperCase() + String(s).slice(1).replace(/_/g, ' ') : '');
 const n2 = (v: any) => Number(v) || 0;
+// Local calendar day of a timestamp (matches the rest of the app; a raw slice
+// would show the UTC day and drift a day for evening payments east of GMT).
+const localDay = (v: any) => (v ? formatDate(toLocalYmd(new Date(v))) : '');
 
 /** Product line, unified for the table and both print documents. */
 function docLines(s: any) {
@@ -131,12 +134,14 @@ export function SellDetailsModal({ T, sale, onClose, onSellReturn }:
           </div>
           <div>
             <div style={label}>Shipping</div>
-            {(s.shippingAddress || s.shippingDetails || s.shippingStatus)
+            {(s.shippingAddress || s.shippingDetails || s.shippingStatus || s.shippingNote)
               ? <>
                   {s.shippingAddress && <div style={{ whiteSpace: 'pre-wrap' }}>{s.shippingAddress}</div>}
                   {s.shippingDetails && <div>{s.shippingDetails}</div>}
                   {s.shippingStatus && <div><b style={{ color: T.inkSub }}>Status:</b> {title(s.shippingStatus)}</div>}
+                  {s.shippingNote && <div><b style={{ color: T.inkSub }}>Note:</b> {s.shippingNote}</div>}
                   {s.deliveryPerson?.name && <div><b style={{ color: T.inkSub }}>Delivery:</b> {s.deliveryPerson.name}</div>}
+                  {s.shippingDocumentUrl && <a href={s.shippingDocumentUrl} target="_blank" rel="noreferrer" style={{ color: T.accent.text, fontWeight: 600, textDecoration: 'none' }}>📄 Shipping document</a>}
                 </>
               : <div>—</div>}
           </div>
@@ -188,7 +193,7 @@ export function SellDetailsModal({ T, sale, onClose, onSellReturn }:
                   {(s.payments || []).map((p: any, i: number) => (
                     <tr key={p.id || i}>
                       <td style={{ ...td, color: T.inkMute }}>{i + 1}</td>
-                      <td style={{ ...td, ...mono, color: T.inkSub }}>{formatDate(String(p.paidOn || p.createdAt || '').slice(0, 10))}</td>
+                      <td style={{ ...td, ...mono, color: T.inkSub }}>{localDay(p.paidOn || p.createdAt)}</td>
                       <td style={{ ...td, color: T.inkSub }}>{(p.paymentAccount && p.paymentAccount.name) || '—'}</td>
                       <td style={{ ...td, ...mono, ...r, fontWeight: 600, color: T.ink }}>{money(n2(p.amount))}</td>
                       <td style={{ ...td, color: T.inkSub }}>{title(p.provider)}</td>
@@ -299,7 +304,7 @@ export function printInvoice(s: any, biz: any) {
     <td class="r">${money(l.tax)}</td><td class="r">${money(l.subtotal)}</td>
   </tr>`).join('');
   const pays = (s.payments || []).length
-    ? (s.payments || []).map((p: any, i: number) => `<tr><td>${i + 1}</td><td>${esc(formatDate(String(p.paidOn || p.createdAt || '').slice(0, 10)))}</td><td>${esc(title(p.provider))}</td><td>${esc((p.paymentAccount && p.paymentAccount.name) || '')}</td><td class="r">${money(n2(p.amount))}</td></tr>`).join('')
+    ? (s.payments || []).map((p: any, i: number) => `<tr><td>${i + 1}</td><td>${esc(localDay(p.paidOn || p.createdAt))}</td><td>${esc(title(p.provider))}</td><td>${esc((p.paymentAccount && p.paymentAccount.name) || '')}</td><td class="r">${money(n2(p.amount))}</td></tr>`).join('')
     : '<tr><td colspan="5" style="text-align:center;color:#888">No payments recorded</td></tr>';
   const trow = (k: string, v: number, always = false) => (always || v !== 0) ? `<tr><td>${k}</td><td class="r">${money(v)}</td></tr>` : '';
   openDoc(`${docTitle(s)} ${s.saleNumber || ''}`, `
@@ -328,6 +333,30 @@ export function printInvoice(s: any, biz: any) {
     <b>Payment info</b>
     <table><thead><tr><th>#</th><th>Date</th><th>Mode</th><th>Account</th><th class="r">Amount</th></tr></thead><tbody>${pays}</tbody></table>
     ${s.notes ? `<p><b>Note:</b> ${esc(s.notes)}</p>` : ''}
+    <div class="sign">Authorized Signatory</div>`);
+}
+
+/** Goods-only document the customer signs on receipt. No prices on it. */
+export function printDeliveryNote(s: any, biz: any) {
+  const rows = docLines(s).map((l: any) => `<tr>
+    <td>${l.i}</td><td>${esc(l.name)}${l.sku ? `, ${esc(l.sku)}` : ''}</td>
+    <td class="r">${l.qty.toFixed(2)}${l.unit ? ' ' + esc(l.unit) : ''}</td>
+  </tr>`).join('');
+  openDoc(`Delivery Note ${s.saleNumber || ''}`, `
+    <div class="top">${bizHeader(biz)}
+      <div class="doc"><h1>Delivery Note</h1>
+        <div><b>Invoice No.</b> ${esc(s.saleNumber || '')}</div>
+        <div><b>Date</b> ${esc(formatDateTime(s.saleDate || s.createdAt))}</div>
+      </div>
+    </div>
+    <div class="meta">
+      <div><b>Customer</b>${esc((s.customer && s.customer.name) || 'Walk-In Customer')}<br>${esc(s.customer?.address || '')}<br>${s.customer?.phone ? 'Mobile: ' + esc(s.customer.phone) : ''}</div>
+      <div><b>Shipping Address</b>${esc(s.shippingAddress || '—')}${s.deliveredTo ? '<br>Delivered to: ' + esc(s.deliveredTo) : ''}</div>
+    </div>
+    <table><thead><tr><th style="width:36px">#</th><th>Product</th><th class="r" style="width:140px">Quantity</th></tr></thead><tbody>${rows}</tbody></table>
+    <p style="font-weight:600;margin-top:24px">Above mentioned items received in good condition</p>
+    <p style="font-weight:600">Received by :</p>
+    <p style="font-weight:600">Date:</p>
     <div class="sign">Authorized Signatory</div>`);
 }
 

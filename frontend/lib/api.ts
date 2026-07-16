@@ -2804,6 +2804,7 @@ function adaptRealSaleListRow(s: any): any {
     due: Number(s.amountDue || 0),
     sell_return: Number(s.sellReturn || 0),
     shipping_status: s.shippingStatus || '',
+    receipt_token: s.receiptToken || '',
     total_items: Number(s.totalItems || 0),
     added_by: (s.cashier && s.cashier.name) || '—',
     sell_note: s.notes || '',
@@ -3376,6 +3377,40 @@ const API: any = {
     async addPayment(id: any, payment: any) {
       if (REAL_MODE) return await realReq('POST', '/sales/' + id + '/payment', { body: toSaleTender(payment) });
       throw new ApiError(501, 'Sales invoices need the live backend.');
+    },
+    /** Edit Shipping — logistics only; cannot touch money, stock or the document. */
+    async updateShipping(id: any, b: any) {
+      if (REAL_MODE) {
+        return await realReq('PUT', '/sales/' + id + '/shipping', { body: {
+          shipping_details: b.shipping_details || null,
+          shipping_address: b.shipping_address || null,
+          shipping_status: b.shipping_status || null,
+          shipping_note: b.shipping_note || null,
+          delivered_to: b.delivered_to || null,
+          delivery_person_id: b.delivery_person_id || null,
+          shipping_document_url: b.shipping_document_url || null,
+          shipping_document_key: b.shipping_document_key || null,
+        } });
+      }
+      throw new ApiError(501, 'Shipping needs the live backend.');
+    },
+    /** Email the customer about this sale. {tags} are filled in server-side. */
+    async notify(id: any, b: { to: string; cc?: string; bcc?: string; subject: string; body: string }) {
+      if (REAL_MODE) {
+        return await realReq('POST', '/sales/' + id + '/notify', { body: {
+          to: b.to, cc: b.cc || undefined, bcc: b.bcc || undefined, subject: b.subject, body: b.body,
+        } });
+      }
+      throw new ApiError(501, 'Notifications need the live backend.');
+    },
+    /** The sale's public "view without login" link (the digital receipt).
+     *  Absolute, so it is shareable: BACKEND_BASE is empty on a same-origin
+     *  deployment, so fall back to the page's own origin rather than emit a
+     *  bare "/api/..." path that opens nowhere when pasted into WhatsApp. */
+    publicInvoiceUrl(receiptToken: string): string {
+      if (!receiptToken) return '';
+      const base = BACKEND_BASE || (typeof window !== 'undefined' ? window.location.origin : '');
+      return `${base}/api/v1/checkout/r/${receiptToken}`;
     },
   },
 

@@ -189,4 +189,23 @@ const verifyEmailConfig = async () => {
   }
 };
 
-module.exports = { sendPasswordReset, sendReceipt, sendLowStockAlert, sendGoodsReceivedNotice, verifyEmailConfig };
+// ── Sale notification ─────────────────────────────────────────────────────────
+// A user-composed message (subject/body already tag-substituted by the caller),
+// wrapped in the standard template. Plain text in, minimal HTML out.
+const sendSaleNotification = async ({ to, cc, bcc, subject, body, businessName }) => {
+  const escaped = String(body)
+    .replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))
+    .replace(/\n/g, '<br>');
+  const html = baseTemplate(`<p style="white-space:pre-wrap">${escaped}</p>`, businessName);
+  await getTransport().sendMail({
+    from: FROM, to,
+    ...(cc ? { cc } : {}), ...(bcc ? { bcc } : {}),
+    // The subject is a HEADER: a line break in it would let the sender append
+    // headers of their own. Belt and braces on top of nodemailer's own guard.
+    subject: String(subject).replace(/[\r\n]+/g, ' ').slice(0, 200),
+    html,
+  });
+  logger.info('email_sent', { type: 'sale_notification', to });
+};
+
+module.exports = { sendPasswordReset, sendReceipt, sendLowStockAlert, sendGoodsReceivedNotice, sendSaleNotification, verifyEmailConfig };
