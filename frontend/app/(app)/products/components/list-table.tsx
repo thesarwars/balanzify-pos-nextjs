@@ -34,7 +34,10 @@ export function ActionsMenu({ T, open, onToggle, items }: any) {
           <div style={{ position: 'fixed', top: pos.top, left: pos.left, minWidth: 220, background: T.paper, border: `1px solid ${T.line}`, borderRadius: 9, boxShadow: '0 10px 30px rgba(8,12,20,0.22)', zIndex: 301, padding: 5 } as React.CSSProperties}>
             {items.map((it: any, i: number) => it.sep
               ? <div key={i} style={{ height: 1, background: T.line, margin: '5px 4px' }} />
-              : <button key={i} onClick={() => { onToggle(); it.on(); }} style={{ width: '100%', textAlign: 'left', display: 'block', padding: '8px 11px', borderRadius: 6, border: 'none', background: 'transparent', color: it.danger ? T.redText : T.inkMid, fontFamily: T.fBody, fontSize: 12.5, fontWeight: 500, cursor: 'pointer' } as React.CSSProperties} onMouseEnter={e => (e.currentTarget.style.background = T.paperAlt)} onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>{it.label}</button>
+              : <button key={i} onClick={() => { onToggle(); it.on(); }} style={{ width: '100%', textAlign: 'left', display: 'flex', alignItems: 'center', gap: 9, padding: '8px 11px', borderRadius: 6, border: 'none', background: 'transparent', color: it.danger ? T.redText : T.inkMid, fontFamily: T.fBody, fontSize: 12.5, fontWeight: 500, cursor: 'pointer' } as React.CSSProperties} onMouseEnter={e => (e.currentTarget.style.background = T.paperAlt)} onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                  {it.icon && <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 15, flexShrink: 0, opacity: 0.85 } as React.CSSProperties}>{it.icon}</span>}
+                  <span>{it.label}</span>
+                </button>
             )}
           </div>
         </>

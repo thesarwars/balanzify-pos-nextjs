@@ -13,6 +13,7 @@ import { Topbar } from '@/components/shell';
 import { money } from '@/lib/theme';
 import { formatDate, todayLocal } from '@/lib/business-settings';
 import { API } from '@/lib/api';
+import { LuEye, LuUndo2, LuBadgeCheck, LuTruck, LuPrinter, LuClipboardList, LuFileText, LuWallet, LuLink, LuMail } from 'react-icons/lu';
 import { ActionsMenu } from '../../products/components/list-table';
 import { SellReturnModal } from './sell-return-modal';
 import { SellDetailsModal, printInvoice, printPackingSlip, printDeliveryNote } from './sell-details-modal';
@@ -249,19 +250,19 @@ export function SalesList({ T, onAdd, flash }: { T: any; onAdd: () => void; flas
                         <td style={td} onClick={(e: any) => e.stopPropagation()}>
                           <ActionsMenu T={T} open={openMenu === r.id} onToggle={() => setOpenMenu((m) => (m === r.id ? null : r.id))}
                             items={[
-                              { label: '👁 View', on: () => setViewing(r) },
+                              { label: 'View', icon: <LuEye size={15} />, on: () => setViewing(r) },
                               ...(nonPosting
-                                ? [{ label: busyId === r.id ? 'Finalising…' : 'Finalise this document', on: () => finalize(r) }]
-                                : [{ label: '↩ Sell return', on: () => setReturning(r), danger: r.status === 'refunded' }]),
-                              { label: '🚚 Edit Shipping', on: () => setShipping(r) },
+                                ? [{ label: busyId === r.id ? 'Finalising…' : 'Finalise this document', icon: <LuBadgeCheck size={15} />, on: () => finalize(r) }]
+                                : [{ label: 'Sell return', icon: <LuUndo2 size={15} />, on: () => setReturning(r), danger: r.status === 'refunded' }]),
+                              { label: 'Edit Shipping', icon: <LuTruck size={15} />, on: () => setShipping(r) },
                               { sep: true },
-                              { label: '⎙ Print Invoice', on: () => printDoc(r, 'invoice') },
-                              { label: '⎙ Packing Slip', on: () => printDoc(r, 'packing') },
-                              { label: '⎙ Delivery Note', on: () => printDoc(r, 'delivery') },
+                              { label: 'Print Invoice', icon: <LuPrinter size={15} />, on: () => printDoc(r, 'invoice') },
+                              { label: 'Packing Slip', icon: <LuClipboardList size={15} />, on: () => printDoc(r, 'packing') },
+                              { label: 'Delivery Note', icon: <LuFileText size={15} />, on: () => printDoc(r, 'delivery') },
                               { sep: true },
-                              { label: '💰 View Payments', on: () => setPayments(r) },
-                              { label: '🔗 Invoice URL', on: () => setInvoiceUrl(r) },
-                              { label: '✉ New Sale Notification', on: () => setNotify({ row: r, template: 'sale' }) },
+                              { label: 'View Payments', icon: <LuWallet size={15} />, on: () => setPayments(r) },
+                              { label: 'Invoice URL', icon: <LuLink size={15} />, on: () => setInvoiceUrl(r) },
+                              { label: 'New Sale Notification', icon: <LuMail size={15} />, on: () => setNotify({ row: r, template: 'sale' }) },
                             ]} />
                         </td>
                         {cols.map((c) => {
