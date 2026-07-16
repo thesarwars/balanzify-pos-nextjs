@@ -45,7 +45,7 @@ const STATUS_TONE: Record<string, any> = { paid: 'green', partial: 'amber', due:
 const DOC_TONE: Record<string, any> = { draft: 'gray', quotation: 'blue', proforma: 'blue', refunded: 'red' };
 const title = (s: string) => (s ? s[0].toUpperCase() + s.slice(1).replace(/_/g, ' ') : '');
 
-export function SalesList({ T, onAdd }: { T: any; onAdd: () => void }) {
+export function SalesList({ T, onAdd, flash }: { T: any; onAdd: () => void; flash?: React.MutableRefObject<string> }) {
   const [rows, setRows] = useState<any[]>([]);
   const [totals, setTotals] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -73,7 +73,9 @@ export function SalesList({ T, onAdd }: { T: any; onAdd: () => void }) {
     API.location.list().then(setLocations).catch(() => {});
     API.contact.list({ type: 'customer' }).then(setCustomers).catch(() => {});
     API.user.list().then(setUsers).catch(() => {});
-  }, []);
+    // A confirmation handed over from the Add Sale screen we just came back from.
+    if (flash && flash.current) { show(flash.current); flash.current = ''; }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Debounced, and the last response to arrive is ignored unless it is the last
   // one asked for — otherwise typing "abc" can leave the grid showing "a".

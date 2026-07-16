@@ -1,23 +1,30 @@
 'use client';
 import React from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useTheme } from '@/components/shell';
 import { SalesList } from './components/sales-list';
 import { SaleEditor } from './components/sale-editor';
 
 export default function SalesPage() {
   const T = useTheme();
-  // ?new=1 opens Add Sale directly, so the sidebar can link straight to it.
-  const [adding, setAdding] = React.useState(false);
-  const [flash, setFlash] = React.useState(0);
+  const router = useRouter();
+  const search = useSearchParams();
 
-  React.useEffect(() => {
-    if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('new')) setAdding(true);
-  }, []);
+  // The view is driven by the URL, so the sidebar (List Sales → /sales, Add Sale
+  // → /sales?new=1) actually switches it. useSearchParams re-renders on query
+  // change, so navigating between the two works without a remount.
+  const adding = search.get('new') === '1';
+
+  // Survives the editor→list swap (this page component does not unmount when the
+  // query changes), so a save can flash a confirmation on the list it lands on.
+  const flash = React.useRef('');
 
   if (adding) {
-    return <SaleEditor T={T} onCancel={() => setAdding(false)}
-      onDone={() => { setAdding(false); setFlash((n) => n + 1); }} />;
+    return (
+      <SaleEditor T={T}
+        onCancel={() => router.push('/sales')}
+        onDone={(msg: string) => { flash.current = msg; router.push('/sales'); }} />
+    );
   }
-  // Remounting on `flash` refetches the list after a sale is saved.
-  return <SalesList key={flash} T={T} onAdd={() => setAdding(true)} />;
+  return <SalesList T={T} flash={flash} onAdd={() => router.push('/sales?new=1')} />;
 }

@@ -5,7 +5,7 @@ import { setBusinessSettings, hydrateBusinessSettings, getBusinessSettings, getS
 import { BUSINESS, CASHIER } from '@/lib/data';
 import { API } from '@/lib/api';
 import { useViewport } from '@/components/kit';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { ApiPanel } from '@/components/api-panel';
 import { LanguageSwitcher } from '@/components/language-switcher';
 import { OfflineIndicator } from '@/components/offline-indicator';
@@ -65,7 +65,7 @@ export const NAV = [
       {
         id: 'sales', label: 'Sales', icon: LuReceipt, children: [
           { key: 'list-sales', activeId: 'sales', label: 'List Sales', route: '/sales' },
-          { key: 'add-sale',   activeId: '',      label: 'Add Sale',   route: '/sales?new=1' },
+          { key: 'add-sale',   activeId: 'sales', activeQuery: 'new', label: 'Add Sale', route: '/sales?new=1' },
         ],
       },
       { id: 'customers', label: 'Customers', icon: LuUsers },
@@ -151,6 +151,10 @@ const NAV_MODULE: Record<string, string> = {
 };
 
 export function Sidebar({ T, screen, setScreen, collapsed, setCollapsed, onLogout, onLock, mobile, enabledMods }: any) {
+  // Some children live at the same path as their sibling and differ only by a
+  // query flag (e.g. Add Sale = /sales?new=1). `screen` is the path segment only,
+  // so read the query here to tell them apart.
+  const searchParams = useSearchParams();
   const { locale } = useLocale();
   const W = collapsed ? 68 : 244;
   const S = T.side;
@@ -218,6 +222,13 @@ export function Sidebar({ T, screen, setScreen, collapsed, setCollapsed, onLogou
               // ── Parent item with a sub-menu (e.g. Products) ──
               if (item.children) {
                 const inGroup = item.children.some((c: any) => c.activeId && c.activeId === screen);
+                // A child may pin itself to a query flag (activeQuery). When one is
+                // satisfied it is THE active child; otherwise the plain activeId match
+                // wins. Only groups that declare activeQuery are affected.
+                const querySub = item.children.find((c: any) => c.activeQuery && searchParams.get(c.activeQuery));
+                const isChildActive = (c: any) => (querySub
+                  ? c === querySub
+                  : c.activeId && c.activeId === screen && !c.activeQuery);
                 const isOpen = openGroups[item.id] !== undefined ? openGroups[item.id] : inGroup;
                 const toggle = () => setOpenGroups((s) => ({ ...s, [item.id]: !(s[item.id] !== undefined ? s[item.id] : inGroup) }));
                 return (
@@ -244,7 +255,7 @@ export function Sidebar({ T, screen, setScreen, collapsed, setCollapsed, onLogou
                       {!collapsed && <span style={{ display: 'inline-flex', color: S.chev, transition: 'transform .15s', transform: isOpen ? 'rotate(90deg)' : 'none' }}><LuChevronRight size={13} /></span>}
                     </button>
                     {!collapsed && isOpen && item.children.map((c: any) => {
-                      const cActive = c.activeId && c.activeId === screen;
+                      const cActive = isChildActive(c);
                       return (
                         <button key={c.key} onClick={() => setScreen(c.route)}
                           style={{
