@@ -15,6 +15,7 @@ import { formatDate, todayLocal } from '@/lib/business-settings';
 import { API } from '@/lib/api';
 import { ActionsMenu } from '../../products/components/list-table';
 import { SellReturnModal } from './sell-return-modal';
+import { SellDetailsModal, printInvoice, printPackingSlip } from './sell-details-modal';
 
 const { useState, useEffect, useMemo, useCallback } = React;
 
@@ -65,6 +66,7 @@ export function SalesList({ T, onAdd, flash }: { T: any; onAdd: () => void; flas
   const [busyId, setBusyId] = useState<string | null>(null);
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [returning, setReturning] = useState<any>(null);
+  const [viewing, setViewing] = useState<any>(null);
   const [show, toastNode] = useToast();
 
   const reload = useCallback(() => setNonce((n) => n + 1), []);
@@ -132,6 +134,17 @@ export function SalesList({ T, onAdd, flash }: { T: any; onAdd: () => void; flas
       reload();
     } catch (e: any) { show(e.message || 'Could not finalise that document.'); }
     finally { setBusyId(null); }
+  }
+
+  // Print straight from the row: fetch the full sale + the business header once,
+  // then hand a self-contained page to the browser's print dialog.
+  const bizRef = React.useRef<any>(undefined);
+  async function printDoc(row: any, kind: 'invoice' | 'packing') {
+    try {
+      if (bizRef.current === undefined) bizRef.current = await API.business.get().catch(() => null);
+      const s = await API.sell.get(row.id);
+      (kind === 'invoice' ? printInvoice : printPackingSlip)(s, bizRef.current);
+    } catch (e: any) { show(e.message || 'Could not load that sale.'); }
   }
 
   const th: React.CSSProperties = { textAlign: 'left', padding: '10px 12px', fontSize: 10, fontWeight: 700, letterSpacing: 0.6, textTransform: 'uppercase', color: T.inkSub, background: T.paperAlt, borderBottom: `1px solid ${T.line}`, whiteSpace: 'nowrap' };
@@ -224,14 +237,19 @@ export function SalesList({ T, onAdd, flash }: { T: any; onAdd: () => void; flas
                   {rows.map((r) => {
                     const nonPosting = ['draft', 'quotation', 'proforma'].includes(r.status);
                     return (
-                      <tr key={r.id}>
-                        <td style={td}>
+                      <tr key={r.id} onClick={() => setViewing(r)} style={{ cursor: 'pointer' }}
+                        onMouseEnter={(e: any) => (e.currentTarget.style.background = T.paperAlt)}
+                        onMouseLeave={(e: any) => (e.currentTarget.style.background = 'transparent')}>
+                        <td style={td} onClick={(e: any) => e.stopPropagation()}>
                           <ActionsMenu T={T} open={openMenu === r.id} onToggle={() => setOpenMenu((m) => (m === r.id ? null : r.id))}
                             items={[
+                              { label: '👁 View', on: () => setViewing(r) },
                               ...(nonPosting
                                 ? [{ label: busyId === r.id ? 'Finalising…' : 'Finalise this document', on: () => finalize(r) }]
                                 : [{ label: 'Sell return', on: () => setReturning(r), danger: r.status === 'refunded' }]),
-                              { label: 'Print', on: () => window.print() },
+                              { sep: true },
+                              { label: '⎙ Print Invoice', on: () => printDoc(r, 'invoice') },
+                              { label: '⎙ Packing Slip', on: () => printDoc(r, 'packing') },
                             ]} />
                         </td>
                         {cols.map((c) => {
@@ -292,6 +310,10 @@ export function SalesList({ T, onAdd, flash }: { T: any; onAdd: () => void; flas
           </Panel>
         </div>
       </div>
+      {viewing && (
+        <SellDetailsModal T={T} sale={viewing} onClose={() => setViewing(null)}
+          onSellReturn={(row: any) => { setViewing(null); setReturning(row); }} />
+      )}
       {returning && (
         <SellReturnModal T={T} sale={returning} onClose={() => setReturning(null)}
           onDone={(msg: string) => { setReturning(null); show(msg); reload(); }} />

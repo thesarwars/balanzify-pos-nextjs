@@ -1206,7 +1206,7 @@ router.get('/:id', auth, async (req, res, next) => {
         cashier:  { select: { name: true } },
         customer: { select: { name: true, phone: true, email: true, address: true, loyaltyPoints: true } },
         coupon:   { select: { code: true, type: true, value: true } },
-        items:    { include: { product: { select: { name: true, sku: true } }, variant: { select: { attributes: true, sku: true } } } },
+        items:    { include: { product: { select: { name: true, sku: true, unitOfMeasure: true } }, variant: { select: { attributes: true, sku: true } } } },
         // items[] lets the UI cap a further return at what has not gone back yet.
         refunds:  { select: { refundNumber: true, totalRefunded: true, createdAt: true, reason: true,
                               items: { select: { saleItemId: true, quantity: true } } } },
