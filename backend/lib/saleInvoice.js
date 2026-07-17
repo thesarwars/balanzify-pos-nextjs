@@ -534,9 +534,18 @@ async function createInvoice(
       : `INV-${Date.now()}`;
   }
 
+  // `pay_full` settles the whole total to cash at post time (used by the bulk
+  // import). Ringing the cash tender HERE — rather than posting the sale on
+  // credit and settling afterwards — means amountDue is 0, so postFinal never
+  // touches the receivable/credit-limit path and denormalises paymentMethod as
+  // cash, exactly like a normal fully-paid invoice.
+  const payments =
+    body.pay_full && !isDraft
+      ? [{ method: "cash", amount: totals.total }]
+      : body.payments;
   const { tenders, amountPaid, amountDue } = isDraft
     ? { tenders: [], amountPaid: 0, amountDue: 0 }
-    : resolveTenders(body.payments, totals.total);
+    : resolveTenders(payments, totals.total);
 
   const sale = await tx.sale.create({
     data: {
@@ -765,6 +774,14 @@ async function reverseSaleEffects(tx, { businessId, userId, sale, reason }) {
 
 /** Load a sale with everything reversal / edit / delete need, with guards. */
 async function loadForMutation(tx, { businessId, saleId }) {
+  // Lock the row first, like addPayment/finalizeInvoice do. Without it two
+  // concurrent edits/deletes (double-click, batch-delete race) both read the
+  // same pre-reversal snapshot and reverse it twice — restocking and unwinding
+  // the ledger twice over. The lock serialises them; the second reads the state
+  // the first left ('cancelled') and its guards below refuse the double action.
+  const locked = await tx.$queryRaw`
+    SELECT id FROM sales WHERE id = ${saleId}::uuid AND business_id = ${businessId}::uuid FOR UPDATE`;
+  if (!locked.length) throw bad("Sale not found.", 404);
   const sale = await tx.sale.findFirst({
     where: { id: saleId, businessId },
     include: {
@@ -1347,6 +1364,156 @@ async function addPayment(
   });
 }
 
+/**
+ * Bulk import: turn ONE parsed invoice (a group of spreadsheet rows sharing an
+ * invoice number) into a real, posted sale, reusing the same engine every other
+ * sale goes through. Products are matched by SKU first (product, then variant),
+ * then by name; the customer by phone/email, then name, and created when new.
+ * The sale is rung up completed and — when the batch is marked paid — settled in
+ * full to cash, so it reaches the books identically to any invoice. Stamped with
+ * `batch` so the whole import can be reversed later.
+ *
+ * The caller wraps EACH invoice in its own transaction, so one bad row (unknown
+ * product, no stock) rolls back only itself and is reported while the rest land.
+ */
+async function importOneSale(
+  tx,
+  { businessId, userId, currency = "USD", batch, paid = true, defaultLocationId, invoice },
+) {
+  const locationId = invoice.location_id || defaultLocationId;
+  if (!locationId) throw bad("No business location to import into.");
+
+  // Customer: phone/email is the strong match, name the fallback; create when
+  // new. A completed sale carries a receivable until paid and postFinal refuses
+  // an unpaid balance with no customer, so every import gets one either way.
+  const name = String(invoice.customer_name || "").trim();
+  const phone = String(invoice.customer_phone || "").trim();
+  const email = String(invoice.customer_email || "").trim();
+  let customer = null;
+  if (phone || email) {
+    customer = await tx.customer.findFirst({
+      where: {
+        businessId,
+        OR: [...(phone ? [{ phone }] : []), ...(email ? [{ email }] : [])],
+      },
+      select: { id: true },
+    });
+  }
+  if (!customer && name) {
+    customer = await tx.customer.findFirst({
+      where: { businessId, name: { equals: name, mode: "insensitive" } },
+      select: { id: true },
+    });
+  }
+  if (!customer) {
+    customer = await tx.customer.create({
+      data: {
+        businessId,
+        name: name || "Imported Customer",
+        phone: phone || null,
+        email: email || null,
+      },
+      select: { id: true },
+    });
+  }
+
+  const items = [];
+  for (const row of invoice.items || []) {
+    const sku = String(row.sku || "").trim();
+    const pname = String(row.product_name || "").trim();
+    let productId = null;
+    let variantId = null;
+    if (sku) {
+      const p = await tx.product.findFirst({
+        where: { businessId, sku },
+        select: { id: true },
+      });
+      if (p) productId = p.id;
+      else {
+        const v = await tx.productVariant.findFirst({
+          where: { sku, product: { businessId } },
+          select: { id: true, productId: true },
+        });
+        if (v) {
+          productId = v.productId;
+          variantId = v.id;
+        }
+      }
+    }
+    if (!productId && pname) {
+      const p = await tx.product.findFirst({
+        where: { businessId, name: { equals: pname, mode: "insensitive" } },
+        select: { id: true },
+      });
+      if (p) productId = p.id;
+    }
+    if (!productId)
+      throw bad(`Product not found: "${sku || pname || "(blank)"}".`);
+
+    const qty = Number(row.quantity);
+    if (!(qty > 0))
+      throw bad(`Quantity for "${pname || sku}" must be greater than zero.`);
+
+    // "Item Tax" arrives as a percentage; rates are stored as a fraction
+    // (0.16 = 16%). Match an active rate, otherwise the line just carries no tax.
+    let taxRateId = null;
+    const taxPct =
+      row.item_tax != null && row.item_tax !== "" ? Number(row.item_tax) : 0;
+    if (taxPct > 0) {
+      const rate = await tx.taxRate.findFirst({
+        where: { businessId, isActive: true, rate: taxPct / 100 },
+        select: { id: true },
+      });
+      if (rate) taxRateId = rate.id;
+    }
+
+    items.push({
+      product_id: productId,
+      variant_id: variantId,
+      quantity: qty,
+      unit_price:
+        row.unit_price != null && row.unit_price !== ""
+          ? Number(row.unit_price)
+          : undefined,
+      discount:
+        row.discount != null && row.discount !== "" ? Number(row.discount) : 0,
+      tax_rate_id: taxRateId,
+    });
+  }
+  if (!items.length) throw bad("This invoice has no product lines.");
+
+  const sale = await createInvoice(tx, {
+    businessId,
+    userId,
+    currency,
+    body: {
+      location_id: locationId,
+      customer_id: customer.id,
+      invoice_no: String(invoice.invoice_no || "").trim() || undefined,
+      sale_date: invoice.sale_date || undefined,
+      status: "completed",
+      discount_type: "flat",
+      discount_value: 0,
+      // Settle to cash at post time so a paid import never posts a receivable
+      // (no credit-limit check, no ledger churn) and lands as paymentMethod=cash.
+      // An unpaid import leaves the whole total due, billed to the customer.
+      pay_full: paid,
+      items,
+    },
+  });
+
+  await tx.sale.update({
+    where: { id: sale.id },
+    data: { importBatch: batch },
+  });
+  return {
+    id: sale.id,
+    invoice_no: sale.saleNumber,
+    total: Number(sale.totalAmount),
+    customer_id: customer.id,
+  };
+}
+
 module.exports = {
   NON_POSTING,
   computeTotals,
@@ -1355,6 +1522,7 @@ module.exports = {
   updateInvoice,
   deleteInvoice,
   addPayment,
+  importOneSale,
   mintInvoiceNumber,
   round2,
 };

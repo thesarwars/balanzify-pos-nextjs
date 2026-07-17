@@ -50,9 +50,10 @@ const STATUS_TONE: Record<string, any> = { paid: 'green', partial: 'amber', due:
 const DOC_TONE: Record<string, any> = { draft: 'gray', quotation: 'blue', proforma: 'blue', refunded: 'red' };
 const title = (s: string) => (s ? s[0].toUpperCase() + s.slice(1).replace(/_/g, ' ') : '');
 
-// A preset pins the list to one slice (List POS / Drafts / Quotations): it is
-// merged into every query underneath the user's own filters and names the page.
-export type SalesPreset = { type?: string; status?: string; title: string };
+// A preset pins the list to one slice (List POS / Drafts / Quotations / Sell
+// Returns / Shipments): it is merged into every query underneath the user's own
+// filters and names the page.
+export type SalesPreset = { type?: string; status?: string; has_returns?: boolean; has_shipping?: boolean; title: string };
 
 export function SalesList({ T, onAdd, onEdit, flash, preset }:
   { T: any; onAdd: () => void; onEdit?: (row: any) => void; flash?: React.MutableRefObject<string>; preset?: SalesPreset }) {
@@ -99,13 +100,18 @@ export function SalesList({ T, onAdd, onEdit, flash, preset }:
     let dead = false;
     setLoading(true);
     const timer = setTimeout(() => {
-      API.sell.rows({ ...filters, ...(preset?.type && { type: preset.type }), ...(preset?.status && { status: preset.status }), limit: perPage })
+      API.sell.rows({ ...filters,
+        ...(preset?.type && { type: preset.type }),
+        ...(preset?.status && { status: preset.status }),
+        ...(preset?.has_returns && { has_returns: '1' }),
+        ...(preset?.has_shipping && { has_shipping: '1' }),
+        limit: perPage })
         .then((r: any) => { if (dead) return; setRows(r.rows); setTotals(r.totals); })
         .catch(() => { if (dead) return; setRows([]); setTotals(null); })
         .finally(() => { if (!dead) setLoading(false); });
     }, 250);
     return () => { dead = true; clearTimeout(timer); };
-  }, [filters, perPage, nonce, preset?.type, preset?.status]);
+  }, [filters, perPage, nonce, preset?.type, preset?.status, preset?.has_returns, preset?.has_shipping]);
 
   const setF = (k: string, v: any) => setFilters((p: any) => ({ ...p, [k]: v }));
   const clear = () => setFilters({ location_id: '', customer_id: '', payment_status: '', cashier_id: '', shipping_status: '', payment_method: '', status: '', from: '', to: '', search: '' });

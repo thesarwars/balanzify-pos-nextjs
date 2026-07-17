@@ -2166,6 +2166,9 @@ model Sale {
   shippingDocumentKey String?         @map("shipping_document_key")
   // Denormalised Σ expenses[].amount, so the list can total without a join.
   expensesTotal       Decimal         @default(0) @map("expenses_total") @db.Decimal(12, 2)
+  // Stamped on sales created by a bulk import ("Import Sales"), NULL otherwise.
+  // Lets the import screen list past batches and reverse one in a single action.
+  importBatch         String?         @map("import_batch") @db.VarChar(64)
 
   business      Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
   shift         Shift?          @relation(fields: [shiftId], references: [id])
@@ -2192,6 +2195,7 @@ model Sale {
   @@index([businessId, createdAt])
   @@index([shiftId])
   @@index([businessId, status])
+  @@index([businessId, importBatch])
   @@map("sales")
 }
 

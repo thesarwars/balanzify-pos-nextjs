@@ -5,7 +5,7 @@ const { auth, requireRole } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { SaleSchemaV3, RefundSchema, ShiftOpenSchema, ShiftCloseSchema, HoldSaleSchema,
         SaleInvoiceSchema, SaleFinalizeSchema, SalePaymentSchema, TENDER_METHODS,
-        SaleShippingSchema, SaleNotifySchema } = require('../validation/schemas');
+        SaleShippingSchema, SaleNotifySchema, SaleImportSchema } = require('../validation/schemas');
 const saleInvoice = require('../lib/saleInvoice');
 const email = require('../lib/email');
 const { trackSale, trackFraudSignal } = require('../lib/metrics');
@@ -1068,13 +1068,18 @@ const oneOf = (list, v, what) => {
 router.get('/', auth, async (req, res, next) => {
   try {
     const { page = 1, limit = 50, from, to, payment_method, payment_status, status,
-            customer_id, cashier_id, location_id, shipping_status, search, type } = req.query;
+            customer_id, cashier_id, location_id, shipping_status, search, type,
+            has_returns, has_shipping } = req.query;
 
     const method   = oneOf(PAYMENT_METHODS, payment_method, 'payment method');
     const payState = oneOf(Object.keys(PAYMENT_STATUS_WHERE), payment_status, 'payment status');
     const saleState = oneOf(SALE_STATUSES, status, 'sale status');
     const saleType = oneOf(SALE_TYPES, type, 'sale type');
     const shipState = oneOf(SHIPPING_STATUSES, shipping_status, 'shipping status');
+    // "List Sell Return" and "Shipments" are the same sales grid pinned to a
+    // slice: only sales that were returned against, or that carry a shipment.
+    const onlyReturns  = has_returns === '1' || has_returns === 'true';
+    const onlyShipping = has_shipping === '1' || has_shipping === 'true';
 
     // Filter on the document date. A POS sale never sets one, but the column
     // defaults to now() in the DB and old rows were backfilled from created_at.
@@ -1093,6 +1098,10 @@ router.get('/', auth, async (req, res, next) => {
       ...(cashier_id      && { cashierId:    cashier_id }),
       ...(location_id     && { locationId:   location_id }),
       ...(shipState       && { shippingStatus: shipState }),
+      ...(onlyReturns     && { refunds: { some: {} } }),
+      // On the Shipments page an explicit shipping_status filter is more
+      // specific, so it wins over the "any shipment" slice.
+      ...(onlyShipping && !shipState && { shippingStatus: { not: null } }),
       ...(search && {
         OR: [
           { saleNumber: { contains: search, mode: 'insensitive' } },
@@ -1151,6 +1160,111 @@ router.get('/', auth, async (req, res, next) => {
         by_payment_method: Object.fromEntries(methodCounts.map((m) => [m.paymentMethod, m._count._all])),
       },
     });
+  } catch (err) {
+    if (err.statusCode) return res.status(err.statusCode).json({ title: err.message, status: err.statusCode });
+    next(err);
+  }
+});
+
+// ── Import Sales ──────────────────────────────────────────────────────────────
+// GET  /imports          — past import batches (for the history table)
+// POST /import           — create sales from parsed spreadsheet rows
+// DELETE /imports/:batch — reverse and remove a whole batch
+// These are registered BEFORE the `/:id` routes below so "imports" is never
+// mistaken for a sale id.
+
+router.get('/imports', auth, async (req, res, next) => {
+  try {
+    const rows = await prisma.$queryRaw`
+      SELECT s.import_batch                         AS batch,
+             COUNT(*)::int                          AS invoices,
+             MIN(s.created_at)                      AS created_at,
+             (array_agg(u.name ORDER BY s.created_at))[1] AS created_by
+        FROM sales s
+        LEFT JOIN users u ON u.id = s.cashier_id
+       WHERE s.business_id = ${req.user.business_id}::uuid
+         AND s.import_batch IS NOT NULL
+         AND s.status <> 'cancelled'
+       GROUP BY s.import_batch
+       ORDER BY MIN(s.created_at) DESC`;
+    res.json({ imports: rows.map((r) => ({
+      batch: r.batch,
+      invoices: Number(r.invoices),
+      created_at: r.created_at,
+      created_by: r.created_by || null,
+    })) });
+  } catch (err) { next(err); }
+});
+
+router.post('/import', auth, requireRole('owner', 'manager'), validate(SaleImportSchema), async (req, res, next) => {
+  try {
+    const { invoices, location_id, paid = true } = req.body;
+
+    // Fall back to the business's first location when a row names none.
+    let defaultLocationId = location_id || null;
+    if (!defaultLocationId) {
+      const loc = await prisma.location.findFirst({
+        where: { businessId: req.user.business_id }, orderBy: { createdAt: 'asc' }, select: { id: true },
+      });
+      defaultLocationId = loc && loc.id;
+    }
+
+    const batch = `IMP-${Date.now()}`;
+    const created = [];
+    const errors = [];
+    // One transaction PER invoice: a row that fails (unknown product, no stock)
+    // rolls back only itself and is reported — the rest still import.
+    for (let i = 0; i < invoices.length; i++) {
+      const invoice = invoices[i];
+      const label = invoice.invoice_no || `Row ${i + 1}`;
+      try {
+        const r = await prisma.$transaction((tx) => saleInvoice.importOneSale(tx, {
+          businessId: req.user.business_id, userId: req.user.id,
+          currency: req.user.currency || 'USD',
+          batch, paid: paid !== false, defaultLocationId, invoice,
+        }));
+        created.push({ row: i + 1, ...r });
+      } catch (err) {
+        errors.push({ row: i + 1, invoice_no: invoice.invoice_no || null, error: err.message || 'Import failed.' });
+      }
+    }
+
+    // 200 even when nothing imported: the body IS the per-row report the client
+    // renders. A non-2xx here would surface as a bare "HTTP 422" and throw the
+    // report away — the opposite of the point.
+    res.status(created.length ? 201 : 200).json({
+      batch: created.length ? batch : null,
+      imported: created.length,
+      failed: errors.length,
+      created, errors,
+    });
+  } catch (err) {
+    if (err.statusCode) return res.status(err.statusCode).json({ title: err.message, status: err.statusCode });
+    next(err);
+  }
+});
+
+router.delete('/imports/:batch', auth, requireRole('owner', 'manager'), async (req, res, next) => {
+  try {
+    const sales = await prisma.sale.findMany({
+      where: { businessId: req.user.business_id, importBatch: req.params.batch, status: { not: 'cancelled' } },
+      select: { id: true },
+    });
+    if (!sales.length) return res.status(404).json({ title: 'Import batch not found.', status: 404 });
+
+    let reversed = 0;
+    const errors = [];
+    for (const s of sales) {
+      try {
+        await prisma.$transaction((tx) => saleInvoice.deleteInvoice(tx, {
+          businessId: req.user.business_id, userId: req.user.id, saleId: s.id,
+        }));
+        reversed++;
+      } catch (err) {
+        errors.push({ id: s.id, error: err.message || 'Could not reverse this sale.' });
+      }
+    }
+    res.json({ reversed, failed: errors.length, errors });
   } catch (err) {
     if (err.statusCode) return res.status(err.statusCode).json({ title: err.message, status: err.statusCode });
     next(err);

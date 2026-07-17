@@ -1084,9 +1084,43 @@ const SalePaymentSchema = SaleInvoicePaymentSchema.extend({
   amount: z.coerce.number().positive('Payment amount must be greater than zero'),
 });
 
+// Bulk "Import Sales". The client parses the spreadsheet, groups the rows into
+// invoices and posts them here — one object per invoice, each with its lines.
+// Deliberately LENIENT: a bad quantity or unknown product must fail only its own
+// invoice (reported per-row by the engine), never reject the whole batch here.
+// `impStr` therefore TRUNCATES over-length text to the column width instead of
+// rejecting it — one long cell must not 422 the entire import.
+const impStr = (max) => z.coerce.string().trim().transform((s) => s.slice(0, max)).optional().nullable();
+const SaleImportLineSchema = z.object({
+  product_name: impStr(255),
+  sku: impStr(100),
+  quantity: z.coerce.number().optional().nullable(),
+  unit_price: z.coerce.number().optional().nullable(),
+  item_tax: z.coerce.number().optional().nullable(),
+  discount: z.coerce.number().optional().nullable(),
+  description: impStr(500),
+});
+
+const SaleImportInvoiceSchema = z.object({
+  invoice_no: impStr(50),
+  customer_name: impStr(255),
+  customer_phone: impStr(50),
+  customer_email: impStr(255),
+  sale_date: impStr(40),
+  location_id: uuid.optional().nullable(),
+  order_total: z.coerce.number().optional().nullable(),
+  items: z.array(SaleImportLineSchema).min(1, 'An invoice needs at least one line'),
+});
+
+const SaleImportSchema = z.object({
+  location_id: uuid.optional().nullable(),
+  paid: z.boolean().optional(),
+  invoices: z.array(SaleImportInvoiceSchema).min(1, 'Nothing to import').max(1000, 'Import at most 1000 invoices at a time'),
+});
+
 module.exports = {
   SaleInvoiceSchema, SaleFinalizeSchema, SalePaymentSchema, TENDER_METHODS,
-  SaleShippingSchema, SaleNotifySchema,
+  SaleShippingSchema, SaleNotifySchema, SaleImportSchema,
   RegisterSchema, LoginSchema, PinLoginSchema, ChangePasswordSchema,
   RefreshTokenSchema, VerifyMfaSchema,
   ProductSchema, SaleSchema, SaleItemSchema, RefundSchema,

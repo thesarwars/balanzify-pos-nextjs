@@ -3310,7 +3310,8 @@ const API: any = {
       if (REAL_MODE) {
         const query: any = {};
         for (const k of ['location_id', 'customer_id', 'payment_status', 'payment_method', 'status', 'type',
-                         'shipping_status', 'cashier_id', 'from', 'to', 'search', 'page', 'limit']) {
+                         'shipping_status', 'cashier_id', 'from', 'to', 'search', 'page', 'limit',
+                         'has_returns', 'has_shipping']) {
           if (params[k]) query[k] = params[k];
         }
         const res = await realReq('GET', '/sales', { query });
@@ -3426,6 +3427,23 @@ const API: any = {
       if (!receiptToken) return '';
       const base = BACKEND_BASE || (typeof window !== 'undefined' ? window.location.origin : '');
       return `${base}/api/v1/checkout/r/${receiptToken}`;
+    },
+
+    // ── Import Sales ──────────────────────────────────────────────────────
+    /** Post parsed, grouped invoices; the server rings each up and reports per-row. */
+    async importSales(payload: { location_id?: string; paid?: boolean; invoices: any[] }) {
+      if (REAL_MODE) return await realReq('POST', '/sales/import', { body: payload });
+      throw new ApiError(501, 'Importing sales needs the live backend.');
+    },
+    /** Past import batches, newest first. */
+    async imports() {
+      if (REAL_MODE) { const res = await realReq('GET', '/sales/imports'); return (res && res.imports) || []; }
+      return [];
+    },
+    /** Reverse and remove a whole imported batch. */
+    async deleteImport(batch: string) {
+      if (REAL_MODE) return await realReq('DELETE', '/sales/imports/' + encodeURIComponent(batch));
+      throw new ApiError(501, 'Importing sales needs the live backend.');
     },
   },
 

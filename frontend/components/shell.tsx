@@ -14,7 +14,7 @@ import { navLabel } from '@/lib/i18n';
 import { isNavBlocked, setNavBlock, navBlockMessage, navBlockTitle } from '@/lib/nav-guard';
 import {
   LuLayoutDashboard, LuMapPin, LuPackage, LuBoxes, LuClipboardCheck,
-  LuShoppingCart, LuClipboardList, LuTruck, LuReceipt, LuUsers, LuGift, LuTag,
+  LuShoppingCart, LuClipboardList, LuTruck, LuReceipt, LuUsers, LuGift,
   LuTicket, LuBedDouble, LuUtensils, LuPill, LuActivity, LuWarehouse, LuHardHat,
   LuBike, LuLandmark, LuBanknote, LuCoins, LuSlidersHorizontal, LuArrowLeftRight,
   LuHandCoins, LuPiggyBank, LuUserCog, LuFolderKanban, LuListTodo, LuRefreshCw,
@@ -72,11 +72,14 @@ export const NAV = [
           { key: 'list-drafts',     activeId: 'sales', activeParams: { status: 'draft' }, label: 'List Drafts', route: '/sales?status=draft' },
           { key: 'add-quotation',   activeId: 'sales', activeParams: { new: '1', status: 'quotation' }, label: 'Add Quotation', route: '/sales?new=1&status=quotation' },
           { key: 'list-quotations', activeId: 'sales', activeParams: { status: 'quotation' }, label: 'List Quotations', route: '/sales?status=quotation' },
+          { key: 'list-sell-return', activeId: 'sales', activeParams: { returns: '1' }, label: 'List Sell Return', route: '/sales?returns=1' },
+          { key: 'shipments',       activeId: 'sales', activeParams: { shipments: '1' }, label: 'Shipments', route: '/sales?shipments=1' },
+          { key: 'discounts',       activeId: 'discounts', label: 'Discounts', route: '/discounts' },
+          { key: 'import-sales',    activeId: 'sales', activeParams: { import: '1' }, label: 'Import Sales', route: '/sales?import=1' },
         ],
       },
       { id: 'customers', label: 'Customers', icon: LuUsers },
       { id: 'loyalty', label: 'Loyalty', icon: LuGift },
-      { id: 'discounts', label: 'Discounts', icon: LuTag },
       { id: 'coupons', label: 'Coupons', icon: LuTicket },
     ]
   },

@@ -5,6 +5,7 @@ import { useTheme } from '@/components/shell';
 import { API } from '@/lib/api';
 import { SalesList } from './components/sales-list';
 import { SaleEditor } from './components/sale-editor';
+import { ImportSales } from './components/import-sales';
 
 export default function SalesPage() {
   const T = useTheme();
@@ -17,13 +18,18 @@ export default function SalesPage() {
   // ?type=pos pins the list to till sales (List POS).
   const adding = search.get('new') === '1';
   const editId = search.get('edit');
+  const importing = search.get('import') === '1';
   const statusParam = search.get('status') || '';
   const typeParam = search.get('type') || '';
+  const returnsParam = search.get('returns') === '1';
+  const shipmentsParam = search.get('shipments') === '1';
   const initialStatus = ['draft', 'quotation'].includes(statusParam) ? statusParam : undefined;
   const preset = typeParam === 'pos'
     ? { type: 'pos', title: 'POS' }
     : statusParam === 'draft' ? { status: 'draft', title: 'Drafts' }
     : statusParam === 'quotation' ? { status: 'quotation', title: 'Quotations' }
+    : returnsParam ? { has_returns: true, title: 'Sell Returns' }
+    : shipmentsParam ? { has_shipping: true, title: 'Shipments' }
     : undefined;
 
   // Survives the editor→list swap (this page component does not unmount when the
@@ -46,13 +52,21 @@ export default function SalesPage() {
   // Cancel lands back on the slice you came from; a SAVE lands on the slice
   // where the saved document is actually visible — a draft flipped to Final in
   // the form must not vanish behind a Drafts filter with a "saved" toast.
-  const listUrl = initialStatus ? `/sales?status=${initialStatus}` : preset?.type ? `/sales?type=${preset.type}` : '/sales';
+  const listUrl = initialStatus ? `/sales?status=${initialStatus}`
+    : preset?.type ? `/sales?type=${preset.type}`
+    : returnsParam ? '/sales?returns=1'
+    : shipmentsParam ? '/sales?shipments=1'
+    : '/sales';
   const sliceFor = (savedStatus?: string) =>
     savedStatus === 'draft' ? '/sales?status=draft'
     : savedStatus === 'quotation' ? '/sales?status=quotation'
     : savedStatus ? '/sales'
     : listUrl;
   const done = (msg: string, savedStatus?: string) => { flash.current = msg; router.push(sliceFor(savedStatus)); };
+
+  // Import Sales is its own screen under the Sales route (so the sidebar keeps
+  // "Sell" highlighted); it manages its own upload → review → import flow.
+  if (importing) return <ImportSales T={T} />;
 
   if (editId) {
     if (editErr) { flash.current = editErr; router.push(listUrl); return null; }
@@ -76,7 +90,11 @@ export default function SalesPage() {
       // checkout voids the original. Invoices edit in the form.
       if (row._real?.type === 'pos') { router.push(`/pos?edit=${row.id}`); return; }
       // Carry the slice along, so saving/cancelling the edit returns here.
-      const carry = preset?.status ? `&status=${preset.status}` : preset?.type ? `&type=${preset.type}` : '';
+      const carry = preset?.status ? `&status=${preset.status}`
+        : preset?.type ? `&type=${preset.type}`
+        : returnsParam ? '&returns=1'
+        : shipmentsParam ? '&shipments=1'
+        : '';
       router.push(`/sales?edit=${row.id}${carry}`);
     }} />;
 }
