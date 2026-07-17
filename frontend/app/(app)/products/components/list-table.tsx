@@ -22,7 +22,21 @@ export function ActionsMenu({ T, open, onToggle, items }: any) {
   const btnRef = React.useRef<any>(null);
   const [pos, setPos] = React.useState<any>(null);
   const click = () => {
-    if (!open && btnRef.current) { const r = btnRef.current.getBoundingClientRect(); setPos({ top: r.bottom + 4, left: r.left }); }
+    if (!open && btnRef.current) {
+      const r = btnRef.current.getBoundingClientRect();
+      // Fit inside the viewport: open upward when the room is below the fold,
+      // clamp to the right edge, and cap the height so a long menu SCROLLS
+      // instead of running off screen.
+      const below = window.innerHeight - r.bottom - 12;
+      const above = r.top - 12;
+      const openUp = below < 260 && above > below;
+      setPos({
+        left: Math.max(8, Math.min(r.left, window.innerWidth - 236)),
+        top: openUp ? undefined : r.bottom + 4,
+        bottom: openUp ? window.innerHeight - r.top + 4 : undefined,
+        maxH: Math.max(160, openUp ? above : below),
+      });
+    }
     onToggle();
   };
   return (
@@ -31,7 +45,7 @@ export function ActionsMenu({ T, open, onToggle, items }: any) {
       {open && pos && (
         <>
           <div onClick={onToggle} style={{ position: 'fixed', inset: 0, zIndex: 300 } as React.CSSProperties} />
-          <div style={{ position: 'fixed', top: pos.top, left: pos.left, minWidth: 220, background: T.paper, border: `1px solid ${T.line}`, borderRadius: 9, boxShadow: '0 10px 30px rgba(8,12,20,0.22)', zIndex: 301, padding: 5 } as React.CSSProperties}>
+          <div style={{ position: 'fixed', top: pos.top, bottom: pos.bottom, left: pos.left, minWidth: 220, maxHeight: pos.maxH, overflowY: 'auto', background: T.paper, border: `1px solid ${T.line}`, borderRadius: 9, boxShadow: '0 10px 30px rgba(8,12,20,0.22)', zIndex: 301, padding: 5 } as React.CSSProperties}>
             {items.map((it: any, i: number) => it.sep
               ? <div key={i} style={{ height: 1, background: T.line, margin: '5px 4px' }} />
               : <button key={i} onClick={() => { onToggle(); it.on(); }} style={{ width: '100%', textAlign: 'left', display: 'flex', alignItems: 'center', gap: 9, padding: '8px 11px', borderRadius: 6, border: 'none', background: 'transparent', color: it.danger ? T.redText : T.inkMid, fontFamily: T.fBody, fontSize: 12.5, fontWeight: 500, cursor: 'pointer' } as React.CSSProperties} onMouseEnter={e => (e.currentTarget.style.background = T.paperAlt)} onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
