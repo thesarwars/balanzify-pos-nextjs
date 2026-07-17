@@ -249,7 +249,11 @@ async function realReq(method: string, path: string, { query, body, auth = true,
   }
   pushLog({ t: Date.now(), mode: 'real', method, path: fullPath + qs, status: res.status, ms: stamp(), ok: res.ok });
   if (!res.ok) {
-    const msg = (json && (json.title || json.message || json.detail)) || ('HTTP ' + res.status);
+    // Older sale/checkout endpoints answer { error: "…" } rather than RFC 7807
+    // { title } — read both, or a till failure like "Insufficient stock for X"
+    // reaches the cashier as a blank "HTTP 400".
+    const msg = (json && (json.title || json.message || json.detail
+      || (typeof json.error === 'string' && json.error))) || ('HTTP ' + res.status);
     const field = json && (json.field || (json.errors && typeof json.errors === 'object' && Object.keys(json.errors)[0]));
     if (res.status === 401 && auth && !bearer) clearTokens();
     throw new ApiError(res.status, msg, { ...(json || {}), field });

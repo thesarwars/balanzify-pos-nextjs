@@ -992,7 +992,7 @@ router.post('/', auth, validate(SaleSchemaV3), async (req, res, next) => {
   try {
     // Pharmacy Rx-only gate (no-op unless the business has enforcement on).
     const gate = await rxgate.check({ businessId: req.user.business_id, items: req.body.items || [] });
-    if (gate.error) return res.status(400).json({ error: gate.error });
+    if (gate.error) return res.status(400).json({ error: gate.error, title: gate.error, status: 400 });
 
     const result = await createSale(req);
 
@@ -1002,7 +1002,7 @@ router.post('/', auth, validate(SaleSchemaV3), async (req, res, next) => {
     }
     res.status(result._retry ? 200 : 201).json(result);
   } catch (err) {
-    if (err.statusCode) return res.status(err.statusCode).json({ error: err.message });
+    if (err.statusCode) return res.status(err.statusCode).json({ error: err.message, title: err.message, status: err.statusCode });
     next(err);
   }
 });
