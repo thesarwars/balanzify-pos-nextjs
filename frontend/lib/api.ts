@@ -3378,6 +3378,17 @@ const API: any = {
       if (REAL_MODE) return await realReq('POST', '/sales/' + id + '/payment', { body: toSaleTender(payment) });
       throw new ApiError(501, 'Sales invoices need the live backend.');
     },
+    /** Edit a sale document. A draft is rewritten; a posted sale is reversed and
+     *  re-posted in one transaction, its payments carried through untouched. */
+    async updateInvoice(id: any, body: any) {
+      if (REAL_MODE) return await realReq('PUT', '/sales/' + id + '/invoice', { body: toSaleInvoiceBody(body) });
+      throw new ApiError(501, 'Sales invoices need the live backend.');
+    },
+    /** Delete a draft outright; a posted sale is fully reversed and kept as cancelled. */
+    async remove(id: any) {
+      if (REAL_MODE) return await realReq('DELETE', '/sales/' + id);
+      throw new ApiError(501, 'Sales invoices need the live backend.');
+    },
     /** Edit Shipping — logistics only; cannot touch money, stock or the document. */
     async updateShipping(id: any, b: any) {
       if (REAL_MODE) {

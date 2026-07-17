@@ -335,6 +335,10 @@ async function postFinal(
     amountPaid,
     amountDue,
     currency,
+    // false when re-posting an EDITED sale: its SalePayment rows already exist
+    // and stay attached; only their GL legs are written again (the reversal
+    // credited them out, so the repost debits them back — net zero cash).
+    createPaymentRows = true,
   },
 ) {
   if (amountDue > 0 && !sale.customerId) {
@@ -368,26 +372,28 @@ async function postFinal(
   }
 
   let changeGiven = 0;
-  for (const t of tenders) {
-    const change =
-      t.tendered != null ? Math.max(0, round2(t.tendered - t.amount)) : null;
-    if (change) changeGiven = round2(changeGiven + change);
-    await tx.salePayment.create({
-      data: {
-        businessId,
-        saleId: sale.id,
-        provider: t.method,
-        amount: round2(t.amount),
-        currency,
-        status: "completed",
-        note: t.note || null,
-        paymentAccountId: t.payment_account_id || null,
-        paidOn: t.paid_on ? new Date(t.paid_on) : new Date(),
-        tendered: t.tendered != null ? round2(t.tendered) : null,
-        change,
-        completedAt: new Date(),
-      },
-    });
+  if (createPaymentRows) {
+    for (const t of tenders) {
+      const change =
+        t.tendered != null ? Math.max(0, round2(t.tendered - t.amount)) : null;
+      if (change) changeGiven = round2(changeGiven + change);
+      await tx.salePayment.create({
+        data: {
+          businessId,
+          saleId: sale.id,
+          provider: t.method,
+          amount: round2(t.amount),
+          currency,
+          status: "completed",
+          note: t.note || null,
+          paymentAccountId: t.payment_account_id || null,
+          paidOn: t.paid_on ? new Date(t.paid_on) : new Date(),
+          tendered: t.tendered != null ? round2(t.tendered) : null,
+          change,
+          completedAt: new Date(),
+        },
+      });
+    }
   }
 
   // The unpaid remainder is a receivable. postDebit locks the customer, enforces
@@ -617,6 +623,413 @@ async function createInvoice(
   });
 }
 
+/**
+ * Undo everything a posted invoice sale did to the books, from its CURRENT
+ * state — not from journal history, so editing a sale twice can never reverse
+ * the same posting twice.
+ *
+ *   - goods go back on the shelf as fresh cost layers at each line's recorded cost
+ *   - one mirror journal: Dr revenue/tax/shipping/other, Cr tenders + receivable,
+ *     Dr inventory / Cr COGS
+ *   - the customer's receivable for the unpaid part is released
+ *
+ * `sale` must be loaded with items (incl. product packSize/sellByUnit) and its
+ * completed payments. Runs inside the caller's transaction.
+ */
+async function reverseSaleEffects(tx, { businessId, userId, sale, reason }) {
+  const payments = (sale.payments || []).filter(
+    (p) => p.status === "completed",
+  );
+  const paid = round2(payments.reduce((s, p) => s + round2(p.amount), 0));
+  const due = round2(sale.amountDue);
+  // paid + due must equal the total, or the reversal below would not balance.
+  // A mismatch means the record is corrupt — refuse rather than guess.
+  if (Math.abs(paid + due - round2(sale.totalAmount)) > 0.01) {
+    throw bad(
+      `This sale's payments (${paid.toFixed(2)}) and balance (${due.toFixed(2)}) do not add up to its total (${Number(sale.totalAmount).toFixed(2)}) — it cannot be reversed automatically.`,
+      409,
+    );
+  }
+
+  // ── Goods back on the shelf, at the cost they left it ──────────────────────
+  let cogs = 0;
+  for (const it of sale.items) {
+    const stockQty =
+      it.product && it.product.sellByUnit && it.product.packSize
+        ? it.quantity * it.product.packSize
+        : it.quantity;
+    const costPrice = round2(it.costPrice);
+    cogs = round2(cogs + costPrice * stockQty);
+
+    await tx.$executeRaw`
+      INSERT INTO stock_levels (id, product_id, location_id, quantity)
+      VALUES (gen_random_uuid(), ${it.productId}::uuid, ${sale.locationId}::uuid, ${stockQty})
+      ON CONFLICT (product_id, location_id)
+      DO UPDATE SET quantity = stock_levels.quantity + ${stockQty}, updated_at = NOW()
+    `;
+    await tx.stockMovement.create({
+      data: {
+        businessId,
+        productId: it.productId,
+        locationId: sale.locationId,
+        type: "return",
+        quantity: stockQty,
+        referenceType: "sale_void",
+        referenceId: sale.id,
+        createdById: userId || null,
+      },
+    });
+    if (costPrice > 0) {
+      await tx.costLayer.create({
+        data: {
+          businessId,
+          productId: it.productId,
+          locationId: sale.locationId,
+          quantityReceived: stockQty,
+          quantityRemaining: stockQty,
+          unitCost: costPrice,
+        },
+      });
+    }
+  }
+
+  // ── One mirror journal for the sale's whole net effect ─────────────────────
+  const goods = round2(
+    Number(sale.subtotal) - Number(sale.discountAmount),
+  );
+  const tax = round2(sale.taxAmount);
+  const shipping = round2(sale.shippingCharges);
+  const other = round2(sale.expensesTotal);
+  const byAccount = new Map();
+  for (const p of payments) {
+    const code = accounting.tenderAccountCode(p.provider);
+    byAccount.set(code, round2((byAccount.get(code) || 0) + round2(p.amount)));
+  }
+  const lines = [];
+  if (goods !== 0)
+    lines.push({ code: "4000", debit: goods, credit: 0, description: "Sales revenue reversed" });
+  if (shipping > 0)
+    lines.push({ code: "4100", debit: shipping, credit: 0, description: "Shipping charges reversed" });
+  if (other > 0)
+    lines.push({ code: "4200", debit: other, credit: 0, description: "Additional expenses reversed" });
+  if (tax > 0)
+    lines.push({ code: "2100", debit: tax, credit: 0, description: "Sales tax reversed" });
+  for (const [code, amt] of byAccount) {
+    if (amt > 0)
+      lines.push({ code, debit: 0, credit: amt, description: "Tender returned" });
+  }
+  if (due > 0)
+    lines.push({ code: "1100", debit: 0, credit: due, description: "Receivable released" });
+  if (cogs > 0) {
+    lines.push({ code: "1200", debit: cogs, credit: 0, description: "Inventory restocked" });
+    lines.push({ code: "5000", debit: 0, credit: cogs, description: "COGS reversed" });
+  }
+  await accounting.postJournal(tx, {
+    businessId,
+    description: `${reason || "Sale voided"} — ${sale.saleNumber || ""}`.trim(),
+    sourceType: "sale_void",
+    sourceId: sale.id,
+    createdById: userId,
+    lines,
+  });
+
+  // ── The customer no longer owes the unpaid part ─────────────────────────────
+  if (sale.customerId && due > 0) {
+    await tx.$queryRaw`
+      SELECT 1 FROM customers WHERE id = ${sale.customerId}::uuid AND business_id = ${businessId}::uuid FOR UPDATE
+    `;
+    const cust = await tx.customer.findUnique({
+      where: { id: sale.customerId },
+      select: { outstandingBalance: true },
+    });
+    const after = round2(parseFloat(cust.outstandingBalance) - due);
+    await tx.creditLedger.create({
+      data: {
+        businessId,
+        customerId: sale.customerId,
+        type: "adjustment",
+        amount: due,
+        direction: "credit",
+        balanceAfter: after,
+        saleId: sale.id,
+        description: `${reason || "Sale voided"} — ${sale.saleNumber || ""}`.trim(),
+        recordedById: userId || null,
+      },
+    });
+    await tx.customer.update({
+      where: { id: sale.customerId },
+      data: { outstandingBalance: after },
+    });
+  }
+}
+
+/** Load a sale with everything reversal / edit / delete need, with guards. */
+async function loadForMutation(tx, { businessId, saleId }) {
+  const sale = await tx.sale.findFirst({
+    where: { id: saleId, businessId },
+    include: {
+      items: {
+        include: {
+          product: { select: { name: true, costPrice: true, sellByUnit: true, packSize: true } },
+        },
+      },
+      expenses: true,
+      payments: true,
+      refunds: { select: { id: true } },
+      location: { select: { id: true, invoiceSchemeId: true } },
+    },
+  });
+  if (!sale) throw bad("Sale not found.", 404);
+  if (sale.refunds.length) {
+    throw bad(
+      "This sale already has sell returns against it — part of it has been reversed through the return path. Return the remaining items instead.",
+    );
+  }
+  return sale;
+}
+
+/**
+ * Delete a sale document.
+ *   draft / quotation / proforma — nothing ever posted, so the row is deleted.
+ *   posted invoice sale — fully REVERSED (stock, journal, receivable, payments
+ *   marked refunded) and kept as `cancelled`: its journals reference it, so the
+ *   row must survive for the books to stay auditable.
+ */
+async function deleteInvoice(tx, { businessId, userId, saleId }) {
+  const sale = await loadForMutation(tx, { businessId, saleId });
+
+  if (NON_POSTING.has(sale.status)) {
+    await tx.sale.delete({ where: { id: sale.id } }); // items/expenses cascade
+    return { deleted: true, saleNumber: sale.saleNumber };
+  }
+
+  if (sale.status === "cancelled") throw bad("This sale is already cancelled.");
+  if (sale.type !== "invoice") {
+    throw bad(
+      "Only back-office sales can be deleted. Reverse a POS sale with a sell return instead — it handles loyalty and the till.",
+    );
+  }
+  if (sale.status !== "completed") {
+    throw bad(`A ${sale.status} sale cannot be deleted.`);
+  }
+
+  await reverseSaleEffects(tx, { businessId, userId, sale, reason: "Sale deleted" });
+  await tx.salePayment.updateMany({
+    where: { saleId: sale.id, status: "completed" },
+    data: { status: "refunded" },
+  });
+  const updated = await tx.sale.update({
+    where: { id: sale.id },
+    data: { status: "cancelled", amountPaid: 0, amountDue: 0 },
+  });
+  return { deleted: false, cancelled: true, saleNumber: updated.saleNumber };
+}
+
+/**
+ * Edit a sale document.
+ *   Non-posting: the document is simply rewritten (and may be finalised at the
+ *   same time by sending status "completed" with payments).
+ *   Posted invoice sale: reversed and re-posted in this one transaction with the
+ *   new lines — its existing payments stay attached and their money is carried
+ *   through the reversal + repost untouched. If the payments now exceed the new
+ *   total, the edit is refused: money would have to be handed back first.
+ */
+async function updateInvoice(
+  tx,
+  { businessId, userId, currency = "USD", saleId, body },
+) {
+  const sale = await loadForMutation(tx, { businessId, saleId });
+  const wasPosted = !NON_POSTING.has(sale.status);
+  if (wasPosted && sale.status !== "completed") {
+    throw bad(`A ${sale.status} sale cannot be edited.`);
+  }
+  if (wasPosted && sale.type !== "invoice") {
+    throw bad("Only back-office sales can be edited. POS sales are corrected with a sell return.");
+  }
+  if (wasPosted && (body.status || "completed") !== "completed") {
+    throw bad("A posted sale stays Final — it cannot be demoted to a draft.");
+  }
+
+  // Same reference checks a fresh document gets.
+  const location = await tx.location.findFirst({
+    where: { id: body.location_id, businessId },
+    select: { id: true, invoiceSchemeId: true },
+  });
+  if (!location) throw bad("Location not found.", 404);
+  if (body.customer_id) {
+    const c = await tx.customer.findFirst({
+      where: { id: body.customer_id, businessId },
+      select: { id: true },
+    });
+    if (!c) throw bad("Customer not found.", 404);
+  }
+  if (body.delivery_person_id) {
+    const u = await tx.user.findFirst({
+      where: { id: body.delivery_person_id, businessId },
+      select: { id: true },
+    });
+    if (!u) throw bad("Delivery person not found.", 404);
+  }
+  let orderTaxRate = 0;
+  if (body.tax_rate_id) {
+    const r = await tx.taxRate.findFirst({
+      where: { id: body.tax_rate_id, businessId, isActive: true },
+      select: { rate: true },
+    });
+    if (!r) throw bad("Order tax rate not found.");
+    orderTaxRate = parseFloat(r.rate);
+  }
+
+  const lines = await resolveLines(tx, { businessId, items: body.items });
+  const expenses = (body.expenses || []).filter(
+    (e) => e.name && round2(e.amount) > 0,
+  );
+  const totals = computeTotals({
+    lines,
+    discountType: body.discount_type || "pct",
+    discountValue: body.discount_value || 0,
+    orderTaxRate,
+    shippingCharges: body.shipping_charges || 0,
+    expenses,
+  });
+
+  // Changing the invoice number is allowed, but never into a clash.
+  let saleNumber = sale.saleNumber;
+  if (body.invoice_no && String(body.invoice_no).trim() !== sale.saleNumber) {
+    saleNumber = String(body.invoice_no).trim();
+    const clash = await tx.sale.findFirst({
+      where: { businessId, saleNumber, NOT: { id: sale.id } },
+      select: { id: true },
+    });
+    if (clash) throw bad(`Invoice number "${saleNumber}" is already used.`);
+  }
+
+  // Money plan. A posted sale keeps its recorded payments; a draft being
+  // finalised takes the payments from the form.
+  const keptPayments = (sale.payments || []).filter((p) => p.status === "completed");
+  const finalising = !wasPosted && (body.status || "completed") === "completed";
+  let tenders, amountPaid, amountDue;
+  if (wasPosted) {
+    amountPaid = round2(keptPayments.reduce((s, p) => s + round2(p.amount), 0));
+    if (amountPaid - totals.total > 0.01) {
+      throw bad(
+        `The ${amountPaid.toFixed(2)} already paid exceeds the new total (${totals.total.toFixed(2)}). Money would have to be returned first — use a sell return instead of shrinking the sale.`,
+      );
+    }
+    amountDue = round2(totals.total - amountPaid);
+    tenders = keptPayments.map((p) => ({
+      method: p.provider,
+      amount: round2(p.amount),
+      payment_account_id: p.paymentAccountId || undefined,
+    }));
+  } else if (finalising) {
+    ({ tenders, amountPaid, amountDue } = resolveTenders(body.payments, totals.total));
+  } else {
+    tenders = []; amountPaid = 0; amountDue = 0;
+  }
+
+  // A posted sale first has its old effects taken off the books entirely.
+  if (wasPosted) {
+    await reverseSaleEffects(tx, { businessId, userId, sale, reason: "Sale edited" });
+  }
+
+  // A draft taking Final now needs a real invoice number, exactly as a sale
+  // created final would get: from the scheme, or the INV- fallback — never the
+  // provisional DRA-/QUO-/PRO- placeholder.
+  if (finalising && /^(DRA|QUO|PRO)-\d+$/.test(saleNumber || "")) {
+    const schemeId = sale.invoiceSchemeId || (sale.location && sale.location.invoiceSchemeId) || null;
+    saleNumber = schemeId
+      ? await mintInvoiceNumber(tx, businessId, schemeId)
+      : `INV-${Date.now()}`;
+  }
+
+  const newStatus = wasPosted
+    ? "pending" // flipped back to completed by postFinal
+    : (body.status || sale.status);
+
+  const updated = await tx.sale.update({
+    where: { id: sale.id },
+    data: {
+      locationId: location.id,
+      customerId: body.customer_id || null,
+      saleNumber,
+      status: finalising ? "pending" : newStatus,
+      saleDate: body.sale_date ? new Date(body.sale_date) : sale.saleDate,
+      payTerm: body.pay_term != null ? Number(body.pay_term) : null,
+      payTermPeriod: body.pay_term_period || null,
+      documentUrl: body.document_url || null,
+      documentKey: body.document_key || null,
+      subtotal: totals.subtotal,
+      discountType: body.discount_type || "pct",
+      discountValue: round2(body.discount_value || 0),
+      discountAmount: totals.discountAmount,
+      taxRateId: body.tax_rate_id || null,
+      taxAmount: totals.tax,
+      shippingCharges: totals.shipping,
+      shippingDetails: body.shipping_details || null,
+      shippingAddress: body.shipping_address || null,
+      shippingStatus: body.shipping_status || null,
+      deliveredTo: body.delivered_to || null,
+      deliveryPersonId: body.delivery_person_id || null,
+      shippingDocumentUrl: body.shipping_document_url || null,
+      shippingDocumentKey: body.shipping_document_key || null,
+      expensesTotal: totals.expensesTotal,
+      totalAmount: totals.total,
+      amountPaid: 0,
+      amountDue: wasPosted || finalising ? totals.total : 0,
+      notes: body.notes || null,
+      staffNote: body.staff_note || null,
+    },
+  });
+
+  // Replace the document's lines and expenses wholesale.
+  await tx.saleItem.deleteMany({ where: { saleId: sale.id } });
+  await tx.saleExpense.deleteMany({ where: { saleId: sale.id } });
+  for (const l of lines) {
+    const item = await tx.saleItem.create({
+      data: {
+        saleId: sale.id,
+        productId: l.productId,
+        variantId: l.variantId,
+        quantity: l.quantity,
+        unitPrice: l.unitPrice,
+        originalPrice: l.unitPrice,
+        discount: l.lineDiscount,
+        taxRateId: l.taxRateId,
+        taxAmount: l.taxAmount,
+        totalPrice: l.net,
+        costPrice: 0,
+      },
+    });
+    l.saleItemId = item.id;
+  }
+  for (const e of expenses) {
+    await tx.saleExpense.create({
+      data: { saleId: sale.id, name: e.name.trim(), amount: round2(e.amount) },
+    });
+  }
+
+  if (!wasPosted && !finalising) {
+    return tx.sale.findUnique({
+      where: { id: sale.id },
+      include: { items: true, expenses: true, payments: true },
+    });
+  }
+  return postFinal(tx, {
+    businessId,
+    userId,
+    sale: { ...updated, saleNumber },
+    lines,
+    totals,
+    tenders,
+    amountPaid,
+    amountDue,
+    currency,
+    // A posted sale's payment rows already exist and stay attached.
+    createPaymentRows: !wasPosted,
+  });
+}
+
 /** Turn a draft / quotation / proforma into a real, posted sale. */
 async function finalizeInvoice(
   tx,
@@ -683,14 +1096,18 @@ async function finalizeInvoice(
     totals.total,
   );
 
-  // Now it becomes an invoice, so now it takes an invoice number.
+  // Now it becomes an invoice, so now it takes a real invoice number — from the
+  // scheme, or the same INV- fallback a sale created final would get. Either
+  // way the provisional DRA-/QUO-/PRO- placeholder never survives posting.
   const schemeId =
     sale.invoiceSchemeId ||
     (sale.location && sale.location.invoiceSchemeId) ||
     null;
   let saleNumber = sale.saleNumber;
-  if (schemeId && /^(DRA|QUO|PRO)-\d+$/.test(saleNumber || "")) {
-    saleNumber = await mintInvoiceNumber(tx, businessId, schemeId);
+  if (/^(DRA|QUO|PRO)-\d+$/.test(saleNumber || "")) {
+    saleNumber = schemeId
+      ? await mintInvoiceNumber(tx, businessId, schemeId)
+      : `INV-${Date.now()}`;
     await tx.sale.update({ where: { id: sale.id }, data: { saleNumber } });
   }
 
@@ -778,6 +1195,8 @@ module.exports = {
   computeTotals,
   createInvoice,
   finalizeInvoice,
+  updateInvoice,
+  deleteInvoice,
   addPayment,
   mintInvoiceNumber,
   round2,

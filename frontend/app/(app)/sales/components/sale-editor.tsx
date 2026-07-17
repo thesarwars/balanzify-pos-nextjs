@@ -39,8 +39,17 @@ const TENDERS: [string, string][] = [
 let SEQ = 1;
 const blank = (): Line => ({ key: SEQ++, product_id: '', name: '', sku: '', quantity: '1', unit_price: '', discount: '0', tax_rate_id: '' });
 const num = (v: any) => (Number(v) || 0);
+const NON_POSTING = ['draft', 'quotation', 'proforma'];
 
-export function SaleEditor({ T, onDone, onCancel }: { T: any; onDone: (msg: string) => void; onCancel: () => void }) {
+/**
+ * `sale` (the raw GET /sales/:id payload) switches the form into EDIT mode.
+ * Editing a POSTED sale locks the status (it stays Final) and the payment block
+ * (its recorded payments ride through the server's reverse + re-post untouched);
+ * editing a draft is a plain rewrite and may finalise it in the same save.
+ */
+export function SaleEditor({ T, sale, onDone, onCancel }: { T: any; sale?: any; onDone: (msg: string) => void; onCancel: () => void }) {
+  const editing = !!sale;
+  const wasPosted = editing && !NON_POSTING.includes(sale.status);
   const [locations, setLocations] = useState<any[]>([]);
   const [customers, setCustomers] = useState<any[]>([]);
   const [products, setProducts] = useState<any[]>([]);
@@ -49,34 +58,41 @@ export function SaleEditor({ T, onDone, onCancel }: { T: any; onDone: (msg: stri
   const [users, setUsers] = useState<any[]>([]);
   const [schemes, setSchemes] = useState<any[]>([]);
 
-  const [locationId, setLocationId] = useState('');
-  const [customerId, setCustomerId] = useState('');
-  const [status, setStatus] = useState('completed');
-  const [saleDate, setSaleDate] = useState(todayLocal());
-  const [payTerm, setPayTerm] = useState('');
-  const [payTermPeriod, setPayTermPeriod] = useState('days');
-  const [schemeId, setSchemeId] = useState('');
-  const [invoiceNo, setInvoiceNo] = useState('');
-  const [doc, setDoc] = useState<any>(null);
+  const [locationId, setLocationId] = useState(editing ? String(sale.locationId || '') : '');
+  const [customerId, setCustomerId] = useState(editing ? String(sale.customerId || '') : '');
+  const [status, setStatus] = useState(editing ? sale.status : 'completed');
+  const [saleDate, setSaleDate] = useState(editing && sale.saleDate ? String(sale.saleDate).slice(0, 10) : todayLocal());
+  const [payTerm, setPayTerm] = useState(editing && sale.payTerm != null ? String(sale.payTerm) : '');
+  const [payTermPeriod, setPayTermPeriod] = useState(editing ? (sale.payTermPeriod || 'days') : 'days');
+  const [schemeId, setSchemeId] = useState(editing ? String(sale.invoiceSchemeId || '') : '');
+  const [invoiceNo, setInvoiceNo] = useState(editing ? (sale.saleNumber || '') : '');
+  const [doc, setDoc] = useState<any>(editing && sale.documentUrl ? { url: sale.documentUrl, key: sale.documentKey, name: 'Attached document' } : null);
   const [docBusy, setDocBusy] = useState(false);
 
-  const [lines, setLines] = useState<Line[]>([blank()]);
-  const [discountType, setDiscountType] = useState('pct');
-  const [discountValue, setDiscountValue] = useState('0');
-  const [orderTaxId, setOrderTaxId] = useState('');
-  const [sellNote, setSellNote] = useState('');
-  const [staffNote, setStaffNote] = useState('');
+  const [lines, setLines] = useState<Line[]>(editing
+    ? [...(sale.items || []).map((it: any): Line => ({
+        key: SEQ++, product_id: String(it.productId), name: (it.product && it.product.name) || '',
+        sku: (it.product && it.product.sku) || '', quantity: String(it.quantity),
+        unit_price: String(it.unitPrice), discount: String(it.discount || 0), tax_rate_id: it.taxRateId || '',
+      })), blank()]
+    : [blank()]);
+  const [discountType, setDiscountType] = useState(editing ? (sale.discountType || 'pct') : 'pct');
+  const [discountValue, setDiscountValue] = useState(editing ? String(sale.discountValue || 0) : '0');
+  const [orderTaxId, setOrderTaxId] = useState(editing ? (sale.taxRateId || '') : '');
+  const [sellNote, setSellNote] = useState(editing ? (sale.notes || '') : '');
+  const [staffNote, setStaffNote] = useState(editing ? (sale.staffNote || '') : '');
 
-  const [shipDetails, setShipDetails] = useState('');
-  const [shipAddress, setShipAddress] = useState('');
-  const [shipCharges, setShipCharges] = useState('0');
-  const [shipStatus, setShipStatus] = useState('');
-  const [deliveredTo, setDeliveredTo] = useState('');
-  const [deliveryPersonId, setDeliveryPersonId] = useState('');
-  const [shipDoc, setShipDoc] = useState<any>(null);
+  const [shipDetails, setShipDetails] = useState(editing ? (sale.shippingDetails || '') : '');
+  const [shipAddress, setShipAddress] = useState(editing ? (sale.shippingAddress || '') : '');
+  const [shipCharges, setShipCharges] = useState(editing ? String(sale.shippingCharges || 0) : '0');
+  const [shipStatus, setShipStatus] = useState(editing ? (sale.shippingStatus || '') : '');
+  const [deliveredTo, setDeliveredTo] = useState(editing ? (sale.deliveredTo || '') : '');
+  const [deliveryPersonId, setDeliveryPersonId] = useState(editing ? String(sale.deliveryPersonId || '') : '');
+  const [shipDoc, setShipDoc] = useState<any>(editing && sale.shippingDocumentUrl ? { url: sale.shippingDocumentUrl, key: sale.shippingDocumentKey, name: 'Shipping document' } : null);
 
-  const [expenses, setExpenses] = useState<any[]>([{ name: '', amount: '' }, { name: '', amount: '' }, { name: '', amount: '' }, { name: '', amount: '' }]);
-  const [showExpenses, setShowExpenses] = useState(false);
+  const pad4 = (xs: any[]) => { const out = xs.map((e: any) => ({ name: e.name || '', amount: String(e.amount || '') })); while (out.length < 4) out.push({ name: '', amount: '' }); return out; };
+  const [expenses, setExpenses] = useState<any[]>(pad4(editing ? (sale.expenses || []) : []));
+  const [showExpenses, setShowExpenses] = useState(editing && (sale.expenses || []).length > 0);
 
   const [payAmount, setPayAmount] = useState('');
   const [payMethod, setPayMethod] = useState('cash');
@@ -91,7 +107,8 @@ export function SaleEditor({ T, onDone, onCancel }: { T: any; onDone: (msg: stri
   const posts = status === 'completed';
 
   useEffect(() => {
-    API.location.list().then((ls: any[]) => { setLocations(ls || []); if (ls && ls[0]) setLocationId(String(ls[0].id)); }).catch(() => {});
+    // In edit mode the location came from the sale — don't clobber it.
+    API.location.list().then((ls: any[]) => { setLocations(ls || []); if (!editing && ls && ls[0]) setLocationId(String(ls[0].id)); }).catch(() => {});
     API.contact.list({ type: 'customer' }).then(setCustomers).catch(() => {});
     API.product.list({ per_page: 500 }).then((r: any) => setProducts(r.items || [])).catch(() => {});
     Promise.all([API.taxRate.list().catch(() => []), API.taxRate.groups().catch(() => [])])
@@ -129,7 +146,9 @@ export function SaleEditor({ T, onDone, onCancel }: { T: any; onDone: (msg: stri
     return { subtotal, discountAmount, goods, tax, shipping, expensesTotal, total };
   }, [lines, discountType, discountValue, orderTaxId, shipCharges, expenses, rateOf]);
 
-  const paid = posts ? num(payAmount) : 0;
+  // A posted sale's money is its recorded payments; the form takes no new ones.
+  const paidAlready = wasPosted ? num(sale.amountPaid) : 0;
+  const paid = wasPosted ? paidAlready : posts ? num(payAmount) : 0;
   const balance = Math.max(0, t.total - paid);
   const changeReturn = Math.max(0, paid - t.total);
 
@@ -160,17 +179,22 @@ export function SaleEditor({ T, onDone, onCancel }: { T: any; onDone: (msg: stri
       setErr('This sale is not fully paid, so it has to be billed to a customer. Pick a customer, or take the full amount now.');
       return;
     }
-    if (paid - t.total > 0.001 && payMethod !== 'cash') {
+    if (!wasPosted && paid - t.total > 0.001 && payMethod !== 'cash') {
       setErr('Only a cash payment may exceed the total (as change). Reduce the amount.');
+      return;
+    }
+    if (wasPosted && paidAlready - t.total > 0.001) {
+      setErr(`The ${paidAlready.toFixed(2)} already paid exceeds the new total. Money would have to be returned first — use a sell return instead of shrinking the sale.`);
       return;
     }
 
     setBusy(true); setErr(null);
     try {
-      const payments = posts && paid > 0
+      // A posted sale keeps its recorded payments — the form takes no new ones.
+      const payments = !wasPosted && posts && paid > 0
         ? [{ method: payMethod, amount: Math.min(paid, t.total), paid_on: paidOn, payment_account_id: payAccountId || undefined, note: payNote || undefined, tendered: paid }]
         : [];
-      const sale: any = await API.sell.createInvoice({
+      const body = {
         location_id: locationId, customer_id: customerId || undefined, status,
         sale_date: saleDate, pay_term: payTerm || undefined, pay_term_period: payTerm ? payTermPeriod : undefined,
         invoice_scheme_id: schemeId || undefined, invoice_no: invoiceNo || undefined,
@@ -185,10 +209,15 @@ export function SaleEditor({ T, onDone, onCancel }: { T: any; onDone: (msg: stri
         expenses,
         items: items.map((l) => ({ product_id: l.product_id, quantity: l.quantity, unit_price: l.unit_price, discount: l.discount, tax_rate_id: l.tax_rate_id || undefined })),
         payments,
-      });
-      if (andPrint && sale && sale.id) window.open(`/sales?print=${sale.id}`, '_blank');
+      };
+      const saved: any = editing
+        ? await API.sell.updateInvoice(sale.id, body)
+        : await API.sell.createInvoice(body);
+      if (andPrint && saved && saved.id) window.open(`/sales?print=${saved.id}`, '_blank');
       const label = STATUSES.find(([k]) => k === status)?.[1] || 'Sale';
-      onDone(posts ? `${label} saved · ${sale.saleNumber || ''} · stock and ledger updated` : `${label} saved · nothing posted to the ledger`);
+      onDone(editing
+        ? `${saved.saleNumber || ''} updated${wasPosted ? ' · stock and ledger re-posted' : ''}`
+        : posts ? `${label} saved · ${saved.saleNumber || ''} · stock and ledger updated` : `${label} saved · nothing posted to the ledger`);
     } catch (e: any) {
       setErr(e.message || 'Could not save the sale.');
       setBusy(false);
@@ -221,7 +250,9 @@ export function SaleEditor({ T, onDone, onCancel }: { T: any; onDone: (msg: stri
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: T.paperAlt }}>
-      <Topbar T={T} title="Add Sale" subtitle={posts ? 'Deducts stock and posts to the ledger' : 'Saved as a document — nothing is posted'}
+      <Topbar T={T} title={editing ? `Edit Sale · ${sale.saleNumber || ''}` : 'Add Sale'}
+        subtitle={wasPosted ? 'Reverses the old posting and re-posts the new one in a single transaction'
+          : posts ? 'Deducts stock and posts to the ledger' : 'Saved as a document — nothing is posted'}
         right={<Btn T={T} kind="ghost" onClick={onCancel}>← Back to sales</Btn>} />
 
       <div style={{ flex: 1, overflowY: 'auto', padding: 24 }}>
@@ -245,12 +276,12 @@ export function SaleEditor({ T, onDone, onCancel }: { T: any; onDone: (msg: stri
                 </div>
               </Field>
               <Field T={T} label="Sale Date *"><TextField T={T} type="date" value={saleDate} onChange={setSaleDate} /></Field>
-              <Field T={T} label="Status *" hint={posts ? 'Posts stock + ledger on save' : 'Document only — finalise it later to post'}>
-                <SelectField T={T} value={status} options={STATUSES.map(([k]) => k)} onChange={setStatus}
+              <Field T={T} label="Status *" hint={wasPosted ? 'A posted sale stays Final' : posts ? 'Posts stock + ledger on save' : 'Document only — finalise it later to post'}>
+                <SelectField T={T} value={status} options={STATUSES.map(([k]) => k)} onChange={setStatus} disabled={wasPosted}
                   render={(v: any) => STATUSES.find(([k]) => k === v)?.[1] || v} />
               </Field>
-              <Field T={T} label="Invoice scheme">
-                <SelectField T={T} value={schemeId} options={['', ...schemes.map((s: any) => String(s.id))]} onChange={setSchemeId}
+              <Field T={T} label="Invoice scheme" hint={editing ? 'Fixed when the document was created' : undefined}>
+                <SelectField T={T} value={schemeId} options={['', ...schemes.map((s: any) => String(s.id))]} onChange={setSchemeId} disabled={editing}
                   render={(v: any) => (v ? (schemes.find((s: any) => String(s.id) === v) || {}).name : "Location's default")} />
               </Field>
               <Field T={T} label="Invoice No." hint="Keep blank to auto generate">
@@ -380,8 +411,20 @@ export function SaleEditor({ T, onDone, onCancel }: { T: any; onDone: (msg: stri
           </Panel>
 
           {/* Payment */}
-          <Panel T={T} title="Add payment">
-            {!posts ? (
+          <Panel T={T} title={wasPosted ? 'Payments' : 'Add payment'}>
+            {wasPosted ? (
+              <div style={{ fontSize: 12.5, color: T.inkMid, lineHeight: 1.7 }}>
+                <div>
+                  Paid so far <b style={{ ...mono, color: T.ink, fontSize: 15, margin: '0 6px' }}>{money(paidAlready)}</b>
+                  across {(sale.payments || []).filter((p: any) => p.status === 'completed').length} payment(s) — they stay attached and ride through this edit untouched.
+                </div>
+                <div style={{ marginTop: 6 }}>
+                  Balance after this edit: <b style={{ ...mono, color: balance > 0 ? T.redText : T.ink }}>{money(balance)}</b>
+                  {balance > 0 && customerId ? ' — billed to the customer as a receivable.' : ''}
+                </div>
+                <div style={{ marginTop: 8, fontSize: 11, color: T.inkMute }}>Take or view payments from the row's Actions → View Payments.</div>
+              </div>
+            ) : !posts ? (
               <div style={{ fontSize: 12.5, color: T.inkMute, lineHeight: 1.6 }}>
                 A {STATUSES.find(([k]) => k === status)?.[1].toLowerCase()} takes no payment. Finalise it from the sales list when the customer commits, and record the payment then.
               </div>

@@ -13,8 +13,9 @@ import { Topbar } from '@/components/shell';
 import { money } from '@/lib/theme';
 import { formatDate, todayLocal } from '@/lib/business-settings';
 import { API } from '@/lib/api';
-import { LuEye, LuUndo2, LuBadgeCheck, LuTruck, LuPrinter, LuClipboardList, LuFileText, LuWallet, LuLink, LuMail } from 'react-icons/lu';
+import { LuEye, LuUndo2, LuBadgeCheck, LuTruck, LuPrinter, LuClipboardList, LuFileText, LuWallet, LuLink, LuMail, LuPencil, LuTrash2 } from 'react-icons/lu';
 import { ActionsMenu } from '../../products/components/list-table';
+import { ConfirmModal } from '../../purchase-orders/components/bits';
 import { SellReturnModal } from './sell-return-modal';
 import { SellDetailsModal, printInvoice, printPackingSlip, printDeliveryNote } from './sell-details-modal';
 import { EditShippingModal } from './edit-shipping-modal';
@@ -49,7 +50,7 @@ const STATUS_TONE: Record<string, any> = { paid: 'green', partial: 'amber', due:
 const DOC_TONE: Record<string, any> = { draft: 'gray', quotation: 'blue', proforma: 'blue', refunded: 'red' };
 const title = (s: string) => (s ? s[0].toUpperCase() + s.slice(1).replace(/_/g, ' ') : '');
 
-export function SalesList({ T, onAdd, flash }: { T: any; onAdd: () => void; flash?: React.MutableRefObject<string> }) {
+export function SalesList({ T, onAdd, onEdit, flash }: { T: any; onAdd: () => void; onEdit?: (row: any) => void; flash?: React.MutableRefObject<string> }) {
   const [rows, setRows] = useState<any[]>([]);
   const [totals, setTotals] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -68,6 +69,7 @@ export function SalesList({ T, onAdd, flash }: { T: any; onAdd: () => void; flas
   const [nonce, setNonce] = useState(0);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [openMenu, setOpenMenu] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<any>(null);
   const [returning, setReturning] = useState<any>(null);
   const [viewing, setViewing] = useState<any>(null);
   const [shipping, setShipping] = useState<any>(null);
@@ -141,6 +143,17 @@ export function SalesList({ T, onAdd, flash }: { T: any; onAdd: () => void; flas
       reload();
     } catch (e: any) { show(e.message || 'Could not finalise that document.'); }
     finally { setBusyId(null); }
+  }
+
+  async function doDelete(row: any) {
+    try {
+      const res: any = await API.sell.remove(row.id);
+      show(res.deleted
+        ? `${row.invoice_no} deleted`
+        : `${row.invoice_no} reversed and cancelled · stock and ledger restored`);
+      reload();
+    } catch (e: any) { show(e.message || 'Could not delete that sale.'); }
+    finally { setDeleting(null); }
   }
 
   // Print straight from the row: fetch the full sale + the business header once,
@@ -243,6 +256,11 @@ export function SalesList({ T, onAdd, flash }: { T: any; onAdd: () => void; flas
                 <tbody>
                   {rows.map((r) => {
                     const nonPosting = ['draft', 'quotation', 'proforma'].includes(r.status);
+                    // Editable/deletable: any non-posting draft, or a posted
+                    // back-office sale with no sell returns against it. POS sales
+                    // are corrected with a sell return, never rewritten.
+                    const mutable = nonPosting ||
+                      (r.status === 'completed' && r._real?.type === 'invoice' && !(r.sell_return > 0));
                     return (
                       <tr key={r.id} onClick={() => setViewing(r)} style={{ cursor: 'pointer' }}
                         onMouseEnter={(e: any) => (e.currentTarget.style.background = T.paperAlt)}
@@ -251,6 +269,8 @@ export function SalesList({ T, onAdd, flash }: { T: any; onAdd: () => void; flas
                           <ActionsMenu T={T} open={openMenu === r.id} onToggle={() => setOpenMenu((m) => (m === r.id ? null : r.id))}
                             items={[
                               { label: 'View', icon: <LuEye size={15} />, on: () => setViewing(r) },
+                              ...(mutable && onEdit ? [{ label: 'Edit', icon: <LuPencil size={15} />, on: () => onEdit(r) }] : []),
+                              ...(mutable ? [{ label: 'Delete', icon: <LuTrash2 size={15} />, on: () => setDeleting(r), danger: true }] : []),
                               ...(nonPosting
                                 ? [{ label: busyId === r.id ? 'Finalising…' : 'Finalise this document', icon: <LuBadgeCheck size={15} />, on: () => finalize(r) }]
                                 : [{ label: 'Sell return', icon: <LuUndo2 size={15} />, on: () => setReturning(r), danger: r.status === 'refunded' }]),
@@ -326,6 +346,14 @@ export function SalesList({ T, onAdd, flash }: { T: any; onAdd: () => void; flas
       {viewing && (
         <SellDetailsModal T={T} sale={viewing} onClose={() => setViewing(null)}
           onSellReturn={(row: any) => { setViewing(null); setReturning(row); }} />
+      )}
+      {deleting && (
+        <ConfirmModal T={T} title={`Delete ${deleting.invoice_no}?`}
+          confirmLabel={['draft', 'quotation', 'proforma'].includes(deleting.status) ? 'Delete' : 'Reverse & cancel'}
+          body={['draft', 'quotation', 'proforma'].includes(deleting.status)
+            ? 'This document never posted anything, so it will be removed outright.'
+            : 'This sale is on the books. Deleting it reverses everything it did — goods go back on the shelf, the journal is mirrored out, the customer’s balance is released and its payments are marked refunded — and the record stays as Cancelled so the books remain auditable. Hand any money back to the customer yourself.'}
+          onConfirm={() => doDelete(deleting)} onClose={() => setDeleting(null)} />
       )}
       {returning && (
         <SellReturnModal T={T} sale={returning} onClose={() => setReturning(null)}

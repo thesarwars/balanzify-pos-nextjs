@@ -1170,6 +1170,39 @@ router.post('/invoice', auth, validate(SaleInvoiceSchema), async (req, res, next
   }
 });
 
+// ── PUT /api/v1/sales/:id/invoice ────────────────────────────────────────────
+// Edit a sale document. A draft is simply rewritten (and may be finalised in the
+// same call); a POSTED sale is reversed and re-posted in one transaction, its
+// payments carried through untouched.
+router.put('/:id/invoice', auth, requireRole('owner', 'manager'), validate(SaleInvoiceSchema), async (req, res, next) => {
+  try {
+    const sale = await prisma.$transaction((tx) => saleInvoice.updateInvoice(tx, {
+      businessId: req.user.business_id, userId: req.user.id,
+      currency: req.user.currency || 'USD', saleId: req.params.id, body: req.body,
+    }));
+    res.json(sale);
+  } catch (err) {
+    if (err.statusCode) return res.status(err.statusCode).json({ title: err.message, status: err.statusCode });
+    next(err);
+  }
+});
+
+// ── DELETE /api/v1/sales/:id ─────────────────────────────────────────────────
+// A draft/quotation/proforma is deleted outright (nothing ever posted). A posted
+// invoice sale is fully reversed — stock, journal, receivable — and kept as
+// `cancelled`, because its journals reference it and the books must stay auditable.
+router.delete('/:id', auth, requireRole('owner', 'manager'), async (req, res, next) => {
+  try {
+    const result = await prisma.$transaction((tx) => saleInvoice.deleteInvoice(tx, {
+      businessId: req.user.business_id, userId: req.user.id, saleId: req.params.id,
+    }));
+    res.json(result);
+  } catch (err) {
+    if (err.statusCode) return res.status(err.statusCode).json({ title: err.message, status: err.statusCode });
+    next(err);
+  }
+});
+
 // Turn a draft / quotation / proforma into a posted sale. Same posting path as a
 // sale created final, so there is only one way for a sale to hit the books.
 router.post('/:id/finalize', auth, requireRole('owner', 'manager'), validate(SaleFinalizeSchema), async (req, res, next) => {
