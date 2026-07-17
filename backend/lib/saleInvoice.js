@@ -777,6 +777,8 @@ async function loadForMutation(tx, { businessId, saleId }) {
       payments: true,
       refunds: { select: { id: true } },
       location: { select: { id: true, invoiceSchemeId: true } },
+      shift: { select: { id: true, status: true } },
+      fiscalReceipt: { select: { id: true } },
     },
   });
   if (!sale) throw bad("Sale not found.", 404);
@@ -786,6 +788,147 @@ async function loadForMutation(tx, { businessId, saleId }) {
     );
   }
   return sale;
+}
+
+/**
+ * Undo everything a POSTED POS SALE did — the till counterpart of
+ * reverseSaleEffects, because a till checkout touches things an invoice never
+ * does: loyalty points, the register session's totals, and a revenue posting
+ * that lumps tips/charges into one 4000 credit (total − tax).
+ *
+ * Refused whenever a faithful reversal is impossible:
+ *   fiscalised (legally immutable) · register session already reconciled ·
+ *   made-to-order lines (ingredients, not finished stock, were depleted) ·
+ *   sell-by-unit lines (the deducted quantity is not recorded) · pending tender.
+ */
+async function voidPosSale(tx, { businessId, userId, sale, reason }) {
+  if (sale.status === "pending") {
+    throw bad("This sale is still settling with its payment provider — wait for it to complete, then correct it.");
+  }
+  if (sale.status !== "completed") throw bad(`A ${sale.status} sale cannot be voided.`);
+  if (sale.fiscalReceipt) {
+    throw bad("This sale was fiscalised — it is legally immutable. Correct it with a sell return.");
+  }
+  if (sale.shift && sale.shift.status !== "open") {
+    throw bad("This sale's register session is already closed and reconciled. Correct it with a sell return.");
+  }
+  const productIds = [...new Set(sale.items.map((i) => i.productId))];
+  const recipes = await tx.recipe.findMany({ where: { productId: { in: productIds } }, select: { productId: true } });
+  if (recipes.length) {
+    throw bad("This sale depleted recipe ingredients, which cannot be reconstructed. Correct it with a sell return.");
+  }
+  if (sale.items.some((i) => i.product && i.product.sellByUnit && i.product.packSize)) {
+    throw bad("This sale contains sell-by-unit lines whose deducted stock quantity is not recorded. Correct it with a sell return.");
+  }
+
+  // A POS sale records EVERY tender as a payment row — credit included — so the
+  // rows are the whole money story and must equal the total.
+  const payments = (sale.payments || []).filter((p) => p.status === "completed");
+  const paidRows = round2(payments.reduce((s, p) => s + round2(p.amount), 0));
+  if (Math.abs(paidRows - round2(sale.totalAmount)) > 0.01) {
+    throw bad(
+      `This sale's payment rows (${paidRows.toFixed(2)}) do not add up to its total (${Number(sale.totalAmount).toFixed(2)}) — it cannot be reversed automatically.`,
+      409,
+    );
+  }
+
+  // ── Goods back on the shelf at the cost they left it ────────────────────────
+  let cogs = 0;
+  for (const it of sale.items) {
+    const costPrice = round2(it.costPrice);
+    cogs = round2(cogs + costPrice * it.quantity);
+    await tx.$executeRaw`
+      INSERT INTO stock_levels (id, product_id, location_id, quantity)
+      VALUES (gen_random_uuid(), ${it.productId}::uuid, ${sale.locationId}::uuid, ${it.quantity})
+      ON CONFLICT (product_id, location_id)
+      DO UPDATE SET quantity = stock_levels.quantity + ${it.quantity}, updated_at = NOW()
+    `;
+    await tx.stockMovement.create({
+      data: {
+        businessId, productId: it.productId, locationId: sale.locationId,
+        type: "return", quantity: it.quantity,
+        referenceType: "sale_void", referenceId: sale.id, createdById: userId || null,
+      },
+    });
+    if (costPrice > 0) {
+      await tx.costLayer.create({
+        data: {
+          businessId, productId: it.productId, locationId: sale.locationId,
+          quantityReceived: it.quantity, quantityRemaining: it.quantity, unitCost: costPrice,
+        },
+      });
+    }
+  }
+
+  // ── Mirror the till journal: Cr each tender back out, take back the revenue ──
+  const total = round2(sale.totalAmount);
+  const tax = round2(sale.taxAmount);
+  const byAccount = new Map();
+  for (const p of payments) {
+    const code = accounting.tenderAccountCode(p.provider); // 'credit' → 1100
+    byAccount.set(code, round2((byAccount.get(code) || 0) + round2(p.amount)));
+  }
+  const lines = [];
+  if (total - tax !== 0)
+    lines.push({ code: "4000", debit: round2(total - tax), credit: 0, description: "Sales revenue reversed" });
+  if (tax > 0) lines.push({ code: "2100", debit: tax, credit: 0, description: "Sales tax reversed" });
+  for (const [code, amt] of byAccount) {
+    if (amt > 0) lines.push({ code, debit: 0, credit: amt, description: "Tender returned" });
+  }
+  if (cogs > 0) {
+    lines.push({ code: "1200", debit: cogs, credit: 0, description: "Inventory restocked" });
+    lines.push({ code: "5000", debit: 0, credit: cogs, description: "COGS reversed" });
+  }
+  await accounting.postJournal(tx, {
+    businessId,
+    description: `${reason || "Sale voided"} — ${sale.saleNumber || ""}`.trim(),
+    sourceType: "sale_void", sourceId: sale.id, createdById: userId, lines,
+  });
+
+  // ── A credit sale's receivable is released on the customer too ──────────────
+  const due = round2(sale.amountDue);
+  if (sale.customerId && due > 0) {
+    await tx.$queryRaw`SELECT 1 FROM customers WHERE id = ${sale.customerId}::uuid AND business_id = ${businessId}::uuid FOR UPDATE`;
+    const cust = await tx.customer.findUnique({ where: { id: sale.customerId }, select: { outstandingBalance: true } });
+    const after = round2(parseFloat(cust.outstandingBalance) - due);
+    await tx.creditLedger.create({
+      data: {
+        businessId, customerId: sale.customerId, type: "adjustment", amount: due,
+        direction: "credit", balanceAfter: after, saleId: sale.id,
+        description: `${reason || "Sale voided"} — ${sale.saleNumber || ""}`.trim(),
+        recordedById: userId || null,
+      },
+    });
+    await tx.customer.update({ where: { id: sale.customerId }, data: { outstandingBalance: after } });
+  }
+
+  // ── Loyalty: give back what was redeemed, take back what was earned ─────────
+  const netPoints = (sale.loyaltyPointsRedeemed || 0) - (sale.loyaltyPointsEarned || 0);
+  if (sale.customerId && netPoints !== 0) {
+    await tx.customer.update({ where: { id: sale.customerId }, data: { loyaltyPoints: { increment: netPoints } } });
+    const newBal = await tx.customer.findUnique({ where: { id: sale.customerId }, select: { loyaltyPoints: true } });
+    await tx.loyaltyLedger.create({
+      data: {
+        businessId, customerId: sale.customerId, saleId: sale.id,
+        type: "adjust", points: netPoints, balanceAfter: Math.max(0, newBal.loyaltyPoints),
+        notes: `${reason || "Sale voided"} — ${sale.saleNumber || ""}`.trim(), createdById: userId,
+      },
+    });
+  }
+
+  // ── The register session no longer contains this sale ───────────────────────
+  if (sale.shiftId) {
+    await tx.shift.update({
+      where: { id: sale.shiftId },
+      data: {
+        totalSales: { decrement: total },
+        totalTransactions: { decrement: 1 },
+        totalCash: { decrement: round2(sale.cashAmount) },
+        totalZaad: { decrement: round2(sale.zaadAmount) },
+        totalCard: { decrement: round2(sale.cardAmount) },
+      },
+    });
+  }
 }
 
 /**
@@ -804,10 +947,24 @@ async function deleteInvoice(tx, { businessId, userId, saleId }) {
   }
 
   if (sale.status === "cancelled") throw bad("This sale is already cancelled.");
+
+  if (sale.type === "pos") {
+    // A till sale reverses through its own engine: loyalty, the register
+    // session's totals and its lumped revenue posting all unwind with it.
+    await voidPosSale(tx, { businessId, userId, sale, reason: "Sale deleted" });
+    await tx.salePayment.updateMany({
+      where: { saleId: sale.id, status: "completed" },
+      data: { status: "refunded" },
+    });
+    const gone = await tx.sale.update({
+      where: { id: sale.id },
+      data: { status: "cancelled", amountPaid: 0, amountDue: 0 },
+    });
+    return { deleted: false, cancelled: true, saleNumber: gone.saleNumber };
+  }
+
   if (sale.type !== "invoice") {
-    throw bad(
-      "Only back-office sales can be deleted. Reverse a POS sale with a sell return instead — it handles loyalty and the till.",
-    );
+    throw bad("Only back-office and POS sales can be deleted.");
   }
   if (sale.status !== "completed") {
     throw bad(`A ${sale.status} sale cannot be deleted.`);

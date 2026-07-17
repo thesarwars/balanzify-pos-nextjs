@@ -72,6 +72,9 @@ export default function SalesPage() {
   return <SalesList key={preset ? preset.title : 'all'} T={T} flash={flash} preset={preset}
     onAdd={() => router.push(preset?.status ? `/sales?new=1&status=${preset.status}` : '/sales?new=1')}
     onEdit={(row: any) => {
+      // A till sale edits in the TILL: the POS loads it and the replacement
+      // checkout voids the original. Invoices edit in the form.
+      if (row._real?.type === 'pos') { router.push(`/pos?edit=${row.id}`); return; }
       // Carry the slice along, so saving/cancelling the edit returns here.
       const carry = preset?.status ? `&status=${preset.status}` : preset?.type ? `&type=${preset.type}` : '';
       router.push(`/sales?edit=${row.id}${carry}`);

@@ -264,11 +264,13 @@ export function SalesList({ T, onAdd, onEdit, flash, preset }:
                 <tbody>
                   {rows.map((r) => {
                     const nonPosting = ['draft', 'quotation', 'proforma'].includes(r.status);
-                    // Editable/deletable: any non-posting draft, or a posted
-                    // back-office sale with no sell returns against it. POS sales
-                    // are corrected with a sell return, never rewritten.
+    // Editable/deletable: any non-posting draft, or a posted sale with no
+                    // sell returns. An invoice edits in the form; a POS sale edits in the
+                    // TILL (its original is voided when the replacement completes). The
+                    // server still refuses the cases it cannot faithfully reverse —
+                    // fiscalised, closed register session, recipe or sell-by-unit lines.
                     const mutable = nonPosting ||
-                      (r.status === 'completed' && r._real?.type === 'invoice' && !(r.sell_return > 0));
+                      (r.status === 'completed' && ['invoice', 'pos'].includes(r._real?.type) && !(r.sell_return > 0));
                     return (
                       <tr key={r.id} onClick={() => setViewing(r)} style={{ cursor: 'pointer' }}
                         onMouseEnter={(e: any) => (e.currentTarget.style.background = T.paperAlt)}

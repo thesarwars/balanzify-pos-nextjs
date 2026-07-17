@@ -34,7 +34,7 @@ function tillTheme(T: any, dark: any) {
   };
 }
 
-export function POS({ T, tweaks }: { T: any; tweaks: any }) {
+export function POS({ T, tweaks, editSaleId }: { T: any; tweaks: any; editSaleId?: string | null }) {
   const dark = tweaks.tillDark;
   const D = tillTheme(T, dark);
   const gridMode = tweaks.posGrid;      // 'cards' | 'list' | 'category'
@@ -59,6 +59,10 @@ export function POS({ T, tweaks }: { T: any; tweaks: any }) {
   const [customer, setCustomer] = useStateP<any>(null);
   const [custOpen, setCustOpen] = useStateP(false);
   const [contacts, setContacts] = useStateP<any[]>([]);
+  // Editing an existing till sale: the cart is prefilled from it and completing
+  // the new checkout VOIDS the original first (full reversal server-side).
+  const [editing, setEditing] = useStateP<any>(null);  // { id, number, voided }
+  const editCustRef = React.useRef<string | null>(null);
   const [custGroups, setCustGroups] = useStateP<any[]>([]);
   const [reward, setReward] = useStateP<any>(null);
   const [varPick, setVarPick] = useStateP<any>(null);    // product awaiting a variation choice
@@ -114,6 +118,40 @@ export function POS({ T, tweaks }: { T: any; tweaks: any }) {
     return () => clearInterval(t);
   }, []);
   const refreshRegister = () => API.register.current().then(setRegister).catch(() => {});
+
+  // ── Edit an existing till sale (/pos?edit=<id>) ─────────────────────────────
+  // Load its lines into the cart at their original quantities. Variant lines map
+  // back through the same attributes-join the catalog names variants with.
+  useEffectP(() => {
+    if (!editSaleId || !API.config?.isReal?.()) return;
+    let dead = false;
+    API.sell.get(editSaleId).then((s: any) => {
+      if (dead || !s) return;
+      if (s.type !== 'pos') { setPostErr('That sale is not a till sale — edit it from the Sales list.'); return; }
+      if (s.status !== 'completed') { setPostErr(`That sale is ${s.status} — it cannot be edited.`); return; }
+      const items = Array.isArray(s.items) ? s.items : [];
+      setCart(items.map((it: any) => {
+        const varName = it.variant && it.variant.attributes ? Object.values(it.variant.attributes).join(' / ') : null;
+        return { key: varName ? it.productId + '::' + varName : it.productId, id: it.productId, varName, qty: Number(it.quantity) || 1 };
+      }));
+      editCustRef.current = s.customerId || null;
+      setEditing({ id: s.id, number: s.saleNumber || '', voided: false });
+    }).catch((e: any) => setPostErr(e.message || 'Could not load that sale.'));
+    return () => { dead = true; };
+  }, [editSaleId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The customer list loads separately; attach the sale's customer when it lands.
+  useEffectP(() => {
+    if (!editCustRef.current || !contacts.length) return;
+    const c = contacts.find((c: any) => String(c.id) === String(editCustRef.current));
+    if (c) { setCustomer(c); editCustRef.current = null; }
+  }, [contacts, editing]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function discardEdit() {
+    // Original untouched unless it was already voided mid-checkout.
+    setEditing(null); editCustRef.current = null; clear();
+    if (typeof window !== 'undefined') window.history.replaceState({}, '', '/pos');
+  }
 
   const items = useMemo(() => {
     let list = prods;
@@ -272,6 +310,26 @@ export function POS({ T, tweaks }: { T: any; tweaks: any }) {
     const remaining = +(total - Math.min(paid, total)).toFixed(2);
     if (remaining > 0.001 && (!customer)) { setPostErr('Select a customer to sell on credit.'); return; }
     setPostErr(null); setPosting(true);
+
+    // Replacing an existing sale: void the original FIRST (full reversal —
+    // stock, ledger, loyalty, register totals) so the re-ring has its stock
+    // back. If the new checkout then fails, the cart stays on screen and the
+    // banner says the original is already voided; just complete the sale.
+    if (editing && API.config?.isReal?.()) {
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        setPostErr('Editing a sale needs a connection — the original has to be voided on the server first.');
+        setPosting(false); return;
+      }
+      if (!editing.voided) {
+        try {
+          await API.sell.remove(editing.id);
+          setEditing((e: any) => (e ? { ...e, voided: true } : e));
+        } catch (ex: any) {
+          setPostErr(ex.message || 'Could not void the original sale.');
+          setPosting(false); return;
+        }
+      }
+    }
     const salePayload: any = {
       location_id: (register && register.location_id) || posLoc || 1, shift_id: register ? register.id : undefined, contact_id: customer ? customer.id : 1, customer_name: customer ? customer.name : 'Walk-in',
       method: payments[0] ? payments[0].method : 'cash', amount: total, discount_amount: discount, discount_type: 'fixed', tax_amount: tax,
@@ -291,6 +349,10 @@ export function POS({ T, tweaks }: { T: any; tweaks: any }) {
       setChangeDue(Number(created.change_return) || 0);
       setCharged(methodLabel || (payments[0] ? payments[0].method : 'credit'));
       setPayOpen(false); setSheetOpen(false);
+      if (editing) {
+        setEditing(null); editCustRef.current = null;
+        if (typeof window !== 'undefined') window.history.replaceState({}, '', '/pos');
+      }
       refreshRegister();
       // Auto-dismiss only when receipt actions aren't available (mock mode);
       // in real mode keep the panel so the cashier can print/send the receipt.
@@ -300,7 +362,9 @@ export function POS({ T, tweaks }: { T: any; tweaks: any }) {
       // and let /sync replay it when connectivity returns. Exactly-once is
       // guaranteed server-side by the client-generated idempotency key.
       const offlineish = ex?.status === 0 || (typeof navigator !== 'undefined' && !navigator.onLine);
-      if (API.config?.isReal?.() && offlineish) {
+      // Never queue a REPLACEMENT sale offline: its original may already be
+      // voided, and replaying later could double-ring against restored stock.
+      if (API.config?.isReal?.() && offlineish && !editing) {
         try {
           await outbox().enqueueSale(API.sell.realSaleBody(salePayload));
           setInvoice('OFFLINE');
@@ -586,6 +650,17 @@ export function POS({ T, tweaks }: { T: any; tweaks: any }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
           {isMobile && <button onClick={() => (window as any).__bzOpenDrawer && (window as any).__bzOpenDrawer()} aria-label="Menu" style={{ width: 36, height: 36, flexShrink: 0, borderRadius: 9, border: `1px solid ${D.railLine}`, background: D.chip, color: D.ink, cursor: 'pointer', fontSize: 16 }}>☰</button>}
           <span style={{ fontFamily: T.fDisplay, fontSize: 18, fontWeight: T.dispWeight, color: D.ink, letterSpacing: T.dispTrack, whiteSpace: 'nowrap' } as React.CSSProperties}>Point of Sale</span>
+          {editing && (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '4px 11px', borderRadius: 99, background: T.amberSoft, border: `1px solid ${T.amber}55`, color: T.amberText, fontSize: 11.5, fontWeight: 700, fontFamily: T.fBody, whiteSpace: 'nowrap' } as React.CSSProperties}>
+              {editing.voided
+                ? `⚠ ${editing.number} already voided — complete the replacement sale`
+                : `✎ Replacing ${editing.number} — checkout voids the original`}
+              {!editing.voided && (
+                <button onClick={discardEdit} title="Discard — the original stays as it is"
+                  style={{ border: 'none', background: 'none', color: T.amberText, cursor: 'pointer', fontSize: 12, lineHeight: 1, padding: 0 }}>✕</button>
+              )}
+            </span>
+          )}
           {!isMobile && (register
             ? <button onClick={() => setRegModal('details')} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 11px', borderRadius: 99, cursor: 'pointer', background: T.greenSoft, border: `1px solid ${T.green}33`, color: T.greenText, fontSize: 11.5, fontWeight: 700, fontFamily: T.fBody }}>● Register open · {money(register.expected_cash)}</button>
             : <button onClick={() => setRegModal('open')} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 11px', borderRadius: 99, cursor: 'pointer', background: T.amberSoft, border: `1px solid ${T.amber}33`, color: T.amberText, fontSize: 11.5, fontWeight: 700, fontFamily: T.fBody }}>○ Open register</button>)}
