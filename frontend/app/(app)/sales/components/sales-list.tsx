@@ -50,7 +50,12 @@ const STATUS_TONE: Record<string, any> = { paid: 'green', partial: 'amber', due:
 const DOC_TONE: Record<string, any> = { draft: 'gray', quotation: 'blue', proforma: 'blue', refunded: 'red' };
 const title = (s: string) => (s ? s[0].toUpperCase() + s.slice(1).replace(/_/g, ' ') : '');
 
-export function SalesList({ T, onAdd, onEdit, flash }: { T: any; onAdd: () => void; onEdit?: (row: any) => void; flash?: React.MutableRefObject<string> }) {
+// A preset pins the list to one slice (List POS / Drafts / Quotations): it is
+// merged into every query underneath the user's own filters and names the page.
+export type SalesPreset = { type?: string; status?: string; title: string };
+
+export function SalesList({ T, onAdd, onEdit, flash, preset }:
+  { T: any; onAdd: () => void; onEdit?: (row: any) => void; flash?: React.MutableRefObject<string>; preset?: SalesPreset }) {
   const [rows, setRows] = useState<any[]>([]);
   const [totals, setTotals] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -94,13 +99,13 @@ export function SalesList({ T, onAdd, onEdit, flash }: { T: any; onAdd: () => vo
     let dead = false;
     setLoading(true);
     const timer = setTimeout(() => {
-      API.sell.rows({ ...filters, limit: perPage })
+      API.sell.rows({ ...filters, ...(preset?.type && { type: preset.type }), ...(preset?.status && { status: preset.status }), limit: perPage })
         .then((r: any) => { if (dead) return; setRows(r.rows); setTotals(r.totals); })
         .catch(() => { if (dead) return; setRows([]); setTotals(null); })
         .finally(() => { if (!dead) setLoading(false); });
     }, 250);
     return () => { dead = true; clearTimeout(timer); };
-  }, [filters, perPage, nonce]);
+  }, [filters, perPage, nonce, preset?.type, preset?.status]);
 
   const setF = (k: string, v: any) => setFilters((p: any) => ({ ...p, [k]: v }));
   const clear = () => setFilters({ location_id: '', customer_id: '', payment_status: '', cashier_id: '', shipping_status: '', payment_method: '', status: '', from: '', to: '', search: '' });
@@ -173,7 +178,7 @@ export function SalesList({ T, onAdd, onEdit, flash }: { T: any; onAdd: () => vo
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: T.paperAlt }}>
-      <Topbar T={T} title="Sales" subtitle={rangeLabel}
+      <Topbar T={T} title={preset ? preset.title : 'Sales'} subtitle={rangeLabel}
         right={<Btn T={T} kind="accent" onClick={onAdd}>+ Add</Btn>} />
 
       <div style={{ flex: 1, overflowY: 'auto', padding: 24 }}>
@@ -209,10 +214,13 @@ export function SalesList({ T, onAdd, onEdit, flash }: { T: any; onAdd: () => vo
                   <SelectField T={T} value={filters.shipping_status} options={SHIPPING_STATUSES.map(([k]) => k)} onChange={(v: any) => setF('shipping_status', v)}
                     render={(v: any) => SHIPPING_STATUSES.find(([k]) => k === v)?.[1]} />
                 </Field>
-                <Field T={T} label="Document">
-                  <SelectField T={T} value={filters.status} options={SALE_STATUSES.map(([k]) => k)} onChange={(v: any) => setF('status', v)}
-                    render={(v: any) => SALE_STATUSES.find(([k]) => k === v)?.[1]} />
-                </Field>
+                {/* The Document filter disappears when the page itself IS one document kind. */}
+                {!preset?.status && (
+                  <Field T={T} label="Document">
+                    <SelectField T={T} value={filters.status} options={SALE_STATUSES.map(([k]) => k)} onChange={(v: any) => setF('status', v)}
+                      render={(v: any) => SALE_STATUSES.find(([k]) => k === v)?.[1]} />
+                  </Field>
+                )}
                 <Field T={T} label="Payment Method">
                   <SelectField T={T} value={filters.payment_method} options={['', ...Object.keys((totals && totals.by_payment_method) || {})]} onChange={(v: any) => setF('payment_method', v)}
                     render={(v: any) => (v ? title(v) : 'All')} />
@@ -224,7 +232,7 @@ export function SalesList({ T, onAdd, onEdit, flash }: { T: any; onAdd: () => vo
 
           <Panel T={T} pad={false}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '12px 16px', borderBottom: `1px solid ${T.line}` }}>
-              <span style={{ fontSize: 14.5, fontWeight: 700, color: T.ink, marginRight: 'auto' }}>All sales</span>
+              <span style={{ fontSize: 14.5, fontWeight: 700, color: T.ink, marginRight: 'auto' }}>{preset ? `List ${preset.title}` : 'All sales'}</span>
               <span style={{ fontSize: 12, color: T.inkSub }}>Show</span>
               <SelectField T={T} value={perPage} options={['25', '50', '100', '250']} onChange={setPerPage} style={{ width: 80, padding: '6px 8px', fontSize: 12 }} />
               <span style={{ fontSize: 12, color: T.inkSub, marginRight: 8 }}>entries</span>

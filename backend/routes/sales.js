@@ -1055,6 +1055,7 @@ const PAYMENT_STATUS_WHERE = {
 // Query params that reach Prisma as enums have to be whitelisted here: an
 // unrecognised value is a client mistake (400), not a 500 from the query engine.
 const SALE_STATUSES = ['draft', 'quotation', 'proforma', 'pending', 'completed', 'refunded', 'partially_refunded', 'cancelled'];
+const SALE_TYPES = ['pos', 'order', 'invoice', 'credit'];
 const SHIPPING_STATUSES = ['pending', 'packed', 'shipped', 'delivered', 'cancelled'];
 const PAYMENT_METHODS = [...TENDER_METHODS, 'split', 'credit'];
 const oneOf = (list, v, what) => {
@@ -1067,11 +1068,12 @@ const oneOf = (list, v, what) => {
 router.get('/', auth, async (req, res, next) => {
   try {
     const { page = 1, limit = 50, from, to, payment_method, payment_status, status,
-            customer_id, cashier_id, location_id, shipping_status, search } = req.query;
+            customer_id, cashier_id, location_id, shipping_status, search, type } = req.query;
 
     const method   = oneOf(PAYMENT_METHODS, payment_method, 'payment method');
     const payState = oneOf(Object.keys(PAYMENT_STATUS_WHERE), payment_status, 'payment status');
     const saleState = oneOf(SALE_STATUSES, status, 'sale status');
+    const saleType = oneOf(SALE_TYPES, type, 'sale type');
     const shipState = oneOf(SHIPPING_STATUSES, shipping_status, 'shipping status');
 
     // Filter on the document date. A POS sale never sets one, but the column
@@ -1086,6 +1088,7 @@ router.get('/', auth, async (req, res, next) => {
       ...(method     && { paymentMethod: method }),
       ...(payState   && PAYMENT_STATUS_WHERE[payState]),
       ...(saleState  && { status: saleState }),
+      ...(saleType   && { type: saleType }),
       ...(customer_id     && { customerId:   customer_id }),
       ...(cashier_id      && { cashierId:    cashier_id }),
       ...(location_id     && { locationId:   location_id }),

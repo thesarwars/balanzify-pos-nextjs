@@ -3305,7 +3305,7 @@ const API: any = {
     async rows(params: any = {}) {
       if (REAL_MODE) {
         const query: any = {};
-        for (const k of ['location_id', 'customer_id', 'payment_status', 'payment_method', 'status',
+        for (const k of ['location_id', 'customer_id', 'payment_status', 'payment_method', 'status', 'type',
                          'shipping_status', 'cashier_id', 'from', 'to', 'search', 'page', 'limit']) {
           if (params[k]) query[k] = params[k];
         }

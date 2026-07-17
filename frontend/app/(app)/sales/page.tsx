@@ -13,8 +13,18 @@ export default function SalesPage() {
 
   // The view is driven by the URL, so the sidebar and row actions actually
   // switch it: /sales → list, /sales?new=1 → Add Sale, /sales?edit=<id> → Edit.
+  // ?status=draft|quotation presets the document kind (Add Draft / List Drafts…),
+  // ?type=pos pins the list to till sales (List POS).
   const adding = search.get('new') === '1';
   const editId = search.get('edit');
+  const statusParam = search.get('status') || '';
+  const typeParam = search.get('type') || '';
+  const initialStatus = ['draft', 'quotation'].includes(statusParam) ? statusParam : undefined;
+  const preset = typeParam === 'pos'
+    ? { type: 'pos', title: 'POS' }
+    : statusParam === 'draft' ? { status: 'draft', title: 'Drafts' }
+    : statusParam === 'quotation' ? { status: 'quotation', title: 'Quotations' }
+    : undefined;
 
   // Survives the editor→list swap (this page component does not unmount when the
   // query changes), so a save can flash a confirmation on the list it lands on.
@@ -33,16 +43,37 @@ export default function SalesPage() {
     return () => { dead = true; };
   }, [editId]);
 
-  const done = (msg: string) => { flash.current = msg; router.push('/sales'); };
+  // Cancel lands back on the slice you came from; a SAVE lands on the slice
+  // where the saved document is actually visible — a draft flipped to Final in
+  // the form must not vanish behind a Drafts filter with a "saved" toast.
+  const listUrl = initialStatus ? `/sales?status=${initialStatus}` : preset?.type ? `/sales?type=${preset.type}` : '/sales';
+  const sliceFor = (savedStatus?: string) =>
+    savedStatus === 'draft' ? '/sales?status=draft'
+    : savedStatus === 'quotation' ? '/sales?status=quotation'
+    : savedStatus ? '/sales'
+    : listUrl;
+  const done = (msg: string, savedStatus?: string) => { flash.current = msg; router.push(sliceFor(savedStatus)); };
 
   if (editId) {
-    if (editErr) { flash.current = editErr; router.push('/sales'); return null; }
+    if (editErr) { flash.current = editErr; router.push(listUrl); return null; }
     if (!editSale) return <div style={{ flex: 1, background: T.paperAlt }} />;
-    return <SaleEditor T={T} sale={editSale} onCancel={() => router.push('/sales')} onDone={done} />;
+    // key: switching straight from one edit to another must start a fresh form.
+    return <SaleEditor key={editId} T={T} sale={editSale} onCancel={() => router.push(listUrl)} onDone={done} />;
   }
   if (adding) {
-    return <SaleEditor T={T} onCancel={() => router.push('/sales')} onDone={done} />;
+    // key: Add Sale / Add Draft / Add Quotation share this spot in the tree —
+    // without a remount, a screen retitled "Add Draft" would keep the previous
+    // visit's Final status and post a real sale.
+    return <SaleEditor key={initialStatus || 'sale'} T={T} initialStatus={initialStatus}
+      onCancel={() => router.push(listUrl)} onDone={done} />;
   }
-  return <SalesList T={T} flash={flash} onAdd={() => router.push('/sales?new=1')}
-    onEdit={(row: any) => router.push('/sales?edit=' + row.id)} />;
+  // key: each slice is its own list — filters, rows and totals never leak from
+  // the previous slice into a page already retitled as the next one.
+  return <SalesList key={preset ? preset.title : 'all'} T={T} flash={flash} preset={preset}
+    onAdd={() => router.push(preset?.status ? `/sales?new=1&status=${preset.status}` : '/sales?new=1')}
+    onEdit={(row: any) => {
+      // Carry the slice along, so saving/cancelling the edit returns here.
+      const carry = preset?.status ? `&status=${preset.status}` : preset?.type ? `&type=${preset.type}` : '';
+      router.push(`/sales?edit=${row.id}${carry}`);
+    }} />;
 }

@@ -47,7 +47,8 @@ const NON_POSTING = ['draft', 'quotation', 'proforma'];
  * (its recorded payments ride through the server's reverse + re-post untouched);
  * editing a draft is a plain rewrite and may finalise it in the same save.
  */
-export function SaleEditor({ T, sale, onDone, onCancel }: { T: any; sale?: any; onDone: (msg: string) => void; onCancel: () => void }) {
+export function SaleEditor({ T, sale, initialStatus, onDone, onCancel }:
+  { T: any; sale?: any; initialStatus?: string; onDone: (msg: string, savedStatus?: string) => void; onCancel: () => void }) {
   const editing = !!sale;
   const wasPosted = editing && !NON_POSTING.includes(sale.status);
   const [locations, setLocations] = useState<any[]>([]);
@@ -60,7 +61,7 @@ export function SaleEditor({ T, sale, onDone, onCancel }: { T: any; sale?: any; 
 
   const [locationId, setLocationId] = useState(editing ? String(sale.locationId || '') : '');
   const [customerId, setCustomerId] = useState(editing ? String(sale.customerId || '') : '');
-  const [status, setStatus] = useState(editing ? sale.status : 'completed');
+  const [status, setStatus] = useState(editing ? sale.status : (initialStatus || 'completed'));
   const [saleDate, setSaleDate] = useState(editing && sale.saleDate ? String(sale.saleDate).slice(0, 10) : todayLocal());
   const [payTerm, setPayTerm] = useState(editing && sale.payTerm != null ? String(sale.payTerm) : '');
   const [payTermPeriod, setPayTermPeriod] = useState(editing ? (sale.payTermPeriod || 'days') : 'days');
@@ -217,7 +218,8 @@ export function SaleEditor({ T, sale, onDone, onCancel }: { T: any; sale?: any; 
       const label = STATUSES.find(([k]) => k === status)?.[1] || 'Sale';
       onDone(editing
         ? `${saved.saleNumber || ''} updated${wasPosted ? ' · stock and ledger re-posted' : ''}`
-        : posts ? `${label} saved · ${saved.saleNumber || ''} · stock and ledger updated` : `${label} saved · nothing posted to the ledger`);
+        : posts ? `${label} saved · ${saved.saleNumber || ''} · stock and ledger updated` : `${label} saved · nothing posted to the ledger`,
+        status);
     } catch (e: any) {
       setErr(e.message || 'Could not save the sale.');
       setBusy(false);
@@ -250,7 +252,8 @@ export function SaleEditor({ T, sale, onDone, onCancel }: { T: any; sale?: any; 
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: T.paperAlt }}>
-      <Topbar T={T} title={editing ? `Edit Sale · ${sale.saleNumber || ''}` : 'Add Sale'}
+      <Topbar T={T} title={editing ? `Edit Sale · ${sale.saleNumber || ''}`
+          : initialStatus === 'draft' ? 'Add Draft' : initialStatus === 'quotation' ? 'Add Quotation' : 'Add Sale'}
         subtitle={wasPosted ? 'Reverses the old posting and re-posts the new one in a single transaction'
           : posts ? 'Deducts stock and posts to the ledger' : 'Saved as a document — nothing is posted'}
         right={<Btn T={T} kind="ghost" onClick={onCancel}>← Back to sales</Btn>} />

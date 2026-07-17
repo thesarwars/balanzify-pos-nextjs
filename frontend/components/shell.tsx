@@ -13,7 +13,7 @@ import { useLocale } from '@/lib/locale-context';
 import { navLabel } from '@/lib/i18n';
 import { isNavBlocked, setNavBlock, navBlockMessage, navBlockTitle } from '@/lib/nav-guard';
 import {
-  LuLayoutDashboard, LuScanLine, LuMapPin, LuPackage, LuBoxes, LuClipboardCheck,
+  LuLayoutDashboard, LuMapPin, LuPackage, LuBoxes, LuClipboardCheck,
   LuShoppingCart, LuClipboardList, LuTruck, LuReceipt, LuUsers, LuGift, LuTag,
   LuTicket, LuBedDouble, LuUtensils, LuPill, LuActivity, LuWarehouse, LuHardHat,
   LuBike, LuLandmark, LuBanknote, LuCoins, LuSlidersHorizontal, LuArrowLeftRight,
@@ -30,7 +30,7 @@ export const NAV = [
   {
     sect: null, items: [
       { id: 'dashboard', label: 'Dashboard', icon: LuLayoutDashboard },
-      { id: 'pos', label: 'Point of Sale', icon: LuScanLine },
+      // Point of Sale lives in the Sales group below (Sell → POS), like the reference.
     ]
   },
   {
@@ -64,8 +64,14 @@ export const NAV = [
     sect: 'Sales', items: [
       {
         id: 'sales', label: 'Sales', icon: LuReceipt, children: [
-          { key: 'list-sales', activeId: 'sales', label: 'List Sales', route: '/sales' },
-          { key: 'add-sale',   activeId: 'sales', activeQuery: 'new', label: 'Add Sale', route: '/sales?new=1' },
+          { key: 'all-sales',       activeId: 'sales', label: 'All Sales', route: '/sales' },
+          { key: 'add-sale',        activeId: 'sales', activeParams: { new: '1' }, label: 'Add Sale', route: '/sales?new=1' },
+          { key: 'list-pos',        activeId: 'sales', activeParams: { type: 'pos' }, label: 'List POS', route: '/sales?type=pos' },
+          { key: 'pos',             activeId: 'pos', label: 'POS', route: '/pos' },
+          { key: 'add-draft',       activeId: 'sales', activeParams: { new: '1', status: 'draft' }, label: 'Add Draft', route: '/sales?new=1&status=draft' },
+          { key: 'list-drafts',     activeId: 'sales', activeParams: { status: 'draft' }, label: 'List Drafts', route: '/sales?status=draft' },
+          { key: 'add-quotation',   activeId: 'sales', activeParams: { new: '1', status: 'quotation' }, label: 'Add Quotation', route: '/sales?new=1&status=quotation' },
+          { key: 'list-quotations', activeId: 'sales', activeParams: { status: 'quotation' }, label: 'List Quotations', route: '/sales?status=quotation' },
         ],
       },
       { id: 'customers', label: 'Customers', icon: LuUsers },
@@ -222,13 +228,19 @@ export function Sidebar({ T, screen, setScreen, collapsed, setCollapsed, onLogou
               // ── Parent item with a sub-menu (e.g. Products) ──
               if (item.children) {
                 const inGroup = item.children.some((c: any) => c.activeId && c.activeId === screen);
-                // A child may pin itself to a query flag (activeQuery). When one is
-                // satisfied it is THE active child; otherwise the plain activeId match
-                // wins. Only groups that declare activeQuery are affected.
-                const querySub = item.children.find((c: any) => c.activeQuery && searchParams.get(c.activeQuery));
+                // Children that share one path may pin themselves to query params
+                // (activeParams). Among those whose params ALL match the current URL,
+                // the most specific (most params) is THE active child — so on
+                // /sales?new=1&status=draft, "Add Draft" beats "Add Sale". With no
+                // param match, the plain activeId children match as usual. Groups
+                // that declare no activeParams behave exactly as before.
+                const querySub = item.children
+                  .filter((c: any) => c.activeParams && c.activeId === screen
+                    && Object.entries(c.activeParams).every(([k, v]) => searchParams.get(k) === v))
+                  .sort((a: any, b: any) => Object.keys(b.activeParams).length - Object.keys(a.activeParams).length)[0] || null;
                 const isChildActive = (c: any) => (querySub
                   ? c === querySub
-                  : c.activeId && c.activeId === screen && !c.activeQuery);
+                  : c.activeId && c.activeId === screen && !c.activeParams);
                 const isOpen = openGroups[item.id] !== undefined ? openGroups[item.id] : inGroup;
                 const toggle = () => setOpenGroups((s) => ({ ...s, [item.id]: !(s[item.id] !== undefined ? s[item.id] : inGroup) }));
                 return (
@@ -273,7 +285,8 @@ export function Sidebar({ T, screen, setScreen, collapsed, setCollapsed, onLogou
                           onMouseLeave={e => { if (!cActive) e.currentTarget.style.background = 'transparent'; }}
                         >
                           <span style={{ fontSize: 6, width: 8, textAlign: 'center', flexShrink: 0, opacity: cActive ? 1 : 0.55 } as React.CSSProperties}>●</span>
-                          <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.label}</span>
+                          {/* keyed by c.key, so the POS child keeps the 'pos' translation it had as a top-level item */}
+                          <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{navLabel(locale, c.key, c.label)}</span>
                         </button>
                       );
                     })}
