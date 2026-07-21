@@ -778,19 +778,81 @@ const VariationTemplateSchema = z.object({
   values: z.array(z.string().trim().min(1).max(100)).default([]),
 });
 
+// The reference's full expense document. Kept a SUPERSET of the old shape
+// (payment_status/date/expense_for) so pre-existing clients keep working:
+// payment_status 'paid' maps to a full cash payment, 'due' to none.
 const ExpenseSchema = z.object({
   category_id:    uuid.optional().nullable(),
+  sub_category_id: uuid.optional().nullable(),
   location_id:    uuid.optional().nullable(),
-  amount:         money.refine(v => v > 0, 'Amount must be greater than 0'),
-  date:           isoDate,
+  title:          optStr(255),
+  payment_to:     optStr(255),
+  ref_no:         optStr(50),
+  amount:         money.refine(v => v > 0, 'Amount must be greater than 0').refine(v => v <= 99999999.99, 'Amount is too large'),
+  date:           optStr(40).refine((s) => !s || !Number.isNaN(Date.parse(s)), 'Invalid date'),
+  // default('paid') preserved from the old schema: a legacy body that omits it
+  // must keep booking as fully paid, exactly as before. The new editor always
+  // sends either a payment object or an explicit 'due'.
   payment_status: z.enum(['paid', 'due']).default('paid'),
   expense_for:    optStr(255),
-  note:           optStr(1000),
+  expense_for_user_id: uuid.optional().nullable(),
+  contact_id:     uuid.optional().nullable(),
+  tax_rate_id:    uuid.optional().nullable(),
+  note:           optStr(2000),
   is_refund:      z.boolean().default(false),
   receipt_url:    z.string().url().optional().nullable(), // snapped receipt photo
+  document_url:   optStr(500),
+  document_key:   optStr(255),
+  is_recurring:   z.boolean().optional(),
+  recur_interval:      positiveInt.max(3650).optional().nullable(),
+  recur_interval_type: z.enum(['days', 'weeks', 'months', 'years']).optional().nullable(),
+  recur_repetitions:   positiveInt.max(1000).optional().nullable(),
+  // The "Add payment" section — one initial tender against the document.
+  payment: z.object({
+    amount:  z.coerce.number().min(0).max(99999999.99),
+    // Whitelisted: an unknown method would silently post to the wrong GL
+    // account ('credit', for instance, maps to Accounts Receivable).
+    method:  z.enum(['cash', 'zaad', 'evc', 'card', 'bank', 'cheque', 'other']).optional().nullable(),
+    payment_account_id: uuid.optional().nullable(),
+    paid_on: optStr(40).refine((s) => !s || !Number.isNaN(Date.parse(s)), 'Invalid payment date'),
+    note:    optStr(500),
+  }).optional().nullable(),
 });
 
-const ExpenseCategorySchema = z.object({ name: shortStr(255) });
+const ExpensePaymentSchema = z.object({
+  amount:  z.coerce.number().positive('Payment amount must be greater than zero').max(99999999.99),
+  method:  z.enum(['cash', 'zaad', 'evc', 'card', 'bank', 'cheque', 'other']).optional().nullable(),
+  payment_account_id: uuid.optional().nullable(),
+  paid_on: optStr(40).refine((s) => !s || !Number.isNaN(Date.parse(s)), 'Invalid payment date'),
+  note:    optStr(500),
+});
+
+// One expense per spreadsheet row; lenient strings (truncate, don't reject) so
+// one long cell can't sink the batch — bad rows fail individually server-side.
+const impStr2 = (max) => z.coerce.string().trim().transform((v) => v.slice(0, max)).optional().nullable();
+const ExpenseImportSchema = z.object({
+  rows: z.array(z.object({
+    location:       impStr2(255),
+    category:       impStr2(255),
+    sub_category:   impStr2(255),
+    ref_no:         impStr2(50),
+    date:           impStr2(40),
+    expense_for:    impStr2(255),
+    contact_id:     impStr2(64),
+    tax:            impStr2(100),
+    note:           impStr2(2000),
+    total_amount:   z.coerce.number().optional().nullable(),
+    paid_amount:    z.coerce.number().optional().nullable(),
+    paid_on:        impStr2(40),
+    payment_method: impStr2(30),
+  })).min(1, 'Nothing to import').max(1000, 'Import at most 1000 expenses at a time'),
+});
+
+const ExpenseCategorySchema = z.object({
+  name: shortStr(255),
+  code: optStr(50),
+  parent_id: uuid.optional().nullable(),
+});
 
 const PaymentAccountSchema = z.object({
   name:           shortStr(255),
@@ -1159,7 +1221,7 @@ module.exports = {
   TaskSchema, CommentSchema, ProjectSchema, MilestoneSchema,
   CreateUserSchema, UpdateUserSchema,
   SettingsSchema, CategorySchema, LocationSchema, CustomerSchema,
-  ExpenseSchema, ExpenseCategorySchema,
+  ExpenseSchema, ExpenseCategorySchema, ExpensePaymentSchema, ExpenseImportSchema,
   PaymentAccountSchema, AccountTransferSchema, AccountDepositSchema,
   BarcodeSettingSchema, ReceiptPrinterSchema,
   CustomerGroupSchema, UnitSchema, BrandSchema, VariationTemplateSchema, DiscountSchema,

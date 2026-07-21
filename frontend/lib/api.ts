@@ -2613,31 +2613,77 @@ function toRealLocationBody(f: any): any {
 // ── Expenses (/api/v1/expenses, /api/v1/expense-categories) ───────────────────
 function adaptRealExpense(e: any): any {
   if (!e) return e;
+  const recurring = !!e.isRecurring;
   return {
     id: e.id,
     ref: e.expenseNumber || ('EXP-' + String(e.id || '').replace(/-/g, '').slice(0, 6).toUpperCase()),
+    title: e.title || '',
+    payment_to: e.paymentTo || '',
     category_id: e.categoryId, category_name: (e.category && e.category.name) || '—',
+    sub_category_id: e.subCategoryId, sub_category_name: (e.subCategory && e.subCategory.name) || '',
     location_id: e.locationId, location_name: (e.location && e.location.name) || '—',
     account_name: '—',
-    expense_for: e.expenseFor || '',
+    expense_for: (e.expenseForUser && e.expenseForUser.name) || e.expenseFor || '',
+    expense_for_user_id: e.expenseForUserId || '',
+    contact_id: e.contactId || '', contact_name: (e.contact && e.contact.name) || '',
+    tax_rate_id: e.taxRateId || '', tax_name: (e.taxRate && e.taxRate.name) || '',
+    tax_amount: Number(e.taxAmount || 0),
     amount: Number(e.amount || 0),
+    amount_paid: Number(e.amountPaid || 0),
+    amount_due: Number(e.amountDue || 0),
     payment_status: e.paymentStatus || 'paid',
     is_refund: !!e.isRefund,
+    is_recurring: recurring,
+    recurring_details: recurring
+      ? `Every ${e.recurInterval || 1} ${e.recurIntervalType || 'months'}${e.recurRepetitions ? ` × ${e.recurRepetitions}` : ''}`
+      : (e.recurParentId ? 'Generated from recurring' : ''),
+    recur_interval: e.recurInterval || 1,
+    recur_interval_type: e.recurIntervalType || 'months',
+    recur_repetitions: e.recurRepetitions || '',
+    document_url: e.documentUrl || '', document_key: e.documentKey || '',
     note: e.note || '',
-    date: e.expenseDate ? String(e.expenseDate).slice(0, 10) : '',
+    added_by: (e.createdBy && e.createdBy.name) || '—',
+    // Local day, not the ISO string's UTC day.
+    date: e.expenseDate ? new Date(e.expenseDate).toLocaleDateString('en-CA') : '',
+    expense_date: e.expenseDate || null,
+    payments: Array.isArray(e.payments) ? e.payments.map((p: any) => ({
+      id: p.id, amount: Number(p.amount || 0), method: p.method || 'cash',
+      paid_on: p.paidOn ? new Date(p.paidOn).toLocaleDateString('en-CA') : '', note: p.note || '',
+    })) : [],
     _real: e,
   };
 }
 function toRealExpenseBody(f: any): any {
   return {
     category_id: isUuid(f.category_id) ? f.category_id : undefined,
+    sub_category_id: isUuid(f.sub_category_id) ? f.sub_category_id : undefined,
     location_id: isUuid(f.location_id) ? f.location_id : undefined,
+    title: f.title || undefined,
+    payment_to: f.payment_to || undefined,
+    ref_no: f.ref_no || undefined,
     amount: Number(f.amount || 0),
     date: (typeof f.date === 'string' && f.date) || undefined,
-    payment_status: f.payment_status === 'due' ? 'due' : 'paid',
+    // Legacy modal path only; the new editor sends a payment object instead.
+    ...(f.payment_status ? { payment_status: f.payment_status === 'due' ? 'due' : 'paid' } : {}),
     expense_for: f.expense_for || undefined,
+    expense_for_user_id: isUuid(f.expense_for_user_id) ? f.expense_for_user_id : undefined,
+    contact_id: isUuid(f.contact_id) ? f.contact_id : undefined,
+    tax_rate_id: isUuid(f.tax_rate_id) ? f.tax_rate_id : undefined,
     note: f.note || undefined,
     is_refund: !!f.is_refund,
+    document_url: f.document_url || undefined,
+    document_key: f.document_key || undefined,
+    is_recurring: !!f.is_recurring,
+    recur_interval: f.is_recurring ? Number(f.recur_interval || 1) : undefined,
+    recur_interval_type: f.is_recurring ? (f.recur_interval_type || 'months') : undefined,
+    recur_repetitions: f.is_recurring && f.recur_repetitions ? Number(f.recur_repetitions) : undefined,
+    payment: f.payment && Number(f.payment.amount) > 0 ? {
+      amount: Number(f.payment.amount),
+      method: f.payment.method || 'cash',
+      payment_account_id: isUuid(f.payment.payment_account_id) ? f.payment.payment_account_id : undefined,
+      paid_on: f.payment.paid_on || undefined,
+      note: f.payment.note || undefined,
+    } : undefined,
   };
 }
 
@@ -4134,27 +4180,71 @@ const API: any = {
     async cancel(module: any) { if (REAL_MODE) return await realReq('POST', '/billing/cancel', { body: { module } }); throw new ApiError(501, 'Billing needs the live backend.'); },
   },
   expense: {
-    async list() {
+    async list(filters: any = {}) {
       if (REAL_MODE) {
-        const res = await realReq('GET', '/expenses');
-        return ((res && (res.expenses || res.data)) || []).map(adaptRealExpense);
+        const query: any = {};
+        for (const k of ['location_id', 'category_id', 'payment_status', 'from', 'to', 'search']) {
+          if (filters[k]) query[k] = filters[k];
+        }
+        const res = await realReq('GET', '/expenses', { query });
+        return {
+          items: ((res && (res.expenses || res.data)) || []).map(adaptRealExpense),
+          totals: (res && res.totals) || { total_amount: 0, total_due: 0 },
+        };
       }
-      return (await transport('GET', '/connector/api/expense')).data;
+      const res = await transport('GET', '/connector/api/expense');
+      return { items: res.data, totals: { total_amount: 0, total_due: 0 } };
+    },
+    async get(id: any) {
+      if (REAL_MODE) return adaptRealExpense(await realReq('GET', '/expenses/' + id));
+      return (await transport('GET', '/connector/api/expense/' + id)).data[0];
     },
     async categories() {
       if (REAL_MODE) {
         const res = await realReq('GET', '/expense-categories');
-        return ((res && (res.categories || res.data)) || []).map((c: any) => ({ id: c.id, name: c.name }));
+        return ((res && (res.categories || res.data)) || []).map((c: any) => ({
+          id: c.id, name: c.name, code: c.code || '',
+          parent_id: c.parentId || '', parent_name: (c.parent && c.parent.name) || '',
+          children: (c._count && c._count.children) || 0,
+          expense_count: (c._count && c._count.expenses) || 0,
+        }));
       }
       return (await transport('GET', '/connector/api/expense-category')).data;
     },
     async addCategory(body: any) {
-      if (REAL_MODE) return await realReq('POST', '/expense-categories', { body: { name: body.name } });
+      if (REAL_MODE) return await realReq('POST', '/expense-categories', { body: { name: body.name, code: body.code || undefined, parent_id: isUuid(body.parent_id) ? body.parent_id : undefined } });
       return (await transport('POST', '/connector/api/expense-category', { body })).data;
+    },
+    async updateCategory(id: any, body: any) {
+      if (REAL_MODE) return await realReq('PUT', '/expense-categories/' + id, { body: { name: body.name, code: body.code || undefined, parent_id: isUuid(body.parent_id) ? body.parent_id : undefined } });
+      throw new ApiError(501, 'Expense categories need the live backend.');
+    },
+    async removeCategory(id: any) {
+      if (REAL_MODE) return await realReq('DELETE', '/expense-categories/' + id);
+      throw new ApiError(501, 'Expense categories need the live backend.');
     },
     async create(body: any) {
       if (REAL_MODE) return adaptRealExpense(await realReq('POST', '/expenses', { body: toRealExpenseBody(body) }));
       return (await transport('POST', '/connector/api/expense', { body })).data;
+    },
+    /** Full document edit; payment rows are kept (money that actually moved). */
+    async update(id: any, body: any) {
+      if (REAL_MODE) return adaptRealExpense(await realReq('PUT', '/expenses/' + id, { body: toRealExpenseBody(body) }));
+      throw new ApiError(501, 'Editing expenses needs the live backend.');
+    },
+    /** Pay down the balance still due. */
+    async addPayment(id: any, p: any) {
+      if (REAL_MODE) return adaptRealExpense(await realReq('POST', '/expenses/' + id + '/payment', { body: {
+        amount: Number(p.amount), method: p.method || 'cash',
+        payment_account_id: isUuid(p.payment_account_id) ? p.payment_account_id : undefined,
+        paid_on: p.paid_on || undefined, note: p.note || undefined,
+      } }));
+      throw new ApiError(501, 'Expense payments need the live backend.');
+    },
+    /** Bulk import — one expense per parsed spreadsheet row; per-row report. */
+    async importRows(rows: any[]) {
+      if (REAL_MODE) return await realReq('POST', '/expenses/import', { body: { rows } });
+      throw new ApiError(501, 'Importing expenses needs the live backend.');
     },
     async remove(id: any) {
       if (REAL_MODE) return await realReq('DELETE', '/expenses/' + id);

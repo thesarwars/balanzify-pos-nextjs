@@ -598,6 +598,7 @@ model Business {
   hotelSettings      HotelSettings?
   wholesaleOrders    WholesaleOrder[]
   expenses           Expense[]
+  expensePayments    ExpensePayment[]
   expenseCategories  ExpenseCategory[]
   paymentAccounts    PaymentAccount[]
   customerGroups     CustomerGroup[]
@@ -663,10 +664,16 @@ model ExpenseCategory {
   id         String    @id @default(uuid()) @db.Uuid
   businessId String    @map("business_id") @db.Uuid
   name       String    @db.VarChar(255)
+  code       String?   @db.VarChar(50)
+  // One level of nesting: a category with a parent is a sub-category.
+  parentId   String?   @map("parent_id") @db.Uuid
   createdAt  DateTime  @default(now()) @map("created_at")
 
-  business   Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  business   Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  parent     ExpenseCategory?  @relation("expense_category_parent", fields: [parentId], references: [id], onDelete: SetNull)
+  children   ExpenseCategory[] @relation("expense_category_parent")
   expenses   Expense[]
+  subExpenses Expense[] @relation("expense_sub_category")
 
   @@unique([businessId, name])
   @@map("expense_categories")
@@ -676,25 +683,76 @@ model Expense {
   id            String   @id @default(uuid()) @db.Uuid
   businessId    String   @map("business_id") @db.Uuid
   categoryId    String?  @map("category_id") @db.Uuid
+  subCategoryId String?  @map("sub_category_id") @db.Uuid
   locationId    String?  @map("location_id") @db.Uuid
   expenseNumber String   @map("expense_number") @db.VarChar(50)
+  title         String?  @db.VarChar(255)
+  paymentTo     String?  @map("payment_to") @db.VarChar(255)
   amount        Decimal  @db.Decimal(12, 2)
+  // Derived from amountPaid/amountDue: paid | partial | due.
   paymentStatus String   @default("paid") @map("payment_status") @db.VarChar(20)
+  amountPaid    Decimal  @default(0) @map("amount_paid") @db.Decimal(12, 2)
+  amountDue     Decimal  @default(0) @map("amount_due") @db.Decimal(12, 2)
+  // Informational: which rate applies and the tax slice of the total.
+  taxRateId     String?  @map("tax_rate_id") @db.Uuid
+  taxAmount     Decimal  @default(0) @map("tax_amount") @db.Decimal(12, 2)
   expenseFor    String?  @map("expense_for") @db.VarChar(255)
+  // "Expense for" a staff member, and/or billed against a contact.
+  expenseForUserId String? @map("expense_for_user_id") @db.Uuid
+  contactId     String?  @map("contact_id") @db.Uuid
   note          String?
   receiptUrl    String?  @map("receipt_url") // snapped receipt photo
+  documentUrl   String?  @map("document_url")
+  documentKey   String?  @map("document_key") @db.VarChar(255)
   isRefund      Boolean  @default(false) @map("is_refund")
+  // Recurring template: materialises a due copy of itself every interval.
+  isRecurring       Boolean   @default(false) @map("is_recurring")
+  recurInterval     Int?      @map("recur_interval")
+  recurIntervalType String?   @map("recur_interval_type") @db.VarChar(10)
+  recurRepetitions  Int?      @map("recur_repetitions")
+  recurParentId     String?   @map("recur_parent_id") @db.Uuid
+  nextRecurDate     DateTime? @map("next_recur_date")
   expenseDate   DateTime @map("expense_date")
   createdById   String?  @map("created_by") @db.Uuid
   createdAt     DateTime @default(now()) @map("created_at")
 
-  business  Business         @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  category  ExpenseCategory? @relation(fields: [categoryId], references: [id])
-  location  Location?        @relation(fields: [locationId], references: [id])
-  createdBy User?            @relation(fields: [createdById], references: [id])
+  business    Business         @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  category    ExpenseCategory? @relation(fields: [categoryId], references: [id])
+  subCategory ExpenseCategory? @relation("expense_sub_category", fields: [subCategoryId], references: [id], onDelete: SetNull)
+  location    Location?        @relation(fields: [locationId], references: [id])
+  createdBy   User?            @relation(fields: [createdById], references: [id])
+  expenseForUser User?         @relation("expense_for_user", fields: [expenseForUserId], references: [id], onDelete: SetNull)
+  contact     Customer?        @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  taxRate     TaxRate?         @relation(fields: [taxRateId], references: [id], onDelete: SetNull)
+  recurParent Expense?         @relation("expense_recur_parent", fields: [recurParentId], references: [id], onDelete: SetNull)
+  recurChildren Expense[]      @relation("expense_recur_parent")
+  payments    ExpensePayment[]
 
+  @@unique([businessId, expenseNumber])
   @@index([businessId, expenseDate])
   @@map("expenses")
+}
+
+/// One row per tender taken against an expense — the reversal engine reads
+/// these to put every payment back where it came from.
+model ExpensePayment {
+  id               String   @id @default(uuid()) @db.Uuid
+  businessId       String   @map("business_id") @db.Uuid
+  expenseId        String   @map("expense_id") @db.Uuid
+  amount           Decimal  @db.Decimal(12, 2)
+  method           String   @default("cash") @db.VarChar(30)
+  paymentAccountId String?  @map("payment_account_id") @db.Uuid
+  paidOn           DateTime @default(now()) @map("paid_on")
+  note             String?
+  createdById      String?  @map("created_by") @db.Uuid
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  business       Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  expense        Expense         @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  paymentAccount PaymentAccount? @relation(fields: [paymentAccountId], references: [id], onDelete: SetNull)
+
+  @@index([expenseId])
+  @@map("expense_payments")
 }
 
 model Unit {
@@ -1183,6 +1241,7 @@ model PaymentAccount {
   hrAdvances   HrAdvance[]
   salePayments SalePayment[]
 
+  expensePayments ExpensePayment[]
   @@map("payment_accounts")
 }
 
@@ -1233,6 +1292,7 @@ model User {
   salesDelivered           Sale[]                   @relation("sale_delivery_person")
   refunds                  Refund[]
   expenses                 Expense[]
+  expensesFor              Expense[]               @relation("expense_for_user")
   employeeRecords          Employee[]
   projectsOwned            Project[]               @relation("project_owner")
   projectsCreated          Project[]               @relation("project_creator")
@@ -2110,6 +2170,7 @@ model Customer {
 
   wholesaleOrders WholesaleOrder[] @relation("wholesale_customer")
   prescriptions   Prescription[]
+  expenses        Expense[]
   @@map("customers")
 }
 
@@ -3360,6 +3421,7 @@ model TaxRate {
   subTaxes       TaxGroupSubTax[] @relation("tax_group")
   memberOfGroups TaxGroupSubTax[] @relation("tax_group_member")
 
+  expenses        Expense[]
   @@unique([businessId, name])
   @@index([businessId])
   @@map("tax_rates")

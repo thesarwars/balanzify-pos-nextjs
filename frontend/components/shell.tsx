@@ -100,7 +100,13 @@ export const NAV = [
   {
     sect: 'Finance', items: [
       { id: 'payment-accounts', label: 'Payment Accounts', icon: LuLandmark },
-      { id: 'expenses', label: 'Expenses', icon: LuBanknote },
+      {
+        id: 'expenses', label: 'Expenses', icon: LuBanknote, children: [
+          { key: 'list-expenses',      activeId: 'expenses', label: 'List Expenses', route: '/expenses' },
+          { key: 'add-expense',        activeId: 'expenses', activeParams: { new: '1' }, label: 'Add Expense', route: '/expenses?new=1' },
+          { key: 'expense-categories', activeId: 'expenses', activeParams: { categories: '1' }, label: 'Expense Categories', route: '/expenses?categories=1' },
+        ],
+      },
       { id: 'petty-cash', label: 'Petty Cash', icon: LuCoins },
       {
         id: 'adjustments', label: 'Stock Adjustment', icon: LuSlidersHorizontal, children: [

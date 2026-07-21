@@ -42,7 +42,7 @@ export function Finance({ T, tab: initial }: { T: Theme; tab?: string }) {
   const [modal, setModal] = useStateFn<any>(null);   // 'expense' | 'account' | 'transfer'
   const [show, node] = useToast();
 
-  const reloadExp = React.useCallback(() => API.expense.list().then(setExpenses).catch(() => {}), []);
+  const reloadExp = React.useCallback(() => API.expense.list().then((r: any) => setExpenses(Array.isArray(r) ? r : r.items || [])).catch(() => {}), []);
   const reloadAcc = React.useCallback(() => API.paymentAccount.list().then(setAccounts).catch(() => {}), []);
   useEffectFn(() => { reloadExp(); reloadAcc(); }, [reloadExp, reloadAcc]);
   useEffectFn(() => {
