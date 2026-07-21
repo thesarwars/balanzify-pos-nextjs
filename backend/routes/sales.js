@@ -264,6 +264,15 @@ async function createSale(req) {
       let subtotal = 0;
       const processed = [];
 
+      // Business Settings the till enforces: minimum-price and overselling.
+      const bizRow = await tx.business.findUnique({ where: { id: req.user.business_id }, select: { settings: true } });
+      const bizSettings = (bizRow && bizRow.settings) || {};
+      const oversellOn = bizSettings.allow_overselling === true;
+      const posTaxOff = bizSettings.pos_disable_order_tax === true;
+      // Default Sale Tax (Business Settings → Sale) is the fallback rate for
+      // products without their own — the same number the till displays.
+      const settingsTaxId = bizSettings.default_sale_tax || null;
+
       const processLineItem = async (item) => {
         // Load product
         const product = await tx.product.findUnique({
@@ -294,6 +303,10 @@ async function createSale(req) {
           ? parseFloat(product.unitPrice)
           : (variantPrice ?? parseFloat(product.sellingPrice));
         const unitPrice = item.override_price != null ? parseFloat(item.override_price) : basePrice;
+        // NOTE: "Sales price is minimum" is enforced where a human actually
+        // TYPES a price (the Add Sale form). The till always sends computed
+        // prices (group discounts, price groups, variants), which a server
+        // floor against the base price would wrongly refuse.
         const lineTotal = unitPrice * item.quantity;
         // Stock scale: when a product is unit-configured, stock is in base units.
         // Unit sale deducts qty; pack sale of that product deducts qty x packSize.
@@ -405,14 +418,17 @@ async function createSale(req) {
             FOR UPDATE
           `;
           const qty = stockRows[0]?.quantity || 0;
-          if (qty < stockQty) {
+          if (qty < stockQty && !oversellOn) {
             throw Object.assign(new Error(`Insufficient stock for variant of ${product.name}. Available: ${qty}`), { statusCode: 400 });
           }
           const newQty = qty - stockQty;
+          // Upsert (stock_levels is unique per product+location): an oversold
+          // variant with no level row yet must still record its negative.
           await tx.$executeRaw`
-            UPDATE stock_levels SET quantity = ${newQty}, updated_at = NOW()
-            WHERE product_id = ${item.product_id}::uuid AND location_id = ${locId}::uuid
-              AND (variant_id = ${item.variant_id}::uuid OR variant_id IS NULL)
+            INSERT INTO stock_levels (id, product_id, variant_id, location_id, quantity, updated_at)
+            VALUES (gen_random_uuid(), ${item.product_id}::uuid, ${item.variant_id}::uuid, ${locId}::uuid, ${newQty}, NOW())
+            ON CONFLICT (product_id, location_id)
+            DO UPDATE SET quantity = ${newQty}, updated_at = NOW()
           `;
         } else {
           const stockRows = await tx.$queryRaw`
@@ -421,7 +437,9 @@ async function createSale(req) {
             FOR UPDATE
           `;
           const qty = stockRows[0]?.quantity || 0;
-          if (qty < stockQty) {
+          // "Allow Overselling" lets the level go negative — the books still
+          // value the uncovered part at standard cost.
+          if (qty < stockQty && !oversellOn) {
             throw Object.assign(new Error(`Insufficient stock for ${product.name}. Available: ${qty}`), { statusCode: 400 });
           }
           const newQty = qty - stockQty;
@@ -528,10 +546,12 @@ async function createSale(req) {
       // Each product may have its own tax rate; falls back to business default.
       const taxItems = processed.map(p => ({
         lineTotal:  p.total_price,
-        taxRateId:  p.tax_rate_id || null,
+        taxRateId:  p.tax_rate_id || settingsTaxId || null,
         productId:  p.product_id,
       }));
-      const taxResult = await computeTax(taxItems, req.user.business_id);
+      const taxResult = posTaxOff
+        ? { lines: taxItems.map(() => ({ taxAmount: 0, taxRateId: null })), totalTax: 0 }
+        : await computeTax(taxItems, req.user.business_id);
       // Merge tax amounts back into processed items
       taxResult.lines.forEach((tl, idx) => {
         processed[idx].tax_amount  = tl.taxAmount  || 0;

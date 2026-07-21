@@ -11,6 +11,7 @@ import { money } from '@/lib/theme';
 import { Btn, Badge, Panel, Modal, Field, TextField, SelectField, FormGrid, useToast, useViewport } from '@/components/kit';
 import { Topbar } from '@/components/shell';
 import { API } from '@/lib/api';
+import { getSetting } from '@/lib/business-settings';
 
 const { useState: useStateC, useEffect: useEffectC } = React;
 
@@ -129,7 +130,7 @@ function ContactEditor({ T, contact, groups, onClose, onSaved, toast }: { T: The
     type: contact.type || 'customer', name: contact.name || '', mobile: contact.mobile || '', email: contact.email || '',
     address: contact.address || '', tax_number: contact.tax_number || '',
     customer_group_id: contact.customer_group_id ?? 1, pay_term_number: contact.pay_term_number || '', pay_term_type: contact.pay_term_type || 'days',
-    credit_limit: contact.credit_limit ?? '', opening_balance: contact.opening_balance || '',
+    credit_limit: contact.credit_limit ?? (editing ? '' : (getSetting('default_credit_limit', '') ?? '')), opening_balance: contact.opening_balance || '',
     contact_kind: contact.contact_kind || (contact.type === 'supplier' ? 'business' : 'individual'),
     assigned_to_id: contact.assigned_to_id || '',
   });

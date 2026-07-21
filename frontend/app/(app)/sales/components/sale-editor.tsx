@@ -12,7 +12,7 @@ import React from 'react';
 import { Btn, Panel, Field, TextField, SelectField, useToast } from '@/components/kit';
 import { Topbar } from '@/components/shell';
 import { money, qty as fmtQty } from '@/lib/theme';
-import { todayLocal } from '@/lib/business-settings';
+import { todayLocal, getSetting } from '@/lib/business-settings';
 import { API } from '@/lib/api';
 import { ProductCombo } from '../../purchase-orders/components/product-combo';
 import { miniNum } from '../../purchase-orders/components/bits';
@@ -78,8 +78,9 @@ export function SaleEditor({ T, sale, initialStatus, onDone, onCancel }:
       })), blank()]
     : [blank()]);
   const [discountType, setDiscountType] = useState(editing ? (sale.discountType || 'pct') : 'pct');
-  const [discountValue, setDiscountValue] = useState(editing ? String(sale.discountValue || 0) : '0');
-  const [orderTaxId, setOrderTaxId] = useState(editing ? (sale.taxRateId || '') : '');
+  // New documents start from Business Settings → Sale defaults.
+  const [discountValue, setDiscountValue] = useState(editing ? String(sale.discountValue || 0) : String(getSetting('default_sale_discount', 0) || 0));
+  const [orderTaxId, setOrderTaxId] = useState(editing ? (sale.taxRateId || '') : (getSetting('default_sale_tax', '') || ''));
   const [sellNote, setSellNote] = useState(editing ? (sale.notes || '') : '');
   const [staffNote, setStaffNote] = useState(editing ? (sale.staffNote || '') : '');
 
@@ -176,6 +177,21 @@ export function SaleEditor({ T, sale, initialStatus, onDone, onCancel }:
     if (!locationId) { setErr('Choose a business location.'); return; }
     if (!items.length) { setErr('Add at least one product.'); return; }
     if (!saleDate) { setErr('A sale date is required.'); return; }
+    if (getSetting('is_pay_term_required', false) && status === 'completed' && balance > 0.001 && !payTerm) {
+      setErr('A pay term is required for sales with a balance due (Business Settings → Sale).'); return;
+    }
+    // "Sales price is minimum selling price": a typed price may only go UP from
+    // the catalogue. New documents only — historical sales keep their prices.
+    if (!editing && getSetting('sales_price_is_minimum', false)) {
+      for (const l of lines) {
+        if (!l.product_id) continue;
+        const cat = products.find((x: any) => String(x.id) === String(l.product_id));
+        const list = Number(cat?.selling_price ?? cat?.price ?? 0);
+        if (list > 0 && Number(l.unit_price) < list - 0.001) {
+          setErr(`"${l.name}" cannot sell below its price of ${list.toFixed(2)} (Business Settings → Sale).`); return;
+        }
+      }
+    }
     if (posts && balance > 0.001 && !customerId) {
       setErr('This sale is not fully paid, so it has to be billed to a customer. Pick a customer, or take the full amount now.');
       return;

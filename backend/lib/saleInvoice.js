@@ -118,6 +118,7 @@ async function consumeStock(
     fallbackCost,
     productName,
     saleId,
+    allowNegative = false,
   },
 ) {
   const rows = variantId
@@ -132,25 +133,35 @@ async function consumeStock(
         FOR UPDATE`;
 
   const onHand = rows.length ? Number(rows[0].quantity) : 0;
-  if (onHand < stockQty) {
+  if (onHand < stockQty && !allowNegative) {
     throw bad(
       `Not enough stock for "${productName}" — ${onHand} on hand, ${stockQty} needed.`,
     );
   }
 
-  const affected = variantId
-    ? await tx.$executeRaw`
-        UPDATE stock_levels SET quantity = quantity - ${stockQty}, updated_at = NOW()
-        WHERE product_id = ${productId}::uuid AND location_id = ${locationId}::uuid
-          AND (variant_id = ${variantId}::uuid OR variant_id IS NULL) AND quantity >= ${stockQty}`
-    : await tx.$executeRaw`
-        UPDATE stock_levels SET quantity = quantity - ${stockQty}, updated_at = NOW()
-        WHERE product_id = ${productId}::uuid AND location_id = ${locationId}::uuid AND quantity >= ${stockQty}`;
-  if (affected === 0)
-    throw bad(
-      `Stock for "${productName}" changed while the sale was being recorded — please retry.`,
-      409,
-    );
+  if (allowNegative) {
+    // "Allow Overselling": the level may go negative; create the row if the
+    // product has never held stock at this location.
+    await tx.$executeRaw`
+      INSERT INTO stock_levels (id, product_id, location_id, quantity, updated_at)
+      VALUES (gen_random_uuid(), ${productId}::uuid, ${locationId}::uuid, ${-stockQty}, NOW())
+      ON CONFLICT (product_id, location_id)
+      DO UPDATE SET quantity = stock_levels.quantity - ${stockQty}, updated_at = NOW()`;
+  } else {
+    const affected = variantId
+      ? await tx.$executeRaw`
+          UPDATE stock_levels SET quantity = quantity - ${stockQty}, updated_at = NOW()
+          WHERE product_id = ${productId}::uuid AND location_id = ${locationId}::uuid
+            AND (variant_id = ${variantId}::uuid OR variant_id IS NULL) AND quantity >= ${stockQty}`
+      : await tx.$executeRaw`
+          UPDATE stock_levels SET quantity = quantity - ${stockQty}, updated_at = NOW()
+          WHERE product_id = ${productId}::uuid AND location_id = ${locationId}::uuid AND quantity >= ${stockQty}`;
+    if (affected === 0)
+      throw bad(
+        `Stock for "${productName}" changed while the sale was being recorded — please retry.`,
+        409,
+      );
+  }
 
   // FEFO (nearest expiry) then FIFO (oldest receipt), the order used everywhere.
   const layers = await tx.$queryRaw`
@@ -249,6 +260,9 @@ async function resolveLines(tx, { businessId, items }) {
   if (rateById.size !== rateIds.length)
     throw bad("One of those tax rates does not exist.");
 
+  // NOTE: "Sales price is minimum" is enforced in the Add Sale FORM, where a
+  // human types the price. A server floor here would wrongly refuse edits of
+  // historical sales, imports at historical prices, and variant pricing.
   return items.map((i) => {
     const p = byId.get(i.product_id);
     const unitPrice =
@@ -352,6 +366,13 @@ async function postFinal(
   await assertNoRecipes(tx, lines);
   await assertPaymentAccounts(tx, businessId, tenders);
 
+  const bizRow = await tx.business.findUnique({
+    where: { id: businessId },
+    select: { settings: true },
+  });
+  const allowOversell =
+    ((bizRow && bizRow.settings) || {}).allow_overselling === true;
+
   // Cost each line on its own: the same product can appear twice and the second
   // occurrence may consume a different (dearer) cost layer than the first.
   // Untracked lines ("Manage Stock?" off) consume nothing and carry zero cost —
@@ -371,6 +392,7 @@ async function postFinal(
             stockQty: line.stockQty,
             fallbackCost: line.fallbackCost,
             productName: line.name,
+            allowNegative: allowOversell,
           });
     cogs = round2(cogs + lineCogs);
     await tx.saleItem.update({
@@ -554,6 +576,18 @@ async function createInvoice(
   const { tenders, amountPaid, amountDue } = isDraft
     ? { tenders: [], amountPaid: 0, amountDue: 0 }
     : resolveTenders(payments, totals.total);
+
+  // "Is pay term required?" — a posted sale carrying a balance must say when
+  // it falls due. The bulk import is exempt: historical rows predate the rule.
+  if (!isDraft && amountDue > 0.001 && body.pay_term == null && !body.pay_term_exempt) {
+    const bizRow2 = await tx.business.findUnique({
+      where: { id: businessId },
+      select: { settings: true },
+    });
+    if (((bizRow2 && bizRow2.settings) || {}).is_pay_term_required === true) {
+      throw bad("A pay term is required for sales with a balance due.");
+    }
+  }
 
   const sale = await tx.sale.create({
     data: {
@@ -1035,6 +1069,26 @@ async function updateInvoice(
   }
   if (wasPosted && (body.status || "completed") !== "completed") {
     throw bad("A posted sale stays Final — it cannot be demoted to a draft.");
+
+  // Same pay-term rule on EDITS: a posted document cannot shed its term while
+  // still owing money.
+  {
+    const bizRowPT = await tx.business.findUnique({
+      where: { id: businessId },
+      select: { settings: true },
+    });
+    if (((bizRowPT && bizRowPT.settings) || {}).is_pay_term_required === true) {
+      const willBeDraft = NON_POSTING.has(body.status || "completed");
+      if (!willBeDraft && body.pay_term == null) {
+        // The due amount is known only after totals; store the flag and let the
+        // totals stage below refuse. Cheap pre-pass: refuse when the sale ALREADY
+        // carries a balance and the edit clears the term.
+        if (round2(sale.amountDue) > 0.001) {
+          throw bad("A pay term is required for sales with a balance due.");
+        }
+      }
+    }
+  }
   }
 
   // Same reference checks a fresh document gets.
@@ -1283,6 +1337,18 @@ async function finalizeInvoice(
     totals.total,
   );
 
+  // "Is pay term required?" applies when a draft is finalised with a balance,
+  // exactly as it does on a sale created final.
+  if (amountDue > 0.001 && sale.payTerm == null) {
+    const bizRowPT = await tx.business.findUnique({
+      where: { id: businessId },
+      select: { settings: true },
+    });
+    if (((bizRowPT && bizRowPT.settings) || {}).is_pay_term_required === true) {
+      throw bad("A pay term is required for sales with a balance due.");
+    }
+  }
+
   // Now it becomes an invoice, so now it takes a real invoice number — from the
   // scheme, or the same INV- fallback a sale created final would get. Either
   // way the provisional DRA-/QUO-/PRO- placeholder never survives posting.
@@ -1507,6 +1573,7 @@ async function importOneSale(
       status: "completed",
       discount_type: "flat",
       discount_value: 0,
+      pay_term_exempt: true,
       // Settle to cash at post time so a paid import never posts a receivable
       // (no credit-limit check, no ledger churn) and lands as paymentMethod=cash.
       // An unpaid import leaves the whole total due, billed to the customer.

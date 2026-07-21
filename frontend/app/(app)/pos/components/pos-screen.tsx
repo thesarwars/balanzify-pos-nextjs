@@ -14,7 +14,7 @@ import { outbox } from '@/lib/use-offline-sync';
 import { money } from '@/lib/theme';
 import { CASHIER, CATEGORIES, PRODUCTS, PAYMENT_METHODS } from '@/lib/data';
 import { setNavBlock } from '@/lib/nav-guard';
-import { todayLocal } from '@/lib/business-settings';
+import { todayLocal, useBusinessSettings, getSetting } from '@/lib/business-settings';
 
 const { useState: useStateP, useMemo, useRef, useEffect: useEffectP } = React;
 
@@ -72,6 +72,17 @@ export function POS({ T, tweaks, editSaleId }: { T: any; tweaks: any; editSaleId
   const [priceGroups, setPriceGroups] = useStateP<any[]>([]);
   const [priceGroupId, setPriceGroupId] = useStateP<any>(0);
   const [discounts, setDiscounts] = useStateP<any[]>([]);
+  // Business Settings the till honours (reactive — saving settings re-renders).
+  const bset = useBusinessSettings();
+  const posDisableDiscount = bset.pos_disable_discount === true;
+  const posDisableTax = bset.pos_disable_order_tax === true;
+  const posDisableCredit = bset.pos_disable_credit_sale === true;
+  const posDisableExpress = bset.pos_disable_express_checkout === true;
+  const posDisableSplit = bset.pos_disable_multiple_pay === true;
+  const posDisableSuspend = bset.pos_disable_suspend === true;
+  const posDisableDraft = bset.pos_disable_draft === true;
+  const additionMethod = bset.sales_item_addition_method === 'new_line' ? 'new_line' : 'increase';
+  const roundingMethod = String(bset.amount_rounding_method || 'none');
   const [serviceTypes, setServiceTypes] = useStateP<any[]>([]);
   const [serviceTypeId, setServiceTypeId] = useStateP<any>('');
   const [couponCode, setCouponCode] = useStateP('');
@@ -130,10 +141,26 @@ export function POS({ T, tweaks, editSaleId }: { T: any; tweaks: any; editSaleId
       if (s.type !== 'pos') { setPostErr('That sale is not a till sale — edit it from the Sales list.'); return; }
       if (s.status !== 'completed') { setPostErr(`That sale is ${s.status} — it cannot be edited.`); return; }
       const items = Array.isArray(s.items) ? s.items : [];
-      setCart(items.map((it: any) => {
-        const varName = it.variant && it.variant.attributes ? Object.values(it.variant.attributes).join(' / ') : null;
-        return { key: varName ? it.productId + '::' + varName : it.productId, id: it.productId, varName, qty: Number(it.quantity) || 1 };
-      }));
+      // Reload keys must stay unique even when the sale was rung in new-line
+      // mode (same product on several rows) — suffix by index; in increase
+      // mode, merge duplicates so keys stay canonical for future adds.
+      setCart(() => {
+        const mapped = items.map((it: any, i: number) => {
+          const varName = it.variant && it.variant.attributes ? Object.values(it.variant.attributes).join(' / ') : null;
+          const base = varName ? it.productId + '::' + varName : it.productId;
+          return { base, i, id: it.productId, varName, qty: Number(it.quantity) || 1 };
+        });
+        if (additionMethod === 'new_line') {
+          return mapped.map((m: any) => ({ key: m.base + '::r' + m.i, id: m.id, varName: m.varName, qty: m.qty }));
+        }
+        const merged = new Map<string, any>();
+        for (const m of mapped) {
+          const ex = merged.get(m.base);
+          if (ex) ex.qty += m.qty;
+          else merged.set(m.base, { key: m.base, id: m.id, varName: m.varName, qty: m.qty });
+        }
+        return [...merged.values()];
+      });
       editCustRef.current = s.customerId || null;
       setEditing({ id: s.id, number: s.saleNumber || '', voided: false });
     }).catch((e: any) => setPostErr(e.message || 'Could not load that sale.'));
@@ -196,7 +223,9 @@ export function POS({ T, tweaks, editSaleId }: { T: any; tweaks: any; editSaleId
     return { key: c.key, id: c.id, varName: c.varName, name: p.name + (c.varName ? ` · ${c.varName}` : ''), sw: p.sw, img: p.img, unit: p.unit, type: p.type, price: priceOf(p, c.varName), stock: stockOf(p, c.varName), qty: c.qty, brand_id: p.brand_id, cat: p.cat };
   });
   const subtotal = lines.reduce((s: number, l: any) => s + l.price * l.qty, 0);
-  const taxRate = 0.05;
+  // Order tax comes from Business Settings → Sale → Default Sale Tax
+  // (was a hardcoded 5%). "Disable order tax" zeroes it outright.
+  const taxRate = posDisableTax ? 0 : Number(getSetting('default_sale_tax_rate', 0)) || 0;
   const tax = subtotal * taxRate;
 
   // ── Auto-apply matching discount rules (by brand / category / location, in
@@ -225,7 +254,12 @@ export function POS({ T, tweaks, editSaleId }: { T: any; tweaks: any; editSaleId
   const redeemPts = canRedeem && redeem ? Math.min(custPoints, rw.max_redeem_point) : 0;
   const redeemDiscount = Math.min(subtotal, +(redeemPts * (rw ? rw.redeem_amount_per_point : 0)).toFixed(2));
   const pointsEarned = rw && subtotal >= rw.min_order_total_earn ? Math.min(rw.max_points_per_order || Infinity, Math.floor(subtotal / rw.amount_per_unit_point)) : 0;
-  const discount = +(redeemDiscount + autoDiscount).toFixed(2);
+  // Default Sale Discount (%) applies to every till sale on top of rules;
+  // "Disable Discount" suppresses both.
+  const settingDiscount = posDisableDiscount ? 0
+    : +(subtotal * (Number(getSetting('default_sale_discount', 0)) || 0) / 100).toFixed(2);
+  const discount = posDisableDiscount ? +redeemDiscount.toFixed(2)
+    : +(redeemDiscount + autoDiscount + settingDiscount).toFixed(2);
   // coupon — discount recomputed against the live subtotal so it stays correct as
   // the cart changes; min-purchase re-checked client-side (backend re-checks too).
   const couponOk = !!(coupon && subtotal >= Number(coupon.min_purchase || 0));
@@ -234,7 +268,16 @@ export function POS({ T, tweaks, editSaleId }: { T: any; tweaks: any; editSaleId
     : Math.min(Number(coupon.applied || 0), subtotal);
   const svcType = serviceTypes.find((s: any) => String(s.id) === String(serviceTypeId)) || null;
   const packing = svcType ? (svcType.packing_charge_type === 'percentage' ? Math.round(subtotal * svcType.packing_charge) / 100 : svcType.packing_charge) : 0;
-  const total = +Math.max(0, subtotal + tax - discount - couponDiscount + packing).toFixed(2);
+  const preRoundTotal = +Math.max(0, subtotal + tax - discount - couponDiscount + packing).toFixed(2);
+  // Amount rounding (Business Settings → Sale): round DOWN to the step; the
+  // difference rides along as extra discount so the server's books agree.
+  const roundStep = roundingMethod === 'whole' ? 1 : ['0.05', '0.1', '0.5'].includes(roundingMethod) ? Number(roundingMethod) : 0;
+  // Integer-cent math: 4.60/0.05 is 91.999… in floats, which would floor an
+  // exactly-on-step total down a whole step.
+  const total = roundStep > 0
+    ? +((Math.floor(Math.round(preRoundTotal * 100) / Math.round(roundStep * 100)) * Math.round(roundStep * 100)) / 100).toFixed(2)
+    : preRoundTotal;
+  const roundingAdj = +(preRoundTotal - total).toFixed(2);
   const count = cart.reduce((s: number, c: any) => s + c.qty, 0);
   // warn before leaving/refreshing if there's an unsaved order in the cart
   useEffectP(() => {
@@ -252,14 +295,51 @@ export function POS({ T, tweaks, editSaleId }: { T: any; tweaks: any; editSaleId
     return () => setNavBlock(false);
   }, [cart.length]);
 
+  // Configurable keyboard shortcuts (Business Settings → POS). Combos like
+  // 'shift+p' / 'f2'; ignored while typing in an input.
+  useEffectP(() => {
+    const combos = (getSetting('pos_shortcuts', {}) || {}) as Record<string, string>;
+    if (!Object.values(combos).some(Boolean)) return;
+    const ALIAS: Record<string, string> = { esc: 'escape', space: ' ', return: 'enter', del: 'delete', ins: 'insert' };
+    const match = (e: KeyboardEvent, combo?: string) => {
+      if (!combo) return false;
+      const parts = combo.split('+').map((x) => x.trim()).filter(Boolean);
+      const raw = parts.filter((x) => !['shift', 'ctrl', 'alt'].includes(x)).pop();
+      if (!raw) return false;
+      const key = ALIAS[raw] || raw;
+      return e.key.toLowerCase() === key
+        && e.shiftKey === parts.includes('shift')
+        && e.ctrlKey === parts.includes('ctrl')
+        && e.altKey === parts.includes('alt');
+    };
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement;
+      if (t && ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName)) return;
+      // Never while a sale is posting or the success overlay is up — a stray
+      // keystroke must not ring the order twice.
+      if (posting || charged) return;
+      if (match(e, combos.pay_checkout)) { e.preventDefault(); openPay(); }
+      else if (match(e, combos.express_checkout) && !posDisableExpress) { e.preventDefault(); expressCheckout(); }
+      else if (match(e, combos.draft) && !posDisableDraft) { e.preventDefault(); if (lines.length) park('draft'); }
+      else if (match(e, combos.cancel)) { e.preventDefault(); clear(); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
+
   function add(p: any, varName?: any) {
     if (p.not_for_selling) return;
     if (p.type === 'variable' && p.variations && p.variations.length && !varName) { setVarPick(p); return; }
     setCharged(null);
-    const key = varName ? p.id + '::' + varName : p.id;
+    // "Sales Item Addition Method": bump the existing line, or always add a
+    // fresh row (keys get a nonce so two rows of one product can coexist).
+    const base = varName ? p.id + '::' + varName : p.id;
+    const key = additionMethod === 'new_line' ? base + '::' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6) : base;
     setCart((prev: any[]) => {
-      const ex = prev.find((c: any) => c.key === key);
-      if (ex) return prev.map((c: any) => c.key === key ? { ...c, qty: c.qty + 1 } : c);
+      if (additionMethod !== 'new_line') {
+        const ex = prev.find((c: any) => c.key === key);
+        if (ex) return prev.map((c: any) => c.key === key ? { ...c, qty: c.qty + 1 } : c);
+      }
       return [...prev, { key, id: p.id, varName: varName || null, qty: 1 }];
     });
   }
@@ -334,7 +414,7 @@ export function POS({ T, tweaks, editSaleId }: { T: any; tweaks: any; editSaleId
     }
     const salePayload: any = {
       location_id: (register && register.location_id) || posLoc || 1, shift_id: register ? register.id : undefined, contact_id: customer ? customer.id : 1, customer_name: customer ? customer.name : 'Walk-in',
-      method: payments[0] ? payments[0].method : 'cash', amount: total, discount_amount: discount, discount_type: 'fixed', tax_amount: tax,
+      method: payments[0] ? payments[0].method : 'cash', amount: total, discount_amount: +(discount + roundingAdj).toFixed(2), discount_type: 'fixed', tax_amount: tax,
       redeem_points: redeemPts,
       coupon_id: couponOk && couponDiscount > 0 ? coupon.id : undefined,
       coupon_discount: couponOk && couponDiscount > 0 ? couponDiscount : undefined,
@@ -530,8 +610,8 @@ export function POS({ T, tweaks, editSaleId }: { T: any; tweaks: any; editSaleId
         <div style={{ fontSize: 11.5, color: D.sub, marginTop: 2 }}>{count} {count === 1 ? 'item' : 'items'} · {customer ? customer.name : 'Walk-in customer'}{group && group.amount ? ` · ${group.name}` : ''}</div>
       </div>
       <div style={{ display: 'flex', gap: 6 }}>
-        <button title="Hold / suspend order" onClick={() => park('suspended')} style={iconBtn(D, T)}>⏸</button>
-        <button title="Save as draft" onClick={() => park('draft')} style={iconBtn(D, T)}>⎙</button>
+        {!posDisableSuspend && <button title="Hold / suspend order" onClick={() => park('suspended')} style={iconBtn(D, T)}>⏸</button>}
+        {!posDisableDraft && <button title="Save as draft" onClick={() => park('draft')} style={iconBtn(D, T)}>⎙</button>}
         <button title="Save as quotation" onClick={() => park('quotation')} style={iconBtn(D, T)}>❝</button>
         <button title="Clear order" onClick={clear} style={iconBtn(D, T)}>🗑</button>
       </div>
@@ -566,7 +646,7 @@ export function POS({ T, tweaks, editSaleId }: { T: any; tweaks: any; editSaleId
 
   const TotalsBlock = (
     <div style={{ padding: '14px 20px 16px', borderTop: `1px solid ${D.cartLine}`, background: dark ? '#0A1320' : T.paperAlt }}>
-      {[['Subtotal', subtotal], ['Tax (5%)', tax]].map(([k, v]: any) => (
+      {[['Subtotal', subtotal], [taxRate > 0 ? `Tax (${+(taxRate * 100).toFixed(2)}%)` : 'Tax', tax], ...(settingDiscount > 0 ? [['Discount', -settingDiscount]] : []), ...(roundingAdj > 0 ? [['Rounding', -roundingAdj]] : [])].map(([k, v]: any) => (
         <div key={k} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, color: D.sub, marginBottom: 6 }}>
           <span>{k}</span><span style={{ fontFamily: T.fMono, color: D.ink }}>{money(v)}</span>
         </div>
@@ -590,7 +670,7 @@ export function POS({ T, tweaks, editSaleId }: { T: any; tweaks: any; editSaleId
           <span>Points redeemed ({redeemPts})</span><span style={{ fontFamily: T.fMono }}>−{money(redeemDiscount)}</span>
         </div>
       )}
-      {autoDiscount > 0 && (
+      {autoDiscount > 0 && !posDisableDiscount && (
         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, color: T.green, marginBottom: 6 }}>
           <span>Discount{autoDiscountName ? ` (${autoDiscountName})` : ''}</span><span style={{ fontFamily: T.fMono }}>−{money(autoDiscount)}</span>
         </div>
@@ -750,7 +830,7 @@ export function POS({ T, tweaks, editSaleId }: { T: any; tweaks: any; editSaleId
             </div>
             {/* mode tabs */}
             <div style={{ display: 'flex', gap: 4, padding: '12px 20px 0' }}>
-              {[['quick', 'Quick pay'], ['split', 'Split / Tender']].map(([m, lbl]: any) => (
+              {(posDisableSplit ? [['quick', 'Quick pay']] : [['quick', 'Quick pay'], ['split', 'Split / Tender']]).map(([m, lbl]: any) => (
                 <button key={m} onClick={() => { setPayMode(m); if (m === 'split' && !tenders.length) setTenders([{ method: 'cash', amount: total.toFixed(2) }]); }} style={{ flex: 1, padding: '8px', borderRadius: 8, border: `1px solid ${payMode === m ? T.accent.base : T.line}`, background: payMode === m ? T.accent.soft : T.paper, color: payMode === m ? T.accent.text : T.inkMid, fontFamily: T.fBody, fontSize: 12.5, fontWeight: 700, cursor: 'pointer' }}>{lbl}</button>
               ))}
             </div>
@@ -793,10 +873,12 @@ export function POS({ T, tweaks, editSaleId }: { T: any; tweaks: any; editSaleId
               )}
 
               {/* credit + express row */}
+              {(!posDisableCredit || !posDisableExpress) && (
               <div style={{ display: 'flex', gap: 8, marginTop: 14, opacity: posting ? 0.5 : 1, pointerEvents: posting ? 'none' : 'auto' } as React.CSSProperties}>
-                <Btn T={T} kind="ghost" style={{ flex: 1 }} onClick={creditSale} disabled={!customer}>◈ Credit sale</Btn>
-                <Btn T={T} kind="ghost" style={{ flex: 1 }} onClick={() => finalize([{ method: 'cash', amount: total }], 'cash')}>⚡ Express cash</Btn>
+                {!posDisableCredit && <Btn T={T} kind="ghost" style={{ flex: 1 }} onClick={creditSale} disabled={!customer}>◈ Credit sale</Btn>}
+                {!posDisableExpress && <Btn T={T} kind="ghost" style={{ flex: 1 }} onClick={() => finalize([{ method: 'cash', amount: total }], 'cash')}>⚡ Express cash</Btn>}
               </div>
+              )}
               {payMode === 'quick' && !customer && <div style={{ fontSize: 11, color: T.inkMute, marginTop: 8, textAlign: 'center' } as React.CSSProperties}>Credit sale needs a customer — pick one from the till.</div>}
 
               {postErr && (

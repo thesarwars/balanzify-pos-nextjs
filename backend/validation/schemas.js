@@ -264,7 +264,8 @@ const SupplierSchema = z.object({
   city: optStr(100),
   address: optStr(500),
   payment_terms: nonNegInt.default(0),
-  credit_limit: money.default(0),
+  // Blank stays blank so the route can inherit Business Settings' default.
+  credit_limit: z.preprocess((v) => (v === '' || v == null ? undefined : v), money.optional()),
   currency: z.string().length(3).default('USD'),
   rating: z.coerce.number().int().min(0).max(5).default(0),
   is_blacklisted: z.boolean().default(false),
@@ -560,6 +561,51 @@ const BusinessSettingsBag = z.object({
   enable_price_tax: z.boolean(),
   product_image_required: z.boolean(),
   default_unit_id: z.string().uuid().nullable(),
+  // ── Contact ────────────────────────────────────────────────────────────────
+  default_credit_limit: z.coerce.number().min(0).max(999999999).nullable(),
+  // ── Sale ───────────────────────────────────────────────────────────────────
+  default_sale_discount: z.coerce.number().min(0).max(100),
+  default_sale_tax: z.string().uuid().nullable(),            // tax rate id
+  default_sale_tax_rate: z.coerce.number().min(0).max(1),    // its fraction, denormalised for the till
+  sales_item_addition_method: z.enum(['increase', 'new_line']),
+  amount_rounding_method: z.enum(['none', 'whole', '0.05', '0.1', '0.5']),
+  sales_price_is_minimum: z.boolean(),
+  allow_overselling: z.boolean(),
+  enable_sales_order: z.boolean(),
+  is_pay_term_required: z.boolean(),
+  sales_commission_agent: z.enum(['disable', 'logged_in', 'select']),
+  commission_calculation_type: z.enum(['invoice_value', 'payment_received']),
+  is_commission_agent_required: z.boolean(),
+  enable_payment_link: z.boolean(),
+  // PUBLIC identifiers only. Processor SECRET keys must never enter this bag:
+  // GET /settings returns it to every authenticated user and the frontend
+  // persists it in localStorage.
+  razorpay_key_id: optStr(120),
+  stripe_public_key: optStr(120),
+  // ── POS ────────────────────────────────────────────────────────────────────
+  pos_shortcuts: z.record(z.string().max(40), z.string().max(40)).nullable(),
+  pos_disable_multiple_pay: z.boolean(),
+  pos_disable_draft: z.boolean(),
+  pos_disable_express_checkout: z.boolean(),
+  pos_hide_product_suggestion: z.boolean(),
+  pos_hide_recent_transactions: z.boolean(),
+  pos_disable_discount: z.boolean(),
+  pos_disable_order_tax: z.boolean(),
+  pos_subtotal_editable: z.boolean(),
+  pos_disable_suspend: z.boolean(),
+  pos_enable_transaction_date: z.boolean(),
+  pos_service_staff_required: z.boolean(),
+  pos_enable_service_staff_in_line: z.boolean(),
+  pos_disable_credit_sale: z.boolean(),
+  pos_enable_weighing_scale: z.boolean(),
+  pos_show_invoice_scheme: z.boolean(),
+  pos_show_invoice_layout: z.boolean(),
+  pos_print_on_suspend: z.boolean(),
+  pos_show_pricing_tooltip: z.boolean(),
+  scale_prefix: optStr(10),
+  scale_sku_length: z.coerce.number().int().min(1).max(10),
+  scale_qty_int_length: z.coerce.number().int().min(1).max(6),
+  scale_qty_frac_length: z.coerce.number().int().min(0).max(4),
 }).partial();
 
 const SettingsSchema = z.object({

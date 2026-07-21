@@ -30,9 +30,36 @@ const DEFAULTS: any = {
   tax1_name: '', tax2_name: '', tax2_number: '',
   sku_prefix: '', enable_brands: true, enable_categories: true, enable_price_tax: true,
   product_image_required: false, default_unit_id: null,
+  // Contact
+  default_credit_limit: '',
+  // Sale
+  default_sale_discount: 0, default_sale_tax: '', default_sale_tax_rate: 0,
+  sales_item_addition_method: 'increase', amount_rounding_method: 'none',
+  sales_price_is_minimum: false, allow_overselling: false, enable_sales_order: false,
+  is_pay_term_required: false,
+  sales_commission_agent: 'disable', commission_calculation_type: 'invoice_value', is_commission_agent_required: false,
+  enable_payment_link: false, razorpay_key_id: '', stripe_public_key: '',
+  // POS
+  pos_shortcuts: {},
+  pos_disable_multiple_pay: false, pos_disable_draft: false, pos_disable_express_checkout: false,
+  pos_hide_product_suggestion: false, pos_hide_recent_transactions: false, pos_disable_discount: false,
+  pos_disable_order_tax: false, pos_subtotal_editable: false, pos_disable_suspend: false,
+  pos_enable_transaction_date: false, pos_service_staff_required: false, pos_enable_service_staff_in_line: false,
+  pos_disable_credit_sale: false, pos_enable_weighing_scale: false,
+  pos_show_invoice_scheme: false, pos_show_invoice_layout: false, pos_print_on_suspend: false, pos_show_pricing_tooltip: false,
+  scale_prefix: '', scale_sku_length: 5, scale_qty_int_length: 4, scale_qty_frac_length: 3,
 };
 
-const TABS = [['business', 'Business'], ['tax', 'Tax'], ['product', 'Product']];
+// The POS keyboard map — labels mirror the reference; empty = no shortcut.
+const SHORTCUTS: [string, string][] = [
+  ['express_checkout', 'Express Checkout'], ['pay_checkout', 'Pay & Checkout'],
+  ['draft', 'Draft'], ['cancel', 'Cancel'], ['go_qty', 'Go to product quantity'],
+  ['weighing_scale', 'Weighing Scale'], ['edit_discount', 'Edit Discount'],
+  ['edit_order_tax', 'Edit Order Tax'], ['add_payment_row', 'Add Payment Row'],
+  ['finalize_payment', 'Finalize Payment'], ['add_new_product', 'Add new product'],
+];
+
+const TABS = [['business', 'Business'], ['tax', 'Tax'], ['product', 'Product'], ['contact', 'Contact'], ['sale', 'Sale'], ['pos', 'POS']];
 
 export function BusinessSettings({ T }: { T: any }) {
   const [tab, setTab] = useState('business');
@@ -41,6 +68,7 @@ export function BusinessSettings({ T }: { T: any }) {
   const [taxNumber, setTaxNumber] = useState('');
   const [s, setS] = useState<any>(DEFAULTS);
   const [units, setUnits] = useState<any[]>([]);
+  const [taxRates, setTaxRates] = useState<any[]>([]);
   const [unitsErr, setUnitsErr] = useState('');
   const [logoUrl, setLogoUrl] = useState('');
   const [logoBusy, setLogoBusy] = useState(false);
@@ -78,6 +106,7 @@ export function BusinessSettings({ T }: { T: any }) {
     API.unit.list()
       .then((us: any) => setUnits(Array.isArray(us) ? us : []))
       .catch((e: any) => setUnitsErr(e?.message || 'Could not load units.'));
+    API.taxRate.list().then((ts: any[]) => setTaxRates(ts.filter((t: any) => t.id !== 0))).catch(() => {});
   }, []);
 
   // These bounds mirror BusinessSettingsBag on the backend. A 422 rejects the
@@ -132,6 +161,42 @@ export function BusinessSettings({ T }: { T: any }) {
           enable_brands: !!s.enable_brands, enable_categories: !!s.enable_categories,
           enable_price_tax: !!s.enable_price_tax, product_image_required: !!s.product_image_required,
           default_unit_id: s.default_unit_id || null,
+          // Contact
+          default_credit_limit: s.default_credit_limit === '' || s.default_credit_limit == null ? null : Number(s.default_credit_limit),
+          // Sale
+          default_sale_discount: Number(s.default_sale_discount) || 0,
+          default_sale_tax: s.default_sale_tax || null,
+          default_sale_tax_rate: Number(s.default_sale_tax_rate) || 0,
+          sales_item_addition_method: s.sales_item_addition_method,
+          amount_rounding_method: s.amount_rounding_method,
+          sales_price_is_minimum: !!s.sales_price_is_minimum,
+          allow_overselling: !!s.allow_overselling,
+          enable_sales_order: !!s.enable_sales_order,
+          is_pay_term_required: !!s.is_pay_term_required,
+          sales_commission_agent: s.sales_commission_agent,
+          commission_calculation_type: s.commission_calculation_type,
+          is_commission_agent_required: !!s.is_commission_agent_required,
+          enable_payment_link: !!s.enable_payment_link,
+          razorpay_key_id: s.razorpay_key_id || null,
+          stripe_public_key: s.stripe_public_key || null,
+          // POS
+          pos_shortcuts: s.pos_shortcuts && Object.keys(s.pos_shortcuts).length ? s.pos_shortcuts : null,
+          pos_disable_multiple_pay: !!s.pos_disable_multiple_pay, pos_disable_draft: !!s.pos_disable_draft,
+          pos_disable_express_checkout: !!s.pos_disable_express_checkout,
+          pos_hide_product_suggestion: !!s.pos_hide_product_suggestion,
+          pos_hide_recent_transactions: !!s.pos_hide_recent_transactions,
+          pos_disable_discount: !!s.pos_disable_discount, pos_disable_order_tax: !!s.pos_disable_order_tax,
+          pos_subtotal_editable: !!s.pos_subtotal_editable, pos_disable_suspend: !!s.pos_disable_suspend,
+          pos_enable_transaction_date: !!s.pos_enable_transaction_date,
+          pos_service_staff_required: !!s.pos_service_staff_required,
+          pos_enable_service_staff_in_line: !!s.pos_enable_service_staff_in_line,
+          pos_disable_credit_sale: !!s.pos_disable_credit_sale, pos_enable_weighing_scale: !!s.pos_enable_weighing_scale,
+          pos_show_invoice_scheme: !!s.pos_show_invoice_scheme, pos_show_invoice_layout: !!s.pos_show_invoice_layout,
+          pos_print_on_suspend: !!s.pos_print_on_suspend, pos_show_pricing_tooltip: !!s.pos_show_pricing_tooltip,
+          scale_prefix: s.scale_prefix || null,
+          scale_sku_length: Number(s.scale_sku_length) || 5,
+          scale_qty_int_length: Number(s.scale_qty_int_length) || 4,
+          scale_qty_frac_length: Number(s.scale_qty_frac_length) ?? 3,
         },
       });
       // Let AppShell re-read the bag so money/date formatting updates immediately.
@@ -225,6 +290,114 @@ export function BusinessSettings({ T }: { T: any }) {
                       <Check T={T} label="Enable price & tax info" hint="Show the tax fields on the product form" checked={s.enable_price_tax} onChange={(v: any) => set('enable_price_tax', v)} />
                       <Check T={T} label="Is product image required?" hint="Block saving a product without an image" checked={s.product_image_required} onChange={(v: any) => set('product_image_required', v)} />
                     </div>
+                  </div>
+                )}
+
+                {tab === 'contact' && (
+                  <FormGrid cols={2}>
+                    <Field T={T} label="Default credit limit" hint="Applied to new customers that don't set their own. Blank = no limit.">
+                      <TextField T={T} type="number" value={String(s.default_credit_limit ?? '')} onChange={(v: any) => set('default_credit_limit', v)} placeholder="Default credit limit" />
+                    </Field>
+                  </FormGrid>
+                )}
+
+                {tab === 'sale' && (
+                  <div>
+                    <FormGrid cols={3}>
+                      <Field T={T} label="Default Sale Discount (%) *" hint="Starting discount on every till sale">
+                        <TextField T={T} type="number" value={String(s.default_sale_discount)} onChange={(v: any) => set('default_sale_discount', v)} placeholder="0" />
+                      </Field>
+                      <Field T={T} label="Default Sale Tax" hint="Order tax the till and Add Sale start with">
+                        <SelectField T={T} value={s.default_sale_tax || ''} options={['', ...taxRates.map((t: any) => String(t.id))]}
+                          onChange={(v: any) => { const t = taxRates.find((x: any) => String(x.id) === v); set('default_sale_tax', v || ''); set('default_sale_tax_rate', t ? Number(t.amount || 0) / 100 : 0); }}
+                          render={(v: any) => v === '' ? 'None' : (taxRates.find((t: any) => String(t.id) === v) || {}).name || v} />
+                      </Field>
+                      <Field T={T} label="Sales Item Addition Method">
+                        <SelectField T={T} value={s.sales_item_addition_method} options={['increase', 'new_line']}
+                          onChange={(v: any) => set('sales_item_addition_method', v)}
+                          render={(v: any) => v === 'increase' ? 'Increase item quantity if it already exists' : 'Add item in new row'} />
+                      </Field>
+                      <Field T={T} label="Amount rounding method" hint="Applied to the till total (rounds down, taken as discount)">
+                        <SelectField T={T} value={s.amount_rounding_method} options={['none', 'whole', '0.05', '0.1', '0.5']}
+                          onChange={(v: any) => set('amount_rounding_method', v)}
+                          render={(v: any) => v === 'none' ? 'None' : v === 'whole' ? 'Round to whole number' : `Round to multiple of ${v}`} />
+                      </Field>
+                    </FormGrid>
+                    <div style={{ marginTop: 14, display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '4px 18px' }}>
+                      <Check T={T} label="Sales price is minimum selling price" hint="Overrides may only raise the price, never undercut it" checked={s.sales_price_is_minimum} onChange={(v: any) => set('sales_price_is_minimum', v)} />
+                      <Check T={T} label="Allow Overselling" hint="Sell past zero — stock may go negative" checked={s.allow_overselling} onChange={(v: any) => set('allow_overselling', v)} />
+                      <Check T={T} label="Enable Sales Order" checked={s.enable_sales_order} onChange={(v: any) => set('enable_sales_order', v)} />
+                      <Check T={T} label="Is pay term required?" hint="Credit sales must state when they fall due" checked={s.is_pay_term_required} onChange={(v: any) => set('is_pay_term_required', v)} />
+                    </div>
+                    <div style={{ margin: '18px 0 8px', fontSize: 13.5, fontWeight: 700, color: T.ink }}>Commission Agent</div>
+                    <FormGrid cols={3}>
+                      <Field T={T} label="Sales Commission Agent">
+                        <SelectField T={T} value={s.sales_commission_agent} options={['disable', 'logged_in', 'select']}
+                          onChange={(v: any) => set('sales_commission_agent', v)}
+                          render={(v: any) => v === 'disable' ? 'Disable' : v === 'logged_in' ? 'Logged in user' : 'Select from list'} />
+                      </Field>
+                      <Field T={T} label="Commission Calculation Type">
+                        <SelectField T={T} value={s.commission_calculation_type} options={['invoice_value', 'payment_received']}
+                          onChange={(v: any) => set('commission_calculation_type', v)}
+                          render={(v: any) => v === 'invoice_value' ? 'Invoice value' : 'Payment received'} />
+                      </Field>
+                    </FormGrid>
+                    <Check T={T} label="Is commission agent required?" checked={s.is_commission_agent_required} onChange={(v: any) => set('is_commission_agent_required', v)} />
+                    <div style={{ margin: '18px 0 8px', fontSize: 13.5, fontWeight: 700, color: T.ink }}>Payment Link</div>
+                    <Check T={T} label="Enable payment link" checked={s.enable_payment_link} onChange={(v: any) => set('enable_payment_link', v)} />
+                    <FormGrid cols={2} style={{ marginTop: 10 }}>
+                      <Field T={T} label="Razorpay Key ID" hint="Secret keys are configured on the server, never in the browser"><TextField T={T} value={s.razorpay_key_id || ''} onChange={(v: any) => set('razorpay_key_id', v)} /></Field>
+                      <Field T={T} label="Stripe public key" hint="Secret keys are configured on the server, never in the browser"><TextField T={T} value={s.stripe_public_key || ''} onChange={(v: any) => set('stripe_public_key', v)} /></Field>
+                    </FormGrid>
+                  </div>
+                )}
+
+                {tab === 'pos' && (
+                  <div>
+                    <div style={{ marginBottom: 6, fontSize: 13.5, fontWeight: 700, color: T.ink }}>Add keyboard shortcuts</div>
+                    <div style={{ fontSize: 12, color: T.inkSub, marginBottom: 12 }}>
+                      Keys separated by '+' — example: <b>shift+p</b>, <b>f2</b>. Available: shift, ctrl, alt, enter, esc, space, f1–f12, letters and digits.
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '6px 22px' }}>
+                      {SHORTCUTS.map(([key, label]) => (
+                        <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <span style={{ flex: 1, fontSize: 12.5, color: T.inkMid, fontWeight: 600 }}>{label}:</span>
+                          <div style={{ width: 150 }}>
+                            <TextField T={T} value={(s.pos_shortcuts || {})[key] || ''} placeholder="e.g. shift+p"
+                              onChange={(v: any) => set('pos_shortcuts', { ...(s.pos_shortcuts || {}), [key]: v.toLowerCase().replace(/\s+/g, '') })} />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{ margin: '20px 0 8px', fontSize: 13.5, fontWeight: 700, color: T.ink }}>POS settings</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '2px 18px' }}>
+                      <Check T={T} label="Disable Multiple Pay" hint="Hide the Split / Tender tab" checked={s.pos_disable_multiple_pay} onChange={(v: any) => set('pos_disable_multiple_pay', v)} />
+                      <Check T={T} label="Disable Draft" checked={s.pos_disable_draft} onChange={(v: any) => set('pos_disable_draft', v)} />
+                      <Check T={T} label="Disable Express Checkout" checked={s.pos_disable_express_checkout} onChange={(v: any) => set('pos_disable_express_checkout', v)} />
+                      <Check T={T} label="Don't show product suggestion" checked={s.pos_hide_product_suggestion} onChange={(v: any) => set('pos_hide_product_suggestion', v)} />
+                      <Check T={T} label="Don't show recent transactions" checked={s.pos_hide_recent_transactions} onChange={(v: any) => set('pos_hide_recent_transactions', v)} />
+                      <Check T={T} label="Disable Discount" hint="No default or rule discounts at the till" checked={s.pos_disable_discount} onChange={(v: any) => set('pos_disable_discount', v)} />
+                      <Check T={T} label="Disable order tax" checked={s.pos_disable_order_tax} onChange={(v: any) => set('pos_disable_order_tax', v)} />
+                      <Check T={T} label="Subtotal Editable" checked={s.pos_subtotal_editable} onChange={(v: any) => set('pos_subtotal_editable', v)} />
+                      <Check T={T} label="Disable Suspend Sale" hint="Hide the hold / park button" checked={s.pos_disable_suspend} onChange={(v: any) => set('pos_disable_suspend', v)} />
+                      <Check T={T} label="Enable transaction date on POS screen" checked={s.pos_enable_transaction_date} onChange={(v: any) => set('pos_enable_transaction_date', v)} />
+                      <Check T={T} label="Is service staff required" checked={s.pos_service_staff_required} onChange={(v: any) => set('pos_service_staff_required', v)} />
+                      <Check T={T} label="Enable service staff in product line" checked={s.pos_enable_service_staff_in_line} onChange={(v: any) => set('pos_enable_service_staff_in_line', v)} />
+                      <Check T={T} label="Disable credit sale button" checked={s.pos_disable_credit_sale} onChange={(v: any) => set('pos_disable_credit_sale', v)} />
+                      <Check T={T} label="Enable Weighing Scale" checked={s.pos_enable_weighing_scale} onChange={(v: any) => set('pos_enable_weighing_scale', v)} />
+                      <Check T={T} label="Show invoice scheme" checked={s.pos_show_invoice_scheme} onChange={(v: any) => set('pos_show_invoice_scheme', v)} />
+                      <Check T={T} label="Show invoice layout dropdown" checked={s.pos_show_invoice_layout} onChange={(v: any) => set('pos_show_invoice_layout', v)} />
+                      <Check T={T} label="Print invoice on suspend" checked={s.pos_print_on_suspend} onChange={(v: any) => set('pos_print_on_suspend', v)} />
+                      <Check T={T} label="Show pricing on product suggestion tooltip" checked={s.pos_show_pricing_tooltip} onChange={(v: any) => set('pos_show_pricing_tooltip', v)} />
+                    </div>
+                    <div style={{ margin: '20px 0 4px', fontSize: 13.5, fontWeight: 700, color: T.ink }}>Weighing Scale barcode Setting</div>
+                    <div style={{ fontSize: 12, color: T.inkSub, marginBottom: 10 }}>Configure the barcode as per your weighing scale.</div>
+                    <FormGrid cols={4}>
+                      <Field T={T} label="Prefix"><TextField T={T} value={s.scale_prefix || ''} onChange={(v: any) => set('scale_prefix', v)} /></Field>
+                      <Field T={T} label="Product sku length"><SelectField T={T} value={String(s.scale_sku_length)} options={['3','4','5','6','7','8']} onChange={(v: any) => set('scale_sku_length', v)} render={(v: any) => v} /></Field>
+                      <Field T={T} label="Quantity integer part length"><SelectField T={T} value={String(s.scale_qty_int_length)} options={['1','2','3','4','5']} onChange={(v: any) => set('scale_qty_int_length', v)} render={(v: any) => v} /></Field>
+                      <Field T={T} label="Quantity fractional part length"><SelectField T={T} value={String(s.scale_qty_frac_length)} options={['0','1','2','3','4']} onChange={(v: any) => set('scale_qty_frac_length', v)} render={(v: any) => v} /></Field>
+                    </FormGrid>
                   </div>
                 )}
 
