@@ -13,7 +13,7 @@ import { useLocale } from '@/lib/locale-context';
 import { navLabel } from '@/lib/i18n';
 import { isNavBlocked, setNavBlock, navBlockMessage, navBlockTitle } from '@/lib/nav-guard';
 import {
-  LuLayoutDashboard, LuMapPin, LuPackage, LuBoxes, LuClipboardCheck,
+  LuLayoutDashboard, LuMapPin, LuPackage, LuClipboardCheck,
   LuShoppingCart, LuClipboardList, LuTruck, LuReceipt, LuUsers, LuGift,
   LuTicket, LuBedDouble, LuUtensils, LuPill, LuActivity, LuWarehouse, LuHardHat,
   LuBike, LuLandmark, LuBanknote, LuCoins, LuSlidersHorizontal, LuArrowLeftRight,
@@ -47,7 +47,6 @@ export const NAV = [
           { key: 'units', activeId: '', label: 'Units', route: '/products?tool=units' },
         ]
       },
-      { id: 'stock', label: 'Stock', icon: LuBoxes },
       { id: 'stocktake', label: 'Stocktake', icon: LuClipboardCheck },
       {
         id: 'purchase-orders', label: 'Purchases', icon: LuShoppingCart, children: [
