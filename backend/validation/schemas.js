@@ -303,10 +303,17 @@ const AdjustmentSchema = z.object({
 const TransferSchema = z.object({
   from_location_id: uuid,
   to_location_id: uuid,
+  ref_no: optStr(50),
+  // Must parse — an Invalid Date would blow up inside Prisma as a 500.
+  transfer_date: optStr(40).refine((s) => !s || !Number.isNaN(Date.parse(s)), 'Invalid transfer date'),
+  // Stock leaves the source at in_transit and lands at the destination on completed.
+  status: z.enum(['pending', 'in_transit', 'completed']).optional(),
+  shipping_charges: z.coerce.number().min(0).optional(),
   notes: optStr(1000),
   items: z.array(z.object({
     product_id: uuid,
     qty: positiveInt,
+    unit_price: z.coerce.number().min(0).optional(),
   })).min(1),
 }).refine(d => d.from_location_id !== d.to_location_id, {
   message: 'From and to locations must be different',

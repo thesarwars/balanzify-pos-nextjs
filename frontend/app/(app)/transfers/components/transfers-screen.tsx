@@ -1,144 +1,125 @@
 'use client';
 // ─────────────────────────────────────────────────────────────────
-// Stock Transfer — move stock between locations (the manual's flow).
-// Status: pending → in-transit → completed; stock moves on completion,
-// and a completed transfer is locked (delete only). Wired through
-// API.transfer + API.location.
+// Stock Transfers — the reference list: Date, Reference No, From,
+// To, Status, Shipping Charges, Total Amount, Notes, Actions.
+// Status advances Pending → In Transit → Completed; stock leaves
+// the source at In Transit and lands at the destination when
+// Completed. Wired through API.transfer + API.location.
 // ─────────────────────────────────────────────────────────────────
 import React from 'react';
 import type { Theme } from '@/lib/theme';
 import { money, money0 } from '@/lib/theme';
-import { Btn, Badge, Panel, Modal, Field, TextField, SelectField, FormGrid, useToast } from '@/components/kit';
+import { Btn, Badge, Panel, Modal, TextField, useToast } from '@/components/kit';
 import { Topbar } from '@/components/shell';
 import { API } from '@/lib/api';
-import { PRODUCTS } from '@/lib/data';
-import { todayLocal } from '@/lib/business-settings';
+import { ActionsMenu } from '../../products/components/list-table';
+import { ConfirmModal } from '../../purchase-orders/components/bits';
+import { LuEye, LuPencil, LuTruck, LuBadgeCheck, LuTrash2 } from 'react-icons/lu';
 
 const { useState: useStateTr, useEffect: useEffectTr } = React;
 
-export function Transfers({ T }: { T: Theme }) {
+const TONE: any = { completed: 'green', in_transit: 'blue', pending: 'amber' };
+const LABEL: any = { completed: 'Completed', in_transit: 'In Transit', pending: 'Pending' };
+
+export function TransfersList({ T, flash, onAdd, onEdit }:
+  { T: Theme; flash?: React.MutableRefObject<string>; onAdd: () => void; onEdit: (t: any) => void }) {
   const [rows, setRows] = useStateTr<any[]>([]);
   const [loading, setLoading] = useStateTr(true);
-  const [locs, setLocs] = useStateTr<any[]>([]);
-  const [edit, setEdit] = useStateTr(false);
+  const [search, setSearch] = useStateTr('');
   const [view, setView] = useStateTr<any>(null);
   const [confirmDel, setConfirmDel] = useStateTr<any>(null);
+  const [menu, setMenu] = useStateTr<any>(null);
   const [show, node] = useToast();
 
   const reload = React.useCallback(() => { setLoading(true); API.transfer.list().then(setRows).catch(() => setRows([])).finally(() => setLoading(false)); }, []);
   useEffectTr(() => { reload(); }, [reload]);
-  useEffectTr(() => { API.location.list().then(setLocs).catch(() => {}); }, []);
+  useEffectTr(() => { if (flash?.current) { show(flash.current); flash.current = ''; } }, [flash, show]);
 
-  const tone: any = { completed: 'green', in_transit: 'blue', pending: 'amber' };
-  const label: any = { completed: 'Completed', in_transit: 'In transit', pending: 'Pending' };
-  const nextStatus: any = { pending: 'in_transit', in_transit: 'completed' };
+  const needle = search.trim().toLowerCase();
+  const visible = needle
+    ? rows.filter((t: any) => [t.ref, t.from_name, t.to_name, t.notes, LABEL[t.status]].some((v) => String(v || '').toLowerCase().includes(needle)))
+    : rows;
 
-  async function advance(t: any) {
-    try { await API.transfer.setStatus(t.id, nextStatus[t.status]); show('Status updated'); reload(); }
+  async function advance(t: any, status: string) {
+    try { await API.transfer.setStatus(t.id, status); show(`Marked ${LABEL[status]}`); reload(); }
     catch (e: any) { show(e.message); }
   }
-  async function doDelete(t: any) { try { await API.transfer.remove(t.id); setConfirmDel(null); show('Transfer deleted'); reload(); } catch (e: any) { setConfirmDel(null); show(e.message); } }
+  async function doDelete(t: any) {
+    try { await API.transfer.remove(t.id); setConfirmDel(null); show('Transfer deleted'); reload(); }
+    catch (e: any) { setConfirmDel(null); show(e.message); }
+  }
+
+  const th: React.CSSProperties = { textAlign: 'left', padding: '11px 16px', fontSize: 10, fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', color: T.inkSub, background: T.paperAlt, borderBottom: `1px solid ${T.line}`, whiteSpace: 'nowrap' };
+  const td: React.CSSProperties = { padding: '12px 16px', borderBottom: `1px solid ${T.line}`, fontSize: 12.5, color: T.ink, whiteSpace: 'nowrap' };
+
+  const actionsFor = (t: any) => [
+    { label: 'View', icon: <LuEye size={14} />, on: () => setView(t) },
+    { label: 'Edit', icon: <LuPencil size={14} />, on: () => onEdit(t) },
+    ...(t.status === 'pending' ? [{ label: 'Mark In Transit', icon: <LuTruck size={14} />, on: () => advance(t, 'in_transit') }] : []),
+    ...(t.status !== 'completed' ? [{ label: 'Mark Completed', icon: <LuBadgeCheck size={14} />, on: () => advance(t, 'completed') }] : []),
+    { sep: true },
+    { label: 'Delete', icon: <LuTrash2 size={14} />, danger: true, on: () => setConfirmDel(t) },
+  ];
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: T.paperAlt }}>
       <Topbar T={T} title="Stock Transfers" subtitle={`${rows.length} transfers`}
-        right={<Btn T={T} kind="accent" onClick={() => setEdit(true)}>+ New Transfer</Btn>} />
+        right={<Btn T={T} kind="accent" onClick={onAdd}>+ Add</Btn>} />
       <div style={{ flex: 1, overflowY: 'auto', padding: 28 }}>
-        <div style={{ maxWidth: 1200, margin: '0 auto' }}>
-          <StatStrip T={T} stats={[['Transfers', rows.length], ['In transit', rows.filter((r: any) => r.status === 'in_transit').length], ['Value moved', money0(rows.filter((r: any) => r.status === 'completed').reduce((s: number, r: any) => s + r.total_value, 0))]]} />
+        <div style={{ maxWidth: 1240, margin: '0 auto' }}>
+          <StatStrip T={T} stats={[
+            ['Transfers', rows.length],
+            ['In transit', rows.filter((r: any) => r.status === 'in_transit').length],
+            ['Value moved', money0(rows.filter((r: any) => r.status === 'completed').reduce((s: number, r: any) => s + (r.total_value || 0), 0))],
+          ]} />
           <Panel T={T} pad={false}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead><tr>{([['Reference', 'l'], ['From', 'l'], ['To', 'l'], ['Items', 'r'], ['Value', 'r'], ['Date', 'l'], ['Status', 'l'], ['', 'r']] as any[]).map(([h, a]: any, i: number) => (
-                <th key={i} style={{ textAlign: a === 'r' ? 'right' : 'left', padding: '11px 18px', fontSize: 10, fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', color: T.inkSub, background: T.paperAlt, borderBottom: `1px solid ${T.line}` }}>{h}</th>
-              ))}</tr></thead>
-              <tbody>
-                {rows.map((t: any) => (
-                  <tr key={t.id} style={{ transition: 'background .12s' }} onMouseEnter={e => (e.currentTarget as HTMLTableRowElement).style.background = T.paperAlt} onMouseLeave={e => (e.currentTarget as HTMLTableRowElement).style.background = 'transparent'}>
-                    <td onClick={() => setView(t)} style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontFamily: T.fMono, fontSize: 12.5, fontWeight: 600, color: T.accent.text, cursor: 'pointer' }}>{t.ref}</td>
-                    <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 12.5, color: T.ink }}>{t.from_name}</td>
-                    <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 12.5, color: T.ink }}>→ {t.to_name}</td>
-                    <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right', fontFamily: T.fMono, fontSize: 12.5, color: T.inkSub }}>{t.item_count}</td>
-                    <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right', fontFamily: T.fMono, fontSize: 13, fontWeight: 600, color: T.ink }}>{money(t.total_value)}</td>
-                    <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 12, color: T.inkSub }}>{t.date}</td>
-                    <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}` }}><Badge T={T} tone={tone[t.status]}>{label[t.status]}</Badge></td>
-                    <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right' }}>
-                      <span style={{ display: 'inline-flex', gap: 6, justifyContent: 'flex-end' }}>
-                        {nextStatus[t.status] && <button onClick={() => advance(t)} style={trMini(T, 'accent')}>{t.status === 'pending' ? 'Ship' : 'Complete'}</button>}
-                        {t.status !== 'completed' && <button onClick={() => setConfirmDel(t)} style={trMini(T, 'danger')}>Delete</button>}
-                        {t.status === 'completed' && <button onClick={() => setView(t)} style={trMini(T)}>View</button>}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {loading && <div style={{ padding: 44, textAlign: 'center', fontFamily: T.fMono, fontSize: 12.5, color: T.inkSub }}>GET /connector/api/stock-transfer…</div>}
-            {!loading && rows.length === 0 && <div style={{ padding: 44, textAlign: 'center', color: T.inkMute, fontSize: 13 }}>No transfers yet.</div>}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 16px', borderBottom: `1px solid ${T.line}` }}>
+              <span style={{ fontSize: 14.5, fontWeight: 700, color: T.ink, marginRight: 'auto' }}>All Stock Transfers</span>
+              <div style={{ width: 200 }}><TextField T={T} value={search} onChange={setSearch} placeholder="Search …" /></div>
+            </div>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
+                <thead><tr>
+                  <th style={th}>Date</th><th style={th}>Reference No</th><th style={th}>Location (From)</th><th style={th}>Location (To)</th>
+                  <th style={th}>Status</th><th style={{ ...th, textAlign: 'right' }}>Shipping Charges</th><th style={{ ...th, textAlign: 'right' }}>Total Amount</th>
+                  <th style={th}>Additional Notes</th><th style={{ ...th, textAlign: 'right' }}>Action</th>
+                </tr></thead>
+                <tbody>
+                  {visible.map((t: any) => (
+                    <tr key={t.id} onMouseEnter={(e) => ((e.currentTarget as HTMLTableRowElement).style.background = T.paperAlt)} onMouseLeave={(e) => ((e.currentTarget as HTMLTableRowElement).style.background = 'transparent')}>
+                      <td style={{ ...td, color: T.inkSub }}>{t.date}</td>
+                      <td onClick={() => setView(t)} style={{ ...td, fontFamily: T.fMono, fontWeight: 600, color: T.accent.text, cursor: 'pointer' }}>{t.ref}</td>
+                      <td style={td}>{t.from_name}</td>
+                      <td style={td}>{t.to_name}</td>
+                      <td style={td}><Badge T={T} tone={TONE[t.status] || 'gray'}>{LABEL[t.status] || t.status}</Badge></td>
+                      <td style={{ ...td, textAlign: 'right', fontFamily: T.fMono }}>{money(t.shipping_charges || 0)}</td>
+                      <td style={{ ...td, textAlign: 'right', fontFamily: T.fMono, fontWeight: 600 }}>{money(t.total_value || 0)}</td>
+                      <td style={{ ...td, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', color: T.inkSub }} title={t.notes}>{t.notes || '—'}</td>
+                      <td style={{ ...td, textAlign: 'right' }}>
+                        <ActionsMenu T={T} open={menu === t.id} onToggle={() => setMenu(menu === t.id ? null : t.id)} items={actionsFor(t)} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {loading && <div style={{ padding: 44, textAlign: 'center', fontFamily: T.fMono, fontSize: 12.5, color: T.inkSub }}>Loading transfers…</div>}
+            {!loading && visible.length === 0 && <div style={{ padding: 44, textAlign: 'center', color: T.inkMute, fontSize: 13 }}>{needle ? 'No transfers match that search.' : 'No transfers yet.'}</div>}
           </Panel>
         </div>
       </div>
 
-      {edit && <TransferEditor T={T} locs={locs} onClose={() => setEdit(false)} onSaved={() => { setEdit(false); show('Transfer created'); reload(); }} />}
       {view && <TransferView T={T} transfer={view} onClose={() => setView(null)} />}
       {confirmDel && (
-        <Modal T={T} title="Delete transfer?" subtitle={confirmDel.ref} width={420} onClose={() => setConfirmDel(null)} onSave={() => doDelete(confirmDel)} saveLabel="Delete">
-          <div style={{ fontSize: 13.5, color: T.inkMid, lineHeight: 1.6 }}>Remove transfer <b style={{ color: T.ink }}>{confirmDel.ref}</b>? Completed transfers can be deleted but not edited.</div>
-        </Modal>
+        <ConfirmModal T={T} title={`Delete ${confirmDel.ref}?`}
+          body={confirmDel.status === 'pending'
+            ? 'This transfer holds no stock yet — it will simply be removed.'
+            : 'Deleting reverses the stock movement: goods return to the source location. If the destination has already sold them, the delete is refused.'}
+          confirmLabel="Delete" confirmKind="danger"
+          onConfirm={() => doDelete(confirmDel)} onClose={() => setConfirmDel(null)} />
       )}
       {node}
     </div>
-  );
-}
-
-function TransferEditor({ T, locs, onClose, onSaved }: { T: Theme; locs: any[]; onClose: () => void; onSaved: () => void }) {
-  const [from, setFrom] = useStateTr((locs[0] || {}).id || 1);
-  const [to, setTo] = useStateTr((locs[1] || {}).id || 2);
-  const [date, setDate] = useStateTr(todayLocal());
-  const [status, setStatus] = useStateTr('pending');
-  const [lines, setLines] = useStateTr<any[]>([{ product_id: '', qty: '' }]);
-  const [busy, setBusy] = useStateTr(false);
-  const [err, setErr] = useStateTr<string | null>(null);
-  // Live catalog in real mode; seed PRODUCTS is the mock fallback.
-  const [catalog, setCatalog] = useStateTr<any[]>(PRODUCTS);
-  useEffectTr(() => { if (API.config?.isReal?.()) API.product.list({ per_page: 200 }).then((r: any) => setCatalog(r.items || [])).catch(() => {}); }, []);
-  const products = catalog.filter((p: any) => p.type !== 'combo' && p.enable_stock !== false);
-  const setLine = (i: number, k: string, v: any) => setLines((ls: any[]) => ls.map((l, j) => j === i ? { ...l, [k]: v } : l));
-
-  async function save() {
-    setBusy(true); setErr(null);
-    try {
-      const payload = { from_location_id: from, to_location_id: to, date, status, lines: lines.filter((l: any) => l.product_id && Number(l.qty) > 0).map((l: any) => { const p = products.find((p: any) => p.id === l.product_id); return { product_id: l.product_id, qty: Number(l.qty), unit_cost: p ? p.cost : 0 }; }) };
-      await API.transfer.create(payload); onSaved();
-    } catch (ex: any) { setErr(ex.message || 'Could not save the transfer.'); } finally { setBusy(false); }
-  }
-
-  return (
-    <Modal T={T} title="New stock transfer" subtitle="Move stock between locations" width={640} onClose={onClose}
-      footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Cancel</Btn><Btn T={T} kind="accent" onClick={save} disabled={busy}>{busy ? 'Saving…' : 'Create transfer'}</Btn></>}>
-      <FormGrid>
-        <Field T={T} label="From location"><SelectField T={T} value={String(from)} options={locs.map((l: any) => String(l.id))} onChange={(v: any) => setFrom(Number(v))} render={(v: any) => (locs.find((l: any) => String(l.id) === v) || {}).name} /></Field>
-        <Field T={T} label="To location"><SelectField T={T} value={String(to)} options={locs.map((l: any) => String(l.id))} onChange={(v: any) => setTo(Number(v))} render={(v: any) => (locs.find((l: any) => String(l.id) === v) || {}).name} /></Field>
-        <Field T={T} label="Date"><TextField T={T} type="date" value={date} onChange={setDate} /></Field>
-        <Field T={T} label="Status"><SelectField T={T} value={status} options={['pending', 'in_transit', 'completed']} onChange={setStatus} render={(v: any) => ({ pending: 'Pending', in_transit: 'In transit', completed: 'Completed' } as any)[v]} /></Field>
-      </FormGrid>
-      <div style={{ marginTop: 18, marginBottom: 9, fontSize: 12, fontWeight: 700, color: T.inkSub }}>PRODUCTS</div>
-      <div style={{ border: `1px solid ${T.line}`, borderRadius: T.r, overflow: 'hidden' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 90px 34px', gap: 8, padding: '8px 12px', background: T.paperAlt, fontSize: 10, fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase', color: T.inkSub }}><span>Product</span><span style={{ textAlign: 'right' }}>Quantity</span><span></span></div>
-        {lines.map((l: any, i: number) => (
-          <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 90px 34px', gap: 8, padding: '8px 12px', borderTop: `1px solid ${T.line}`, alignItems: 'center' }}>
-            <select value={l.product_id} onChange={e => setLine(i, 'product_id', e.target.value)} style={{ padding: '8px 10px', fontSize: 12.5, fontFamily: T.fBody, color: T.ink, background: T.paper, border: `1px solid ${T.line}`, borderRadius: 7, outline: 'none' }}>
-              <option value="">Select product…</option>
-              {products.map((p: any) => <option key={p.id} value={p.id}>{p.name} ({p.stock} in stock)</option>)}
-            </select>
-            <input type="number" value={l.qty} onChange={e => setLine(i, 'qty', e.target.value)} placeholder="0" style={{ width: '100%', padding: '7px 9px', fontSize: 12.5, fontFamily: T.fMono, textAlign: 'right', color: T.ink, background: T.paper, border: `1px solid ${T.line}`, borderRadius: 7, outline: 'none', boxSizing: 'border-box' }} />
-            <button onClick={() => setLines((ls: any[]) => ls.filter((_, j) => j !== i))} disabled={lines.length === 1} style={{ width: 28, height: 28, borderRadius: 6, border: `1px solid ${T.line}`, background: T.paper, color: T.redText, cursor: lines.length === 1 ? 'not-allowed' : 'pointer', fontSize: 12, opacity: lines.length === 1 ? 0.4 : 1 }}>✕</button>
-          </div>
-        ))}
-        <div style={{ padding: '8px 12px', borderTop: `1px solid ${T.line}` }}><button onClick={() => setLines((ls: any[]) => [...ls, { product_id: '', qty: '' }])} style={{ background: 'none', border: 'none', color: T.accent.text, fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: T.fBody }}>+ Add product</button></div>
-      </div>
-      <div style={{ fontSize: 11, color: T.inkMute, marginTop: 9, lineHeight: 1.5 }}>Stock moves between the locations when the transfer is marked <b>Completed</b>. Pending / in-transit transfers can still be edited or deleted.</div>
-      {err && <div style={{ marginTop: 16, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}>⚠ {err}</div>}
-    </Modal>
   );
 }
 
@@ -146,29 +127,34 @@ function TransferView({ T, transfer, onClose }: { T: Theme; transfer: any; onClo
   const [data, setData] = useStateTr<any>(null);
   useEffectTr(() => { API.transfer.get(transfer.id).then(setData).catch(() => setData(transfer)); }, [transfer.id]);
   const t = data || transfer;
+  const linesTotal = (t.lines || []).reduce((s: number, l: any) => s + l.qty * (l.unit_price ?? l.unit_cost ?? 0), 0);
   return (
-    <Modal T={T} title={t.ref} subtitle={`${t.from_name} → ${t.to_name} · ${t.date}`} width={500} onClose={onClose} footer={null}>
+    <Modal T={T} title={t.ref} subtitle={`${t.from_name} → ${t.to_name} · ${t.date}`} width={560} onClose={onClose} footer={null}>
       <div style={{ marginBottom: 14, display: 'flex', alignItems: 'center', gap: 10 }}>
-        <Badge T={T} tone={t.status === 'completed' ? 'green' : t.status === 'in_transit' ? 'blue' : 'amber'}>{({ completed: 'Completed', in_transit: 'In transit', pending: 'Pending' } as any)[t.status]}</Badge>
-        <span style={{ fontSize: 12.5, color: T.inkSub }}>{t.item_count} items · {money(t.total_value)}</span>
+        <Badge T={T} tone={TONE[t.status] || 'gray'}>{LABEL[t.status] || t.status}</Badge>
+        <span style={{ fontSize: 12.5, color: T.inkSub }}>{t.item_count} items · {money(t.total_value || 0)}</span>
       </div>
       <div style={{ border: `1px solid ${T.line}`, borderRadius: T.r, overflow: 'hidden' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 70px 90px', padding: '8px 12px', background: T.paperAlt, fontSize: 10, fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase', color: T.inkSub }}><span>Product</span><span style={{ textAlign: 'right' }}>Qty</span><span style={{ textAlign: 'right' }}>Value</span></div>
-        {(t.lines || []).map((l: any, i: number) => { const p: any = PRODUCTS.find((x: any) => parseInt(String(x.id).replace(/\D/g, ''), 10) === l.product_id) || {}; return (
-          <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 70px 90px', padding: '9px 12px', borderTop: `1px solid ${T.line}`, fontSize: 12.5 }}>
-            <span style={{ fontWeight: 600, color: T.ink }}>{l.product_name || p.name || 'Product #' + l.product_id}</span>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 64px 90px 96px', padding: '8px 12px', background: T.paperAlt, fontSize: 10, fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase', color: T.inkSub }}>
+          <span>Product</span><span style={{ textAlign: 'right' }}>Qty</span><span style={{ textAlign: 'right' }}>Unit Price</span><span style={{ textAlign: 'right' }}>Subtotal</span>
+        </div>
+        {(t.lines || []).map((l: any, i: number) => (
+          <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 64px 90px 96px', padding: '9px 12px', borderTop: `1px solid ${T.line}`, fontSize: 12.5 }}>
+            <span style={{ fontWeight: 600, color: T.ink }}>{l.product_name || 'Product'}</span>
             <span style={{ textAlign: 'right', fontFamily: T.fMono, color: T.inkSub }}>{l.qty}</span>
-            <span style={{ textAlign: 'right', fontFamily: T.fMono, color: T.ink }}>{money(l.qty * l.unit_cost)}</span>
+            <span style={{ textAlign: 'right', fontFamily: T.fMono, color: T.inkSub }}>{money(l.unit_price ?? l.unit_cost ?? 0)}</span>
+            <span style={{ textAlign: 'right', fontFamily: T.fMono, color: T.ink }}>{money(l.qty * (l.unit_price ?? l.unit_cost ?? 0))}</span>
           </div>
-        ); })}
+        ))}
       </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end', marginTop: 12, fontSize: 12.5, color: T.inkMid }}>
+        <span>Subtotal: <b style={{ fontFamily: T.fMono, color: T.ink }}>{money(linesTotal)}</b></span>
+        <span>Shipping: <b style={{ fontFamily: T.fMono, color: T.ink }}>{money(t.shipping_charges || 0)}</b></span>
+        <span style={{ fontSize: 13.5, fontWeight: 700, color: T.ink }}>Total: <span style={{ fontFamily: T.fMono }}>{money(t.total_value || 0)}</span></span>
+      </div>
+      {t.notes && <div style={{ marginTop: 12, padding: '9px 12px', background: T.paperAlt, borderRadius: 8, fontSize: 12.5, color: T.inkMid }}>{t.notes}</div>}
     </Modal>
   );
-}
-
-function trMini(T: Theme, kind?: string): React.CSSProperties {
-  const danger = kind === 'danger', accent = kind === 'accent';
-  return { padding: '5px 11px', borderRadius: 7, cursor: 'pointer', fontFamily: T.fBody, fontSize: 12, fontWeight: 600, border: `1px solid ${accent ? T.accent.base : danger ? T.redSoft : T.line}`, background: accent ? T.accent.base : danger ? T.redSoft : T.paper, color: accent ? T.accent.on : danger ? T.redText : T.inkMid };
 }
 
 // ── File-local stat helper (mirrors prototype StatStrip) ─────────────

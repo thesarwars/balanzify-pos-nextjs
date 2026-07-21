@@ -104,7 +104,12 @@ export const NAV = [
       { id: 'expenses', label: 'Expenses', icon: LuBanknote },
       { id: 'petty-cash', label: 'Petty Cash', icon: LuCoins },
       { id: 'adjustments', label: 'Adjustments', icon: LuSlidersHorizontal },
-      { id: 'transfers', label: 'Transfers', icon: LuArrowLeftRight },
+      {
+        id: 'transfers', label: 'Stock Transfers', icon: LuArrowLeftRight, children: [
+          { key: 'list-transfers', activeId: 'transfers', label: 'List Stock Transfers', route: '/transfers' },
+          { key: 'add-transfer',   activeId: 'transfers', activeParams: { new: '1' }, label: 'Add Stock Transfer', route: '/transfers?new=1' },
+        ],
+      },
       { id: 'zakat', label: 'Zakat', icon: LuHandCoins },
       { id: 'lending', label: 'Financing', icon: LuPiggyBank },
     ]

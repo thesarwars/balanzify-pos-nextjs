@@ -1617,10 +1617,16 @@ model StockAdjustment {
 model StockTransfer {
   id             String         @id @default(uuid()) @db.Uuid
   businessId     String         @map("business_id") @db.Uuid
-  transferNumber String?        @unique @map("transfer_number") @db.VarChar(50)
+  // Unique PER BUSINESS: tenants hand-number transfers independently.
+  transferNumber String?        @map("transfer_number") @db.VarChar(50)
   fromLocationId String         @map("from_location_id") @db.Uuid
   toLocationId   String         @map("to_location_id") @db.Uuid
   status         TransferStatus @default(pending)
+  // The document date (editable, back-datable) — createdAt is when the row was written.
+  transferDate    DateTime? @default(now()) @map("transfer_date")
+  shippingCharges Decimal   @default(0) @map("shipping_charges") @db.Decimal(12, 2)
+  // Σ qty × unitPrice + shipping, denormalised so the list totals without a join.
+  totalAmount     Decimal   @default(0) @map("total_amount") @db.Decimal(12, 2)
   notes          String?
   approvedById   String?        @map("approved_by") @db.Uuid
   dispatchedAt   DateTime?      @map("dispatched_at")
@@ -1635,16 +1641,18 @@ model StockTransfer {
   createdBy    User?               @relation("transfer_creator", fields: [createdById], references: [id])
   items        StockTransferItem[]
 
+  @@unique([businessId, transferNumber])
   @@map("stock_transfers")
 }
 
 model StockTransferItem {
-  id            String @id @default(uuid()) @db.Uuid
-  transferId    String @map("transfer_id") @db.Uuid
-  productId     String @map("product_id") @db.Uuid
-  requestedQty  Int    @map("requested_qty")
-  dispatchedQty Int    @default(0) @map("dispatched_qty")
-  receivedQty   Int    @default(0) @map("received_qty")
+  id            String  @id @default(uuid()) @db.Uuid
+  transferId    String  @map("transfer_id") @db.Uuid
+  productId     String  @map("product_id") @db.Uuid
+  requestedQty  Int     @map("requested_qty")
+  dispatchedQty Int     @default(0) @map("dispatched_qty")
+  receivedQty   Int     @default(0) @map("received_qty")
+  unitPrice     Decimal @default(0) @map("unit_price") @db.Decimal(12, 2)
 
   transfer StockTransfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
   product  Product       @relation(fields: [productId], references: [id])

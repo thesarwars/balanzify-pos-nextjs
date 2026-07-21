@@ -2365,17 +2365,25 @@ function adaptRealTransfer(t: any): any {
   if (!t) return t;
   const lines = Array.isArray(t.items) ? t.items.map((it: any) => ({
     product_id: it.productId, product_name: (it.product && it.product.name) || '',
+    sku: (it.product && it.product.sku) || '',
     qty: Number(it.requestedQty != null ? it.requestedQty : (it.dispatchedQty || 0)),
-    unit_cost: Number((it.product && it.product.costPrice) || 0),
+    unit_price: Number(it.unitPrice ?? (it.product && it.product.costPrice) ?? 0),
+    unit_cost: Number(it.unitPrice ?? (it.product && it.product.costPrice) ?? 0),
   })) : [];
+  const shipping = Number(t.shippingCharges || 0);
   return {
     id: t.id, ref: t.transferNumber,
     from_location_id: t.fromLocationId, from_name: (t.fromLocation && t.fromLocation.name) || '—',
     to_location_id: t.toLocationId, to_name: (t.toLocation && t.toLocation.name) || '—',
-    date: t.createdAt ? String(t.createdAt).slice(0, 10) : '',
+    // Local day, not the ISO string's UTC day — an evening transfer must not
+    // list under tomorrow (same class as the printed-invoice date fix).
+    date: (t.transferDate || t.createdAt) ? new Date(t.transferDate || t.createdAt).toLocaleDateString('en-CA') : '',
+    transfer_date: t.transferDate || t.createdAt || null,
     status: t.status,
+    shipping_charges: shipping,
+    notes: t.notes || '',
     item_count: lines.reduce((n: number, l: any) => n + l.qty, 0),
-    total_value: lines.reduce((s: number, l: any) => s + l.qty * l.unit_cost, 0),
+    total_value: Number(t.totalAmount != null ? t.totalAmount : lines.reduce((s: number, l: any) => s + l.qty * l.unit_price, 0) + shipping),
     lines,
     _real: t,
   };
@@ -2384,8 +2392,16 @@ function toRealTransferBody(b: any): any {
   return {
     from_location_id: b.from_location_id,
     to_location_id: b.to_location_id,
+    ref_no: b.ref_no || undefined,
+    transfer_date: b.transfer_date || b.date || undefined,
+    status: b.status || undefined,
+    shipping_charges: b.shipping_charges != null ? Number(b.shipping_charges) : undefined,
     notes: b.notes || undefined,
-    items: (b.lines || []).map((l: any) => ({ product_id: l.product_id, qty: Number(l.qty || 1) })),
+    items: (b.lines || []).map((l: any) => ({
+      product_id: l.product_id,
+      qty: Number(l.qty || 1),
+      unit_price: l.unit_price != null || l.unit_cost != null ? Number(l.unit_price ?? l.unit_cost) : undefined,
+    })),
   };
 }
 
@@ -3023,7 +3039,12 @@ const API: any = {
   product: {
     async list(params: any = {}) {
       if (REAL_MODE) {
-        const res = await realReq('GET', '/products', { query: params });
+        // Callers use the UltimatePOS-style `per_page`; the real backend only
+        // reads `limit` (default 100) — without this map every catalog fetch
+        // was silently capped at the first 100 products by name.
+        const { per_page, ...rest } = params || {};
+        const query = { ...rest, ...(per_page != null && rest.limit == null ? { limit: per_page } : {}) };
+        const res = await realReq('GET', '/products', { query });
         const arr = (res && (res.products || res.data)) || [];
         return { items: (Array.isArray(arr) ? arr : []).map(adaptRealProduct), meta: res.meta };
       }
@@ -4588,10 +4609,16 @@ const API: any = {
       if (REAL_MODE) return adaptRealTransfer(await realReq('POST', '/stock/transfers', { body: toRealTransferBody(body) }));
       return (await transport('POST', '/connector/api/stock-transfer', { body })).data;
     },
+    /** Full document edit — the backend reverses the old stock effects and
+     *  applies the new document from scratch. */
+    async update(id: any, body: any) {
+      if (REAL_MODE) return adaptRealTransfer(await realReq('PUT', '/stock/transfers/' + id, { body: toRealTransferBody(body) }));
+      return (await transport('PUT', '/connector/api/stock-transfer/' + id, { body })).data;
+    },
+    /** Advance the lifecycle: stock leaves the source at in_transit and lands
+     *  at the destination on completed. Never backwards. */
     async setStatus(id: any, status: any) {
-      // The backend moves stock the moment a transfer is created (status 'received')
-      // and exposes no status-transition endpoint — treat as a no-op in real mode.
-      if (REAL_MODE) return { id, status };
+      if (REAL_MODE) return adaptRealTransfer(await realReq('PUT', '/stock/transfers/' + id + '/status', { body: { status } }));
       return (await transport('PUT', '/connector/api/stock-transfer/' + id + '/status', { body: { status } })).data;
     },
     async remove(id: any) {

@@ -149,12 +149,132 @@ stockRouter.post('/adjustments/:id/approve', auth, requireRole('owner', 'manager
   } catch (err) { next(err); }
 });
 
+// ── Stock Transfers ───────────────────────────────────────────────────────────
+// The API speaks the reference language (pending / in_transit / completed); the
+// DB enum predates it (pending / dispatched / received). Stock leaves the SOURCE
+// when a transfer goes in transit and lands at the DESTINATION on completion —
+// so in-transit goods are counted at neither shelf, exactly like a real van.
+const TR_TO_DB  = { pending: 'pending', in_transit: 'dispatched', completed: 'received' };
+const TR_TO_API = { pending: 'pending', approved: 'pending', dispatched: 'in_transit', received: 'completed', cancelled: 'cancelled' };
+const trBad = (msg, statusCode = 400) => Object.assign(new Error(msg), { statusCode });
+
+const TRANSFER_INCLUDE = {
+  fromLocation: true,
+  toLocation: true,
+  items: { include: { product: { select: { id: true, name: true, sku: true, costPrice: true } } } },
+};
+const trToApi = (t) => t && { ...t, status: TR_TO_API[t.status] || t.status };
+
+/** Every product on the document must belong to the caller's business. */
+async function trAssertProducts(tx, businessId, items) {
+  const ids = [...new Set(items.map((i) => i.product_id))];
+  const found = await tx.product.findMany({ where: { id: { in: ids }, businessId }, select: { id: true, name: true } });
+  if (found.length !== ids.length) throw trBad('One of those products does not exist.', 404);
+  return new Map(found.map((p) => [p.id, p.name]));
+}
+
+/** Deduct items from a location — locked read, refuses to go negative. */
+async function trTakeStock(tx, { businessId, userId, transferId, locationId, items, names, what }) {
+  for (const it of items) {
+    const rows = await tx.$queryRaw`
+      SELECT quantity FROM stock_levels
+      WHERE product_id = ${it.product_id}::uuid AND location_id = ${locationId}::uuid
+      FOR UPDATE`;
+    const have = rows[0]?.quantity ?? 0;
+    if (have < it.qty) {
+      const name = (names && names.get(it.product_id)) || it.product_id;
+      throw trBad(`Not enough stock ${what || 'to transfer'}: "${name}" has ${have} on hand, ${it.qty} needed.`);
+    }
+    await tx.$executeRaw`
+      UPDATE stock_levels SET quantity = quantity - ${it.qty}, updated_at = NOW()
+      WHERE product_id = ${it.product_id}::uuid AND location_id = ${locationId}::uuid`;
+    await tx.stockMovement.create({
+      data: {
+        businessId, productId: it.product_id, locationId,
+        type: 'transfer_out', quantity: -it.qty, balanceAfter: have - it.qty,
+        referenceId: transferId, referenceType: 'stock_transfer', createdById: userId,
+      },
+    });
+  }
+}
+
+/** Add items to a location (creating the level row when new). */
+async function trGiveStock(tx, { businessId, userId, transferId, locationId, items }) {
+  for (const it of items) {
+    await tx.$executeRaw`
+      INSERT INTO stock_levels (id, product_id, location_id, quantity, updated_at)
+      VALUES (gen_random_uuid(), ${it.product_id}::uuid, ${locationId}::uuid, ${it.qty}, NOW())
+      ON CONFLICT (product_id, location_id)
+      DO UPDATE SET quantity = stock_levels.quantity + ${it.qty}, updated_at = NOW()`;
+    const after = (await tx.$queryRaw`
+      SELECT quantity FROM stock_levels
+      WHERE product_id = ${it.product_id}::uuid AND location_id = ${locationId}::uuid`)[0]?.quantity ?? it.qty;
+    await tx.stockMovement.create({
+      data: {
+        businessId, productId: it.product_id, locationId,
+        type: 'transfer_in', quantity: it.qty, balanceAfter: after,
+        referenceId: transferId, referenceType: 'stock_transfer', createdById: userId,
+      },
+    });
+  }
+}
+
+/** Undo a transfer's stock effects, judged from its CURRENT status — the same
+ *  state-based-reversal rule the sales engine follows. In-transit goods return
+ *  to the source; completed goods are pulled back off the destination first
+ *  (refusing — not clamping — if the destination has already sold them). */
+async function trReverseEffects(tx, { businessId, userId, transfer, names }) {
+  const dispatched = transfer.items
+    .map((i) => ({ product_id: i.productId, qty: i.dispatchedQty }))
+    .filter((i) => i.qty > 0);
+  const received = transfer.items
+    .map((i) => ({ product_id: i.productId, qty: i.receivedQty }))
+    .filter((i) => i.qty > 0);
+
+  if (transfer.status === 'received' && received.length) {
+    await trTakeStock(tx, {
+      businessId, userId, transferId: transfer.id, locationId: transfer.toLocationId,
+      items: received, names, what: 'to reverse at the destination',
+    });
+  }
+  if ((transfer.status === 'received' || transfer.status === 'dispatched') && dispatched.length) {
+    await trGiveStock(tx, {
+      businessId, userId, transferId: transfer.id, locationId: transfer.fromLocationId,
+      items: dispatched,
+    });
+  }
+}
+
+/** Lock the transfer row and load it with items — two concurrent edits/deletes
+ *  must serialise, or both would reverse the same stock effects twice. */
+async function trLoad(tx, { businessId, transferId }) {
+  const locked = await tx.$queryRaw`
+    SELECT id FROM stock_transfers WHERE id = ${transferId}::uuid AND business_id = ${businessId}::uuid FOR UPDATE`;
+  if (!locked.length) throw trBad('Transfer not found.', 404);
+  return tx.stockTransfer.findFirst({ where: { id: transferId, businessId }, include: { items: true } });
+}
+
+async function trAssertRef(tx, businessId, ref, excludeId) {
+  const clash = await tx.stockTransfer.findFirst({
+    where: { businessId, transferNumber: ref, ...(excludeId && { id: { not: excludeId } }) },
+    select: { id: true },
+  });
+  if (clash) throw trBad(`Reference No "${ref}" is already used.`);
+}
+
+const trTotals = (items, shipping) => {
+  const lines = items.reduce((s, i) => s + i.qty * (Number(i.unit_price) || 0), 0);
+  return Math.round((lines + (Number(shipping) || 0)) * 100) / 100;
+};
+
 stockRouter.post('/transfers', auth, requireRole('owner', 'manager'), validate(TransferSchema), async (req, res, next) => {
   try {
-    const { from_location_id, to_location_id, items, notes } = req.body;
-    if (from_location_id === to_location_id) {
-      return res.status(400).json({ title: 'Source and destination must differ', status: 400 });
-    }
+    const { from_location_id, to_location_id, items, notes, ref_no, transfer_date, shipping_charges } = req.body;
+    // Default COMPLETED, not pending: the pre-status API applied both stock legs
+    // on every create, and a stale client that omits `status` (old cached SPA
+    // tab, old integration) must keep getting that behaviour — not a silent
+    // document that says 201 yet moves nothing. The new editor always sends one.
+    const apiStatus = req.body.status || 'completed';
 
     // Both locations must belong to the caller's business.
     const locs = await prisma.location.findMany({
@@ -164,99 +284,119 @@ stockRouter.post('/transfers', auth, requireRole('owner', 'manager'), validate(T
     if (locs.length !== 2) return res.status(404).json({ title: 'Location not found', status: 404 });
 
     const transfer = await prisma.$transaction(async (tx) => {
+      const names = await trAssertProducts(tx, req.user.business_id, items);
+      const ref = (ref_no || '').trim() || `TRF-${Date.now()}`;
+      if (ref_no && ref_no.trim()) await trAssertRef(tx, req.user.business_id, ref);
+
+      const moved = apiStatus !== 'pending';    // stock has left the source
+      const landed = apiStatus === 'completed'; // and arrived at the destination
       const t = await tx.stockTransfer.create({
         data: {
           businessId: req.user.business_id,
-          transferNumber: `TRF-${Date.now()}`,
+          transferNumber: ref,
           fromLocationId: from_location_id,
           toLocationId: to_location_id,
+          status: TR_TO_DB[apiStatus],
+          transferDate: transfer_date ? new Date(transfer_date) : new Date(),
+          shippingCharges: Number(shipping_charges) || 0,
+          totalAmount: trTotals(items, shipping_charges),
           notes,
-          status: 'received',
+          dispatchedAt: moved ? new Date() : null,
+          receivedAt: landed ? new Date() : null,
           createdById: req.user.id,
           items: {
-            create: items.map(i => ({
+            create: items.map((i) => ({
               productId: i.product_id,
               requestedQty: i.qty,
-              dispatchedQty: i.qty,
-              receivedQty: i.qty,
+              dispatchedQty: moved ? i.qty : 0,
+              receivedQty: landed ? i.qty : 0,
+              unitPrice: Number(i.unit_price) || 0,
             })),
           },
         },
       });
 
-      for (const item of items) {
-        // Lock the source row and verify there is enough to move — never clamp
-        // at 0 (which would "transfer" stock that doesn't exist and create it at
-        // the destination out of nothing).
-        const srcRows = await tx.$queryRaw`
-          SELECT quantity FROM stock_levels
-          WHERE product_id = ${item.product_id}::uuid AND location_id = ${from_location_id}::uuid
-          FOR UPDATE
-        `;
-        const srcQty = srcRows[0]?.quantity ?? 0;
-        if (srcQty < item.qty) {
-          throw Object.assign(
-            new Error(`Insufficient stock to transfer: product ${item.product_id} has ${srcQty} at source, requested ${item.qty}.`),
-            { statusCode: 400, code: 'INSUFFICIENT_STOCK' }
-          );
-        }
-
-        // Deduct from source
-        await tx.$executeRaw`
-          UPDATE stock_levels SET quantity = quantity - ${item.qty}, updated_at = NOW()
-          WHERE product_id = ${item.product_id}::uuid AND location_id = ${from_location_id}::uuid
-        `;
-        await tx.stockMovement.create({
-          data: {
-            businessId: req.user.business_id, productId: item.product_id, locationId: from_location_id,
-            type: 'transfer_out', quantity: -item.qty, balanceAfter: srcQty - item.qty,
-            referenceId: t.id, referenceType: 'stock_transfer', createdById: req.user.id,
-          },
+      if (moved) {
+        await trTakeStock(tx, {
+          businessId: req.user.business_id, userId: req.user.id, transferId: t.id,
+          locationId: from_location_id, items, names,
         });
-
-        // Add to destination
-        const destRows = await tx.$executeRaw`
-          INSERT INTO stock_levels (id, product_id, location_id, quantity, updated_at)
-          VALUES (gen_random_uuid(), ${item.product_id}::uuid, ${to_location_id}::uuid, ${item.qty}, NOW())
-          ON CONFLICT (product_id, location_id)
-          DO UPDATE SET quantity = stock_levels.quantity + ${item.qty}, updated_at = NOW()
-        `;
-        const destQty = (await tx.$queryRaw`
-          SELECT quantity FROM stock_levels
-          WHERE product_id = ${item.product_id}::uuid AND location_id = ${to_location_id}::uuid
-        `)[0]?.quantity ?? item.qty;
-        await tx.stockMovement.create({
-          data: {
-            businessId: req.user.business_id, productId: item.product_id, locationId: to_location_id,
-            type: 'transfer_in', quantity: item.qty, balanceAfter: destQty,
-            referenceId: t.id, referenceType: 'stock_transfer', createdById: req.user.id,
-          },
+      }
+      if (landed) {
+        await trGiveStock(tx, {
+          businessId: req.user.business_id, userId: req.user.id, transferId: t.id,
+          locationId: to_location_id, items,
         });
       }
 
-      return t;
+      return tx.stockTransfer.findFirst({ where: { id: t.id }, include: TRANSFER_INCLUDE });
     });
 
-    res.status(201).json(transfer);
+    res.status(201).json(trToApi(transfer));
   } catch (err) {
     next(err);
   }
+});
+
+// ── PUT /transfers/:id/status — move the document down its lifecycle ─────────
+// pending → in_transit (stock leaves the source), in_transit → completed (stock
+// lands at the destination), pending → completed (both at once). Never backwards.
+stockRouter.put('/transfers/:id/status', auth, requireRole('owner', 'manager'), async (req, res, next) => {
+  try {
+    const next_ = String(req.body.status || '');
+    if (!['in_transit', 'completed'].includes(next_)) {
+      return res.status(400).json({ title: 'Status must be "in_transit" or "completed".', status: 400 });
+    }
+    const transfer = await prisma.$transaction(async (tx) => {
+      const t = await trLoad(tx, { businessId: req.user.business_id, transferId: req.params.id });
+      const cur = TR_TO_API[t.status];
+      const order = { pending: 0, in_transit: 1, completed: 2 };
+      if (!(order[next_] > order[cur])) {
+        throw trBad(`This transfer is already ${cur.replace('_', ' ')} — status only moves forward.`);
+      }
+      const names = await trAssertProducts(tx, req.user.business_id, t.items.map((i) => ({ product_id: i.productId })));
+      const qty = t.items.map((i) => ({ product_id: i.productId, qty: i.requestedQty })).filter((i) => i.qty > 0);
+
+      if (cur === 'pending') {
+        await trTakeStock(tx, {
+          businessId: req.user.business_id, userId: req.user.id, transferId: t.id,
+          locationId: t.fromLocationId, items: qty, names,
+        });
+        for (const i of t.items) {
+          await tx.stockTransferItem.update({ where: { id: i.id }, data: { dispatchedQty: i.requestedQty } });
+        }
+      }
+      if (next_ === 'completed') {
+        await trGiveStock(tx, {
+          businessId: req.user.business_id, userId: req.user.id, transferId: t.id,
+          locationId: t.toLocationId, items: qty,
+        });
+        for (const i of t.items) {
+          await tx.stockTransferItem.update({ where: { id: i.id }, data: { receivedQty: i.requestedQty } });
+        }
+      }
+      await tx.stockTransfer.update({
+        where: { id: t.id },
+        data: {
+          status: TR_TO_DB[next_],
+          dispatchedAt: t.dispatchedAt || new Date(),
+          ...(next_ === 'completed' && { receivedAt: new Date() }),
+        },
+      });
+      return tx.stockTransfer.findFirst({ where: { id: t.id }, include: TRANSFER_INCLUDE });
+    });
+    res.json(trToApi(transfer));
+  } catch (err) { next(err); }
 });
 // ======= GET ALL TRANSFERS =======
 stockRouter.get('/transfers', auth, async (req, res, next) => {
   try {
     const transfers = await prisma.stockTransfer.findMany({
       where: { businessId: req.user.business_id },
-      include: {
-        fromLocation: true,
-        toLocation: true,
-        items: {
-          include: { product: true }
-        }
-      },
-      orderBy: { createdAt: 'desc' }
+      include: TRANSFER_INCLUDE,
+      orderBy: [{ transferDate: 'desc' }, { createdAt: 'desc' }],
     });
-    res.status(200).json(transfers);
+    res.status(200).json(transfers.map(trToApi));
   } catch (err) { next(err); }
 });
 
@@ -264,83 +404,90 @@ stockRouter.get('/transfers', auth, async (req, res, next) => {
 stockRouter.get('/transfers/:id', auth, async (req, res, next) => {
   try {
     const transfer = await prisma.stockTransfer.findFirst({
-      where: {
-        id: req.params.id,
-        businessId: req.user.business_id
-      },
-      include: {
-        fromLocation: true,
-        toLocation: true,
-        items: {
-          include: { product: true }
-        }
-      }
+      where: { id: req.params.id, businessId: req.user.business_id },
+      include: TRANSFER_INCLUDE,
     });
-
-    if (!transfer) return res.status(404).json({ error: "Transfer records not found" });
-    res.status(200).json(transfer);
+    if (!transfer) return res.status(404).json({ title: 'Transfer not found.', status: 404 });
+    res.status(200).json(trToApi(transfer));
   } catch (err) { next(err); }
 });
 
 // ======= UPDATE TRANSFER (Reconciles quantities dynamically) =======
 stockRouter.put('/transfers/:id', auth, requireRole('owner', 'manager'), validate(TransferSchema), async (req, res, next) => {
   try {
-    const { from_location_id, to_location_id, items, notes } = req.body;
+    const { from_location_id, to_location_id, items, notes, ref_no, transfer_date, shipping_charges } = req.body;
     const transferId = req.params.id;
 
+    const locs = await prisma.location.findMany({
+      where: { id: { in: [from_location_id, to_location_id] }, businessId: req.user.business_id },
+      select: { id: true },
+    });
+    if (locs.length !== 2) return res.status(404).json({ title: 'Location not found', status: 404 });
+
     const updatedTransfer = await prisma.$transaction(async (tx) => {
-      // 1. Fetch current transfer items to reverse stock effects first
-      const existingTransfer = await tx.stockTransfer.findFirst({
-        where: { id: transferId, businessId: req.user.business_id },
-        include: { items: true }
-      });
-      if (!existingTransfer) throw new Error("Transfer not found");
+      const existing = await trLoad(tx, { businessId: req.user.business_id, transferId });
+      const oldNames = await trAssertProducts(tx, req.user.business_id, existing.items.map((i) => ({ product_id: i.productId })));
+      const names = await trAssertProducts(tx, req.user.business_id, items);
 
-      // 2. Reverse previous inventory adjustments
-      for (const item of existingTransfer.items) {
-        await tx.$executeRaw`
-          UPDATE stock_levels SET quantity = quantity + ${item.dispatchedQty} 
-          WHERE product_id = ${item.productId}::uuid AND location_id = ${existingTransfer.fromLocationId}::uuid`;
-        await tx.$executeRaw`
-          UPDATE stock_levels SET quantity = GREATEST(0, quantity - ${item.receivedQty}) 
-          WHERE product_id = ${item.productId}::uuid AND location_id = ${existingTransfer.toLocationId}::uuid`;
-      }
+      const apiStatus = req.body.status || TR_TO_API[existing.status];
+      // A status outside the lifecycle (e.g. a legacy 'cancelled' row) must
+      // dead-end here — falling through would deduct stock for a document
+      // whose status column can't represent it.
+      if (!TR_TO_DB[apiStatus]) throw trBad(`A ${String(apiStatus).replace('_', ' ')} transfer cannot be edited.`);
+      if (ref_no && ref_no.trim()) await trAssertRef(tx, req.user.business_id, ref_no.trim(), transferId);
 
-      // 3. Clear old nested transfer items
+      // Take the OLD document's stock effects back off the shelves first, then
+      // apply the new document from scratch — same reverse-and-repost shape as
+      // editing a posted sale, so a double edit can never double-move stock.
+      await trReverseEffects(tx, { businessId: req.user.business_id, userId: req.user.id, transfer: existing, names: oldNames });
+
       await tx.stockTransferItem.deleteMany({ where: { transferId } });
-
-      // 4. Update the transfer record metadata and build new items
-      const updated = await tx.stockTransfer.update({
+      const moved = apiStatus !== 'pending';
+      const landed = apiStatus === 'completed';
+      await tx.stockTransfer.update({
         where: { id: transferId },
         data: {
           fromLocationId: from_location_id,
           toLocationId: to_location_id,
-          notes,
+          status: TR_TO_DB[apiStatus],
+          ...(ref_no && ref_no.trim() && { transferNumber: ref_no.trim() }),
+          ...(transfer_date && { transferDate: new Date(transfer_date) }),
+          shippingCharges: Number(shipping_charges) || 0,
+          totalAmount: trTotals(items, shipping_charges),
+          // Full-document rewrite: a cleared note is REMOVED, not kept. Prisma
+          // skips `undefined`, so an absent key must become an explicit null.
+          notes: notes ?? null,
+          dispatchedAt: moved ? (existing.dispatchedAt || new Date()) : null,
+          receivedAt: landed ? (existing.receivedAt || new Date()) : null,
           items: {
-            create: items.map(i => ({
+            create: items.map((i) => ({
               productId: i.product_id,
               requestedQty: i.qty,
-              dispatchedQty: i.qty,
-              receivedQty: i.qty
-            }))
-          }
-        }
+              dispatchedQty: moved ? i.qty : 0,
+              receivedQty: landed ? i.qty : 0,
+              unitPrice: Number(i.unit_price) || 0,
+            })),
+          },
+        },
       });
 
-      // 5. Apply the updated item quantities into inventory locations
-      for (const item of items) {
-        await tx.$executeRaw`
-          INSERT INTO stock_levels (id, product_id, location_id, quantity) VALUES (gen_random_uuid(), ${item.product_id}::uuid, ${from_location_id}::uuid, 0)
-          ON CONFLICT (product_id, location_id) DO UPDATE SET quantity = GREATEST(0, stock_levels.quantity - ${item.qty}), updated_at = NOW()`;
-        await tx.$executeRaw`
-          INSERT INTO stock_levels (id, product_id, location_id, quantity) VALUES (gen_random_uuid(), ${item.product_id}::uuid, ${to_location_id}::uuid, ${item.qty})
-          ON CONFLICT (product_id, location_id) DO UPDATE SET quantity = stock_levels.quantity + ${item.qty}, updated_at = NOW()`;
+      if (moved) {
+        await trTakeStock(tx, {
+          businessId: req.user.business_id, userId: req.user.id, transferId,
+          locationId: from_location_id, items, names,
+        });
+      }
+      if (landed) {
+        await trGiveStock(tx, {
+          businessId: req.user.business_id, userId: req.user.id, transferId,
+          locationId: to_location_id, items,
+        });
       }
 
-      return updated;
+      return tx.stockTransfer.findFirst({ where: { id: transferId }, include: TRANSFER_INCLUDE });
     });
 
-    res.status(200).json(updatedTransfer);
+    res.status(200).json(trToApi(updatedTransfer));
   } catch (err) { next(err); }
 });
 
@@ -350,28 +497,18 @@ stockRouter.delete('/transfers/:id', auth, requireRole('owner', 'manager'), asyn
     const transferId = req.params.id;
 
     await prisma.$transaction(async (tx) => {
-      const existingTransfer = await tx.stockTransfer.findFirst({
-        where: { id: transferId, businessId: req.user.business_id },
-        include: { items: true }
-      });
-      if (!existingTransfer) throw new Error("Transfer records not found");
+      const existing = await trLoad(tx, { businessId: req.user.business_id, transferId });
+      const names = await trAssertProducts(tx, req.user.business_id, existing.items.map((i) => ({ product_id: i.productId })));
 
-      // Reverse previous inventory levels changes
-      for (const item of existingTransfer.items) {
-        await tx.$executeRaw`
-          UPDATE stock_levels SET quantity = quantity + ${item.dispatchedQty} 
-          WHERE product_id = ${item.productId}::uuid AND location_id = ${existingTransfer.fromLocationId}::uuid`;
-        await tx.$executeRaw`
-          UPDATE stock_levels SET quantity = GREATEST(0, quantity - ${item.receivedQty}) 
-          WHERE product_id = ${item.productId}::uuid AND location_id = ${existingTransfer.toLocationId}::uuid`;
-      }
+      // Refuses (never clamps) when the destination has already sold the goods —
+      // clamping at 0 would quietly mint stock the business does not have.
+      await trReverseEffects(tx, { businessId: req.user.business_id, userId: req.user.id, transfer: existing, names });
 
-      // Drop cascading children records manually if schema constraints don't do it automatically
       await tx.stockTransferItem.deleteMany({ where: { transferId } });
       await tx.stockTransfer.delete({ where: { id: transferId } });
     });
 
-    res.status(200).json({ success: true, message: "Transfer successfully deleted and inventory reverted" });
+    res.status(200).json({ success: true, message: 'Transfer deleted and inventory reverted.' });
   } catch (err) { next(err); }
 });
 
