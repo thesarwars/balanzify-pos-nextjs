@@ -102,7 +102,12 @@ export const NAV = [
       { id: 'payment-accounts', label: 'Payment Accounts', icon: LuLandmark },
       { id: 'expenses', label: 'Expenses', icon: LuBanknote },
       { id: 'petty-cash', label: 'Petty Cash', icon: LuCoins },
-      { id: 'adjustments', label: 'Adjustments', icon: LuSlidersHorizontal },
+      {
+        id: 'adjustments', label: 'Stock Adjustment', icon: LuSlidersHorizontal, children: [
+          { key: 'list-adjustments', activeId: 'adjustments', label: 'List Stock Adjustments', route: '/adjustments' },
+          { key: 'add-adjustment',   activeId: 'adjustments', activeParams: { new: '1' }, label: 'Add Stock Adjustment', route: '/adjustments?new=1' },
+        ],
+      },
       {
         id: 'transfers', label: 'Stock Transfers', icon: LuArrowLeftRight, children: [
           { key: 'list-transfers', activeId: 'transfers', label: 'List Stock Transfers', route: '/transfers' },

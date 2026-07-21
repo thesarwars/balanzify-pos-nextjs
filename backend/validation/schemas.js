@@ -300,6 +300,27 @@ const AdjustmentSchema = z.object({
   photo_url: optStr(500),
 });
 
+// Document-style stock adjustment: one header, priced lines. Quantities are
+// REMOVED from stock on save (Normal = routine leakage; Abnormal = exceptional
+// loss), with an optional recovered amount netting the expense.
+const AdjustmentDocSchema = z.object({
+  location_id: uuid,
+  ref_no: optStr(50),
+  adjustment_date: optStr(40).refine((s) => !s || !Number.isNaN(Date.parse(s)), 'Invalid adjustment date'),
+  type: z.enum(['normal', 'abnormal']),
+  // Bounded so a fat-fingered value 422s here instead of overflowing the
+  // DECIMAL(12,2) column inside Prisma as a 500.
+  total_recovered: z.coerce.number().min(0).max(99999999.99).optional(),
+  reason: optStr(1000),
+  items: z.array(z.object({
+    product_id: uuid,
+    qty: positiveInt.max(1000000),
+    unit_price: z.coerce.number().min(0).max(99999999.99).optional(),
+  })).min(1),
+}).refine((d) => new Set(d.items.map((i) => i.product_id)).size === d.items.length, {
+  message: 'Each product may appear on the document only once',
+});
+
 const TransferSchema = z.object({
   from_location_id: uuid,
   to_location_id: uuid,
@@ -308,12 +329,12 @@ const TransferSchema = z.object({
   transfer_date: optStr(40).refine((s) => !s || !Number.isNaN(Date.parse(s)), 'Invalid transfer date'),
   // Stock leaves the source at in_transit and lands at the destination on completed.
   status: z.enum(['pending', 'in_transit', 'completed']).optional(),
-  shipping_charges: z.coerce.number().min(0).optional(),
+  shipping_charges: z.coerce.number().min(0).max(99999999.99).optional(),
   notes: optStr(1000),
   items: z.array(z.object({
     product_id: uuid,
-    qty: positiveInt,
-    unit_price: z.coerce.number().min(0).optional(),
+    qty: positiveInt.max(1000000),
+    unit_price: z.coerce.number().min(0).max(99999999.99).optional(),
   })).min(1),
 }).refine(d => d.from_location_id !== d.to_location_id, {
   message: 'From and to locations must be different',
@@ -1134,7 +1155,7 @@ module.exports = {
   ShiftOpenSchema, ShiftCloseSchema, HoldSaleSchema,
   PurchaseOrderSchema, PurchaseOrderUpdateSchema, POItemSchema, POStatusSchema, POPaymentSchema, PurchaseReturnSchema, PurchaseReturnCreateSchema,
   SupplierSchema, SupplierCommSchema, SupplierProductSchema,
-  AdjustmentSchema, TransferSchema,
+  AdjustmentSchema, AdjustmentDocSchema, TransferSchema,
   TaskSchema, CommentSchema, ProjectSchema, MilestoneSchema,
   CreateUserSchema, UpdateUserSchema,
   SettingsSchema, CategorySchema, LocationSchema, CustomerSchema,

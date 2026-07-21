@@ -6,7 +6,7 @@ const { auth, requireRole } = require('../../middleware/auth');
 const { validate } = require('../../middleware/validate');
 const {
   SupplierSchema, SupplierCommSchema, SupplierProductSchema,
-  AdjustmentSchema, TransferSchema,
+  AdjustmentSchema, AdjustmentDocSchema, TransferSchema,
   TaskSchema, CommentSchema, ProjectSchema, MilestoneSchema,
   CreateUserSchema, UpdateUserSchema,
   SettingsSchema, CategorySchema, LocationSchema, CustomerSchema,
@@ -149,6 +149,348 @@ stockRouter.post('/adjustments/:id/approve', auth, requireRole('owner', 'manager
   } catch (err) { next(err); }
 });
 
+// ── Stock Adjustment documents ────────────────────────────────────────────────
+// The reference's "Add Stock Adjustment": one document per event (location,
+// Normal/Abnormal type, reference no, recovered amount, reason) with priced
+// lines. Saving REMOVES the quantities from stock immediately, valued at FEFO
+// layer cost for the GL (Dr 5050 Inventory adjustment / Cr 1200 Inventory);
+// a recovered amount nets the loss (Dr cash / Cr 5050). Deleting the document
+// (or editing it) reverses those effects from the stored per-line cost.
+const adjBad = (msg, statusCode = 400) => Object.assign(new Error(msg), { statusCode });
+const adjRound = (n) => Math.round((Number(n) || 0) * 100) / 100;
+// Postgres/Prisma always emit canonical LOWERCASE uuids, but Zod accepts
+// uppercase — normalise once so Map lookups keyed by request ids can't miss
+// the read-back rows (which would silently store unit costs of 0).
+const adjNormIds = (items) => items.forEach((i) => { i.product_id = String(i.product_id).toLowerCase(); });
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const ADJ_INCLUDE = {
+  location: { select: { id: true, name: true } },
+  createdBy: { select: { name: true } },
+  items: { include: { product: { select: { id: true, name: true, sku: true, costPrice: true } } } },
+};
+
+async function adjLoad(tx, { businessId, docId }) {
+  if (!UUID_RE.test(String(docId))) throw adjBad('Adjustment not found.', 404);
+  // Lock first: two concurrent deletes/edits must serialise, or both would
+  // restock the same goods twice. Same rule as sales and transfers.
+  const locked = await tx.$queryRaw`
+    SELECT id FROM stock_adjustment_docs WHERE id = ${docId}::uuid AND business_id = ${businessId}::uuid FOR UPDATE`;
+  if (!locked.length) throw adjBad('Adjustment not found.', 404);
+  return tx.stockAdjustmentDoc.findFirst({ where: { id: docId, businessId }, include: { items: true } });
+}
+
+async function adjAssertRef(tx, businessId, ref, excludeId) {
+  const clash = await tx.stockAdjustmentDoc.findFirst({
+    where: { businessId, referenceNo: ref, ...(excludeId && { id: { not: excludeId } }) },
+    select: { id: true },
+  });
+  if (clash) throw adjBad(`Reference No "${ref}" is already used.`);
+}
+
+/** Remove one line's qty from the shelf, consuming FEFO cost layers; returns
+ *  the unit cost actually consumed so the reversal can restock at it. */
+async function adjConsume(tx, { businessId, userId, docId, locationId, productId, qty, name, fallbackCost }) {
+  const rows = await tx.$queryRaw`
+    SELECT quantity FROM stock_levels
+    WHERE product_id = ${productId}::uuid AND location_id = ${locationId}::uuid
+    FOR UPDATE`;
+  const have = rows[0]?.quantity ?? 0;
+  if (have < qty) throw adjBad(`Not enough stock to adjust: "${name}" has ${have} on hand, ${qty} needed.`);
+  await tx.$executeRaw`
+    UPDATE stock_levels SET quantity = quantity - ${qty}, updated_at = NOW()
+    WHERE product_id = ${productId}::uuid AND location_id = ${locationId}::uuid`;
+
+  const layers = await tx.$queryRaw`
+    SELECT id, quantity_remaining, unit_cost FROM cost_layers
+    WHERE product_id = ${productId}::uuid AND business_id = ${businessId}::uuid
+      AND (location_id = ${locationId}::uuid OR location_id IS NULL)
+      AND quantity_remaining > 0
+    ORDER BY expiry_date ASC NULLS LAST, received_at ASC
+    FOR UPDATE`;
+  let remaining = qty, cost = 0;
+  for (const layer of layers) {
+    if (remaining <= 0) break;
+    const take = Math.min(remaining, Number(layer.quantity_remaining));
+    await tx.$executeRaw`UPDATE cost_layers SET quantity_remaining = quantity_remaining - ${take} WHERE id = ${layer.id}::uuid`;
+    cost += take * parseFloat(layer.unit_cost);
+    remaining -= take;
+  }
+  // Stock can outrun its layers (opening balances) — value the rest at standard cost.
+  if (remaining > 0) cost += remaining * (Number(fallbackCost) || 0);
+
+  await tx.stockMovement.create({
+    data: {
+      businessId, productId, locationId,
+      type: 'adjustment', quantity: -qty, balanceAfter: have - qty,
+      referenceId: docId, referenceType: 'adjustment_doc', createdById: userId,
+    },
+  });
+  return { cost: adjRound(cost), unitCost: qty > 0 ? cost / qty : 0 };
+}
+
+/** Put a document's goods back on the shelf at the cost they left it. The
+ *  reversal value is the stored per-line totalCost — the EXACT amount the
+ *  create posted as a loss — so the mirrored gain matches to the cent. */
+async function adjRestock(tx, { businessId, userId, doc }) {
+  let cost = 0;
+  for (const it of doc.items) {
+    const lineCost = adjRound(it.totalCost);
+    cost = adjRound(cost + lineCost);
+    const after = (await tx.$queryRaw`
+      INSERT INTO stock_levels (id, product_id, location_id, quantity, updated_at)
+      VALUES (gen_random_uuid(), ${it.productId}::uuid, ${doc.locationId}::uuid, ${it.quantity}, NOW())
+      ON CONFLICT (product_id, location_id)
+      DO UPDATE SET quantity = stock_levels.quantity + ${it.quantity}, updated_at = NOW()
+      RETURNING quantity`)[0]?.quantity ?? it.quantity;
+    await tx.stockMovement.create({
+      data: {
+        businessId, productId: it.productId, locationId: doc.locationId,
+        type: 'adjustment', quantity: it.quantity, balanceAfter: after,
+        referenceId: doc.id, referenceType: 'adjustment_doc', createdById: userId,
+      },
+    });
+    if (lineCost > 0 && it.quantity > 0) {
+      await tx.costLayer.create({
+        data: {
+          businessId, productId: it.productId, locationId: doc.locationId,
+          quantityReceived: it.quantity, quantityRemaining: it.quantity,
+          // Layer precision is 4dp; the GL mirrors lineCost exactly either way.
+          unitCost: Math.round((lineCost / it.quantity) * 10000) / 10000,
+        },
+      });
+    }
+  }
+  return cost;
+}
+
+/** Undo a document's GL: restore inventory value, unwind any recovery. */
+async function adjReverseGl(tx, { businessId, userId, doc, cost }) {
+  if (cost > 0) {
+    await accounting.postInventoryAdjustment(tx, {
+      businessId, amount: cost, gain: true,
+      sourceType: 'stock_adjustment_doc', sourceId: doc.id, createdById: userId,
+    });
+  }
+  const recovered = adjRound(doc.totalRecovered);
+  if (recovered > 0) {
+    await accounting.postJournal(tx, {
+      businessId, description: 'Adjustment recovery reversed',
+      sourceType: 'stock_adjustment_doc', sourceId: doc.id, createdById: userId,
+      lines: [
+        { code: '5050', debit: recovered, credit: 0, description: 'Recovery reversed' },
+        { code: '1000', debit: 0, credit: recovered, description: 'Cash returned' },
+      ],
+    });
+  }
+}
+
+/** Write the document's stock + GL effects: consume every line, post the loss
+ *  and any recovery. Returns per-product consumed costs (line total + unit). */
+async function adjApplyEffects(tx, { businessId, userId, doc, items, names, costs }) {
+  let totalCost = 0;
+  const lineCosts = new Map();
+  for (const it of items) {
+    const { cost, unitCost } = await adjConsume(tx, {
+      businessId, userId, docId: doc.id, locationId: doc.locationId,
+      productId: it.product_id, qty: it.qty,
+      name: names.get(it.product_id), fallbackCost: costs.get(it.product_id),
+    });
+    totalCost = adjRound(totalCost + cost);
+    lineCosts.set(it.product_id, { cost, unitCost });
+  }
+  if (totalCost > 0) {
+    await accounting.postInventoryAdjustment(tx, {
+      businessId, amount: totalCost, gain: false,
+      sourceType: 'stock_adjustment_doc', sourceId: doc.id, createdById: userId,
+    });
+  }
+  const recovered = adjRound(doc.totalRecovered);
+  // Recovery beyond the loss would fabricate income inside an expense account —
+  // refuse, per the codebase rule of refusing rather than clamping.
+  if (recovered > totalCost) {
+    throw adjBad(`Recovered amount (${recovered.toFixed(2)}) cannot exceed the adjustment's cost value (${totalCost.toFixed(2)}).`);
+  }
+  if (recovered > 0) {
+    await accounting.postJournal(tx, {
+      businessId, description: 'Adjustment recovery',
+      sourceType: 'stock_adjustment_doc', sourceId: doc.id, createdById: userId,
+      lines: [
+        { code: '1000', debit: recovered, credit: 0, description: 'Recovered amount' },
+        { code: '5050', debit: 0, credit: recovered, description: 'Loss recovered' },
+      ],
+    });
+  }
+  return lineCosts;
+}
+
+/** Products must belong to the business; returns name + cost maps. */
+async function adjAssertProducts(tx, businessId, items) {
+  const ids = [...new Set(items.map((i) => i.product_id))];
+  const found = await tx.product.findMany({
+    where: { id: { in: ids }, businessId },
+    select: { id: true, name: true, costPrice: true, enableStock: true },
+  });
+  if (found.length !== ids.length) throw adjBad('One of those products does not exist.', 404);
+  const untracked = found.find((p) => p.enableStock === false);
+  if (untracked) throw adjBad(`"${untracked.name}" does not manage stock — there is nothing to adjust.`);
+  return {
+    names: new Map(found.map((p) => [p.id, p.name])),
+    costs: new Map(found.map((p) => [p.id, parseFloat(p.costPrice) || 0])),
+  };
+}
+
+const adjTotals = (items) => adjRound(items.reduce((s, i) => s + i.qty * (Number(i.unit_price) || 0), 0));
+
+stockRouter.get('/adjustments/docs', auth, async (req, res, next) => {
+  try {
+    const docs = await prisma.stockAdjustmentDoc.findMany({
+      where: { businessId: req.user.business_id },
+      include: ADJ_INCLUDE,
+      orderBy: [{ adjustmentDate: 'desc' }, { createdAt: 'desc' }],
+    });
+    res.json(docs);
+  } catch (err) { next(err); }
+});
+
+stockRouter.get('/adjustments/docs/:id', auth, async (req, res, next) => {
+  try {
+    if (!UUID_RE.test(req.params.id)) return res.status(404).json({ title: 'Adjustment not found.', status: 404 });
+    const doc = await prisma.stockAdjustmentDoc.findFirst({
+      where: { id: req.params.id, businessId: req.user.business_id },
+      include: ADJ_INCLUDE,
+    });
+    if (!doc) return res.status(404).json({ title: 'Adjustment not found.', status: 404 });
+    res.json(doc);
+  } catch (err) { next(err); }
+});
+
+stockRouter.post('/adjustments/docs', auth, requireRole('owner', 'manager'), validate(AdjustmentDocSchema), async (req, res, next) => {
+  try {
+    const { location_id, ref_no, adjustment_date, type, total_recovered, reason, items } = req.body;
+    const loc = await prisma.location.findFirst({
+      where: { id: location_id, businessId: req.user.business_id }, select: { id: true },
+    });
+    if (!loc) return res.status(404).json({ title: 'Location not found', status: 404 });
+
+    adjNormIds(items);
+    const doc = await prisma.$transaction(async (tx) => {
+      const { names, costs } = await adjAssertProducts(tx, req.user.business_id, items);
+      const ref = (ref_no || '').trim() || `ADJ-${Date.now()}`;
+      if (ref_no && ref_no.trim()) await adjAssertRef(tx, req.user.business_id, ref);
+
+      const d = await tx.stockAdjustmentDoc.create({
+        data: {
+          businessId: req.user.business_id,
+          referenceNo: ref,
+          locationId: location_id,
+          type,
+          adjustmentDate: adjustment_date ? new Date(adjustment_date) : new Date(),
+          totalAmount: adjTotals(items),
+          totalRecovered: adjRound(total_recovered),
+          reason,
+          createdById: req.user.id,
+          items: {
+            create: items.map((i) => ({
+              productId: i.product_id,
+              quantity: i.qty,
+              unitPrice: adjRound(i.unit_price),
+            })),
+          },
+        },
+        include: { items: true },
+      });
+
+      const lineCosts = await adjApplyEffects(tx, {
+        businessId: req.user.business_id, userId: req.user.id, doc: d, items, names, costs,
+      });
+      for (const it of d.items) {
+        const lc = lineCosts.get(it.productId) || { cost: 0, unitCost: 0 };
+        await tx.stockAdjustmentDocItem.update({
+          where: { id: it.id },
+          data: { unitCost: adjRound(lc.unitCost), totalCost: adjRound(lc.cost) },
+        });
+      }
+      return tx.stockAdjustmentDoc.findFirst({ where: { id: d.id }, include: ADJ_INCLUDE });
+    });
+
+    res.status(201).json(doc);
+  } catch (err) { next(err); }
+});
+
+stockRouter.put('/adjustments/docs/:id', auth, requireRole('owner', 'manager'), validate(AdjustmentDocSchema), async (req, res, next) => {
+  try {
+    const { location_id, ref_no, adjustment_date, type, total_recovered, reason, items } = req.body;
+    const docId = req.params.id;
+    const loc = await prisma.location.findFirst({
+      where: { id: location_id, businessId: req.user.business_id }, select: { id: true },
+    });
+    if (!loc) return res.status(404).json({ title: 'Location not found', status: 404 });
+
+    adjNormIds(items);
+    const doc = await prisma.$transaction(async (tx) => {
+      const existing = await adjLoad(tx, { businessId: req.user.business_id, docId });
+      const { names, costs } = await adjAssertProducts(tx, req.user.business_id, items);
+      if (ref_no && ref_no.trim()) await adjAssertRef(tx, req.user.business_id, ref_no.trim(), docId);
+
+      // Reverse-and-reapply, like editing a posted sale or transfer: the old
+      // document's goods go back at their stored cost, its GL is mirrored out,
+      // then the new document posts from scratch.
+      const reversedCost = await adjRestock(tx, { businessId: req.user.business_id, userId: req.user.id, doc: existing });
+      await adjReverseGl(tx, { businessId: req.user.business_id, userId: req.user.id, doc: existing, cost: reversedCost });
+
+      await tx.stockAdjustmentDocItem.deleteMany({ where: { docId } });
+      const updated = await tx.stockAdjustmentDoc.update({
+        where: { id: docId },
+        data: {
+          locationId: location_id,
+          ...(ref_no && ref_no.trim() && { referenceNo: ref_no.trim() }),
+          type,
+          ...(adjustment_date && { adjustmentDate: new Date(adjustment_date) }),
+          totalAmount: adjTotals(items),
+          totalRecovered: adjRound(total_recovered),
+          reason: reason ?? null,
+          items: {
+            create: items.map((i) => ({
+              productId: i.product_id,
+              quantity: i.qty,
+              unitPrice: adjRound(i.unit_price),
+            })),
+          },
+        },
+        include: { items: true },
+      });
+
+      const lineCosts = await adjApplyEffects(tx, {
+        businessId: req.user.business_id, userId: req.user.id, doc: updated, items, names, costs,
+      });
+      for (const it of updated.items) {
+        const lc = lineCosts.get(it.productId) || { cost: 0, unitCost: 0 };
+        await tx.stockAdjustmentDocItem.update({
+          where: { id: it.id },
+          data: { unitCost: adjRound(lc.unitCost), totalCost: adjRound(lc.cost) },
+        });
+      }
+      return tx.stockAdjustmentDoc.findFirst({ where: { id: docId }, include: ADJ_INCLUDE });
+    });
+
+    res.json(doc);
+  } catch (err) { next(err); }
+});
+
+stockRouter.delete('/adjustments/docs/:id', auth, requireRole('owner', 'manager'), async (req, res, next) => {
+  try {
+    await prisma.$transaction(async (tx) => {
+      const existing = await adjLoad(tx, { businessId: req.user.business_id, docId: req.params.id });
+      const cost = await adjRestock(tx, { businessId: req.user.business_id, userId: req.user.id, doc: existing });
+      await adjReverseGl(tx, { businessId: req.user.business_id, userId: req.user.id, doc: existing, cost });
+      await tx.stockAdjustmentDocItem.deleteMany({ where: { docId: req.params.id } });
+      await tx.stockAdjustmentDoc.delete({ where: { id: req.params.id } });
+    });
+    res.json({ success: true, message: 'Adjustment deleted and stock restored.' });
+  } catch (err) { next(err); }
+});
+
 // ── Stock Transfers ───────────────────────────────────────────────────────────
 // The API speaks the reference language (pending / in_transit / completed); the
 // DB enum predates it (pending / dispatched / received). Stock leaves the SOURCE
@@ -248,6 +590,7 @@ async function trReverseEffects(tx, { businessId, userId, transfer, names }) {
 /** Lock the transfer row and load it with items — two concurrent edits/deletes
  *  must serialise, or both would reverse the same stock effects twice. */
 async function trLoad(tx, { businessId, transferId }) {
+  if (!UUID_RE.test(String(transferId))) throw trBad('Transfer not found.', 404);
   const locked = await tx.$queryRaw`
     SELECT id FROM stock_transfers WHERE id = ${transferId}::uuid AND business_id = ${businessId}::uuid FOR UPDATE`;
   if (!locked.length) throw trBad('Transfer not found.', 404);
@@ -283,6 +626,7 @@ stockRouter.post('/transfers', auth, requireRole('owner', 'manager'), validate(T
     });
     if (locs.length !== 2) return res.status(404).json({ title: 'Location not found', status: 404 });
 
+    items.forEach((i) => { i.product_id = String(i.product_id).toLowerCase(); });
     const transfer = await prisma.$transaction(async (tx) => {
       const names = await trAssertProducts(tx, req.user.business_id, items);
       const ref = (ref_no || '').trim() || `TRF-${Date.now()}`;
@@ -403,6 +747,7 @@ stockRouter.get('/transfers', auth, async (req, res, next) => {
 // ======= GET ONE TRANSFER =======
 stockRouter.get('/transfers/:id', auth, async (req, res, next) => {
   try {
+    if (!UUID_RE.test(req.params.id)) return res.status(404).json({ title: 'Transfer not found.', status: 404 });
     const transfer = await prisma.stockTransfer.findFirst({
       where: { id: req.params.id, businessId: req.user.business_id },
       include: TRANSFER_INCLUDE,

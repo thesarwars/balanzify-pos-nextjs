@@ -1,123 +1,150 @@
 'use client';
 // ─────────────────────────────────────────────────────────────────
-// Stock Adjustments — record loss / damage / expiry (normal or
-// abnormal), reducing stock. Plus a Tax Groups manager (combine
-// multiple tax rates). Wired through API.stockAdjustment + API.taxRate.
+// Stock Adjustments — the reference list: Date, Reference No,
+// Location, Adjustment type (Normal/Abnormal), Total Amount, Total
+// amount recovered, Reason, Added By, Actions. Saving an adjustment
+// REMOVES the quantities from stock; deleting restores them. Also
+// hosts the Tax Groups manager (combine multiple tax rates).
 // ─────────────────────────────────────────────────────────────────
 import React from 'react';
 import type { Theme } from '@/lib/theme';
 import { money, money0 } from '@/lib/theme';
-import { Btn, Badge, Panel, Modal, Field, TextField, SelectField, FormGrid, useToast } from '@/components/kit';
+import { Btn, Badge, Panel, Modal, TextField, useToast } from '@/components/kit';
 import { Topbar } from '@/components/shell';
 import { API } from '@/lib/api';
-import { todayLocal } from '@/lib/business-settings';
+import { ActionsMenu } from '../../products/components/list-table';
+import { ConfirmModal } from '../../purchase-orders/components/bits';
+import { LuEye, LuPencil, LuTrash2 } from 'react-icons/lu';
 
 const { useState: useStateAj, useEffect: useEffectAj } = React;
 
-export function Adjustments({ T }: { T: Theme }) {
+const TYPE_LABEL: any = { normal: 'Normal', abnormal: 'Abnormal' };
+
+export function AdjustmentsList({ T, flash, onAdd, onEdit }:
+  { T: Theme; flash?: React.MutableRefObject<string>; onAdd: () => void; onEdit: (a: any) => void }) {
   const [rows, setRows] = useStateAj<any[]>([]);
   const [loading, setLoading] = useStateAj(true);
-  const [locs, setLocs] = useStateAj<any[]>([]);
-  const [edit, setEdit] = useStateAj(false);
+  const [search, setSearch] = useStateAj('');
+  const [view, setView] = useStateAj<any>(null);
   const [taxMgr, setTaxMgr] = useStateAj(false);
   const [confirmDel, setConfirmDel] = useStateAj<any>(null);
+  const [menu, setMenu] = useStateAj<any>(null);
   const [show, node] = useToast();
 
   const reload = React.useCallback(() => { setLoading(true); API.stockAdjustment.list().then(setRows).catch(() => setRows([])).finally(() => setLoading(false)); }, []);
   useEffectAj(() => { reload(); }, [reload]);
-  useEffectAj(() => { API.location.list().then(setLocs).catch(() => {}); }, []);
+  useEffectAj(() => { if (flash?.current) { show(flash.current); flash.current = ''; } }, [flash, show]);
 
-  async function doDelete(a: any) { try { await API.stockAdjustment.remove(a.id); setConfirmDel(null); show('Adjustment deleted'); reload(); } catch (e: any) { setConfirmDel(null); show(e.message); } }
+  const needle = search.trim().toLowerCase();
+  const visible = needle
+    ? rows.filter((a: any) => [a.ref, a.location_name, a.reason, a.added_by, TYPE_LABEL[a.type]].some((v) => String(v || '').toLowerCase().includes(needle)))
+    : rows;
+
+  async function doDelete(a: any) {
+    try { await API.stockAdjustment.remove(a.id); setConfirmDel(null); show('Adjustment deleted — stock restored'); reload(); }
+    catch (e: any) { setConfirmDel(null); show(e.message); }
+  }
+
+  const th: React.CSSProperties = { textAlign: 'left', padding: '11px 16px', fontSize: 10, fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', color: T.inkSub, background: T.paperAlt, borderBottom: `1px solid ${T.line}`, whiteSpace: 'nowrap' };
+  const td: React.CSSProperties = { padding: '12px 16px', borderBottom: `1px solid ${T.line}`, fontSize: 12.5, color: T.ink, whiteSpace: 'nowrap' };
+
+  const actionsFor = (a: any) => [
+    { label: 'View', icon: <LuEye size={14} />, on: () => setView(a) },
+    { label: 'Edit', icon: <LuPencil size={14} />, on: () => onEdit(a) },
+    { sep: true },
+    { label: 'Delete', icon: <LuTrash2 size={14} />, danger: true, on: () => setConfirmDel(a) },
+  ];
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: T.paperAlt }}>
       <Topbar T={T} title="Stock Adjustments" subtitle={`${rows.length} adjustments`}
-        right={<><Btn T={T} kind="ghost" onClick={() => setTaxMgr(true)}>％ Tax Groups</Btn><Btn T={T} kind="accent" onClick={() => setEdit(true)}>+ New Adjustment</Btn></>} />
+        right={<><Btn T={T} kind="ghost" onClick={() => setTaxMgr(true)}>％ Tax Groups</Btn><Btn T={T} kind="accent" onClick={onAdd}>+ Add</Btn></>} />
       <div style={{ flex: 1, overflowY: 'auto', padding: 28 }}>
-        <div style={{ maxWidth: 1200, margin: '0 auto' }}>
-          <StatStrip T={T} stats={[['Adjustments', rows.length], ['Items adjusted', rows.reduce((s: number, r: any) => s + r.item_count, 0)], ['Value lost', money0(rows.reduce((s: number, r: any) => s + r.total_value, 0))]]} />
+        <div style={{ maxWidth: 1240, margin: '0 auto' }}>
+          <StatStrip T={T} stats={[
+            ['Adjustments', rows.length],
+            ['Abnormal', rows.filter((r: any) => r.type === 'abnormal').length],
+            ['Value written off', money0(rows.reduce((s: number, r: any) => s + (r.total_value || 0), 0))],
+            ['Recovered', money0(rows.reduce((s: number, r: any) => s + (r.total_recovered || 0), 0))],
+          ]} />
           <Panel T={T} pad={false}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead><tr>{([['Reference', 'l'], ['Location', 'l'], ['Type', 'l'], ['Reason', 'l'], ['Items', 'r'], ['Value', 'r'], ['Date', 'l'], ['', 'r']] as any[]).map(([h, a]: any, i: number) => (
-                <th key={i} style={{ textAlign: a === 'r' ? 'right' : 'left', padding: '11px 18px', fontSize: 10, fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', color: T.inkSub, background: T.paperAlt, borderBottom: `1px solid ${T.line}` } as React.CSSProperties}>{h}</th>
-              ))}</tr></thead>
-              <tbody>
-                {rows.map((a: any) => (
-                  <tr key={a.id} style={{ transition: 'background .12s' }} onMouseEnter={(e: any) => e.currentTarget.style.background = T.paperAlt} onMouseLeave={(e: any) => e.currentTarget.style.background = 'transparent'}>
-                    <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontFamily: T.fMono, fontSize: 12.5, fontWeight: 600, color: T.accent.text }}>{a.ref}</td>
-                    <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 12.5, color: T.inkSub }}>{a.location_name}</td>
-                    <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}` }}><Badge T={T} tone={a.type === 'abnormal' ? 'red' : 'gray'}>{a.type}</Badge></td>
-                    <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 12.5, color: T.ink }}>{a.reason || '—'}</td>
-                    <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right', fontFamily: T.fMono, fontSize: 12.5, color: T.inkSub } as React.CSSProperties}>{a.item_count}</td>
-                    <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right', fontFamily: T.fMono, fontSize: 13, fontWeight: 600, color: T.redText } as React.CSSProperties}>−{money(a.total_value)}</td>
-                    <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 12, color: T.inkSub }}>{a.date}</td>
-                    <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right' } as React.CSSProperties}><button onClick={() => setConfirmDel(a)} style={ajMini(T, true)}>Delete</button></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {loading && <div style={{ padding: 44, textAlign: 'center', fontFamily: T.fMono, fontSize: 12.5, color: T.inkSub } as React.CSSProperties}>GET /connector/api/stock-adjustment…</div>}
-            {!loading && rows.length === 0 && <div style={{ padding: 44, textAlign: 'center', color: T.inkMute, fontSize: 13 } as React.CSSProperties}>No adjustments recorded.</div>}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 16px', borderBottom: `1px solid ${T.line}` }}>
+              <span style={{ fontSize: 14.5, fontWeight: 700, color: T.ink, marginRight: 'auto' }}>All stock adjustments</span>
+              <div style={{ width: 200 }}><TextField T={T} value={search} onChange={setSearch} placeholder="Search …" /></div>
+            </div>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 940 }}>
+                <thead><tr>
+                  <th style={th}>Date</th><th style={th}>Reference No</th><th style={th}>Location</th><th style={th}>Adjustment type</th>
+                  <th style={{ ...th, textAlign: 'right' }}>Total Amount</th><th style={{ ...th, textAlign: 'right' }}>Total amount recovered</th>
+                  <th style={th}>Reason</th><th style={th}>Added By</th><th style={{ ...th, textAlign: 'right' }}>Action</th>
+                </tr></thead>
+                <tbody>
+                  {visible.map((a: any) => (
+                    <tr key={a.id} onMouseEnter={(e) => ((e.currentTarget as HTMLTableRowElement).style.background = T.paperAlt)} onMouseLeave={(e) => ((e.currentTarget as HTMLTableRowElement).style.background = 'transparent')}>
+                      <td style={{ ...td, color: T.inkSub }}>{a.date}</td>
+                      <td onClick={() => setView(a)} style={{ ...td, fontFamily: T.fMono, fontWeight: 600, color: T.accent.text, cursor: 'pointer' }}>{a.ref}</td>
+                      <td style={td}>{a.location_name}</td>
+                      <td style={td}><Badge T={T} tone={a.type === 'abnormal' ? 'red' : 'blue'}>{TYPE_LABEL[a.type] || a.type}</Badge></td>
+                      <td style={{ ...td, textAlign: 'right', fontFamily: T.fMono, fontWeight: 600 }}>{money(a.total_value || 0)}</td>
+                      <td style={{ ...td, textAlign: 'right', fontFamily: T.fMono }}>{money(a.total_recovered || 0)}</td>
+                      <td style={{ ...td, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', color: T.inkSub }} title={a.reason}>{a.reason || '—'}</td>
+                      <td style={{ ...td, color: T.inkSub }}>{a.added_by}</td>
+                      <td style={{ ...td, textAlign: 'right' }}>
+                        <ActionsMenu T={T} open={menu === a.id} onToggle={() => setMenu(menu === a.id ? null : a.id)} items={actionsFor(a)} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {loading && <div style={{ padding: 44, textAlign: 'center', fontFamily: T.fMono, fontSize: 12.5, color: T.inkSub }}>Loading adjustments…</div>}
+            {!loading && visible.length === 0 && <div style={{ padding: 44, textAlign: 'center', color: T.inkMute, fontSize: 13 }}>{needle ? 'No adjustments match that search.' : 'No adjustments yet.'}</div>}
           </Panel>
         </div>
       </div>
 
-      {edit && <AdjustmentEditor T={T} locs={locs} onClose={() => setEdit(false)} onSaved={() => { setEdit(false); show('Adjustment saved · stock updated'); reload(); }} />}
+      {view && <AdjustmentView T={T} adjustment={view} onClose={() => setView(null)} />}
       {taxMgr && <TaxGroupManager T={T} onClose={() => setTaxMgr(false)} toast={show} />}
       {confirmDel && (
-        <Modal T={T} title="Delete adjustment?" subtitle={confirmDel.ref} width={420} onClose={() => setConfirmDel(null)} onSave={() => doDelete(confirmDel)} saveLabel="Delete">
-          <div style={{ fontSize: 13.5, color: T.inkMid, lineHeight: 1.6 }}>Remove <b style={{ color: T.ink }}>{confirmDel.ref}</b>? Stock levels are not restored automatically.</div>
-        </Modal>
+        <ConfirmModal T={T} title={`Delete ${confirmDel.ref}?`}
+          body="Deleting this adjustment puts the written-off quantities back on the shelf and unwinds its ledger entries. This cannot be undone."
+          confirmLabel="Delete" confirmKind="danger"
+          onConfirm={() => doDelete(confirmDel)} onClose={() => setConfirmDel(null)} />
       )}
       {node}
     </div>
   );
 }
 
-function AdjustmentEditor({ T, locs, onClose, onSaved }: { T: Theme; locs: any[]; onClose: () => void; onSaved: () => void }) {
-  const [locId, setLocId] = useStateAj((locs[0] || {}).id || 1);
-  const [date, setDate] = useStateAj(todayLocal());
-  const [type, setType] = useStateAj('normal');
-  const [reason, setReason] = useStateAj('');
-  const [lines, setLines] = useStateAj<any[]>([{ product_id: '', qty: '' }]);
-  const [busy, setBusy] = useStateAj(false);
-  const [err, setErr] = useStateAj<string | null>(null);
-  // Load the real catalog (works in mock + real mode) so adjustments carry valid product ids.
-  const [allProducts, setAllProducts] = useStateAj<any[]>([]);
-  useEffectAj(() => { API.product.list().then((r: any) => setAllProducts(r.items || r || [])).catch(() => {}); }, []);
-  const products = allProducts.filter((p: any) => p.type !== 'combo' && p.enable_stock !== false);
-  const setLine = (i: number, k: string, v: any) => setLines((ls: any[]) => ls.map((l, j) => j === i ? { ...l, [k]: v } : l));
-
-  async function save() {
-    setBusy(true); setErr(null);
-    try { await API.stockAdjustment.create({ location_id: locId, date, type, reason, lines: lines.filter((l: any) => l.product_id && Number(l.qty) > 0).map((l: any) => ({ product_id: l.product_id, qty: Number(l.qty) })) }); onSaved(); }
-    catch (ex: any) { setErr(ex.message || 'Could not save the adjustment.'); } finally { setBusy(false); }
-  }
-
+function AdjustmentView({ T, adjustment, onClose }: { T: Theme; adjustment: any; onClose: () => void }) {
+  const [data, setData] = useStateAj<any>(null);
+  useEffectAj(() => { API.stockAdjustment.get(adjustment.id).then(setData).catch(() => setData(adjustment)); }, [adjustment.id]);
+  const a = data || adjustment;
   return (
-    <Modal T={T} title="New stock adjustment" subtitle="Record loss, damage or expiry" width={620} onClose={onClose}
-      footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Cancel</Btn><Btn T={T} kind="accent" onClick={save} disabled={busy}>{busy ? 'Saving…' : 'Save adjustment'}</Btn></>}>
-      <FormGrid>
-        <Field T={T} label="Location"><SelectField T={T} value={String(locId)} options={locs.map((l: any) => String(l.id))} onChange={(v: any) => setLocId(Number(v))} render={(v: any) => (locs.find((l: any) => String(l.id) === v) || {}).name} /></Field>
-        <Field T={T} label="Date"><TextField T={T} type="date" value={date} onChange={setDate} /></Field>
-        <Field T={T} label="Adjustment type"><SelectField T={T} value={type} options={['normal', 'abnormal']} onChange={setType} render={(v: any) => v === 'normal' ? 'Normal (expected loss)' : 'Abnormal (theft/damage)'} /></Field>
-        <Field T={T} label="Reason"><TextField T={T} value={reason} onChange={setReason} placeholder="e.g. Expired / breakage" /></Field>
-      </FormGrid>
-      <div style={{ marginTop: 18, marginBottom: 9, fontSize: 12, fontWeight: 700, color: T.inkSub }}>PRODUCTS TO REMOVE</div>
+    <Modal T={T} title={a.ref} subtitle={`${a.location_name} · ${a.date}`} width={540} onClose={onClose} footer={null}>
+      <div style={{ marginBottom: 14, display: 'flex', alignItems: 'center', gap: 10 }}>
+        <Badge T={T} tone={a.type === 'abnormal' ? 'red' : 'blue'}>{TYPE_LABEL[a.type] || a.type}</Badge>
+        <span style={{ fontSize: 12.5, color: T.inkSub }}>{a.item_count} items · {money(a.total_value || 0)}</span>
+      </div>
       <div style={{ border: `1px solid ${T.line}`, borderRadius: T.r, overflow: 'hidden' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 90px 34px', gap: 8, padding: '8px 12px', background: T.paperAlt, fontSize: 10, fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase', color: T.inkSub } as React.CSSProperties}><span>Product</span><span style={{ textAlign: 'right' } as React.CSSProperties}>Qty lost</span><span></span></div>
-        {lines.map((l: any, i: number) => (
-          <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 90px 34px', gap: 8, padding: '8px 12px', borderTop: `1px solid ${T.line}`, alignItems: 'center' }}>
-            <select value={l.product_id} onChange={(e: any) => setLine(i, 'product_id', e.target.value)} style={{ padding: '8px 10px', fontSize: 12.5, fontFamily: T.fBody, color: T.ink, background: T.paper, border: `1px solid ${T.line}`, borderRadius: 7, outline: 'none' }}>
-              <option value="">Select product…</option>{products.map((p: any) => <option key={p.id} value={p.id}>{p.name} ({p.stock} in stock)</option>)}
-            </select>
-            <input type="number" value={l.qty} onChange={(e: any) => setLine(i, 'qty', e.target.value)} placeholder="0" style={{ width: '100%', padding: '7px 9px', fontSize: 12.5, fontFamily: T.fMono, textAlign: 'right', color: T.ink, background: T.paper, border: `1px solid ${T.line}`, borderRadius: 7, outline: 'none', boxSizing: 'border-box' } as React.CSSProperties} />
-            <button onClick={() => setLines((ls: any[]) => ls.filter((_, j) => j !== i))} disabled={lines.length === 1} style={{ width: 28, height: 28, borderRadius: 6, border: `1px solid ${T.line}`, background: T.paper, color: T.redText, cursor: lines.length === 1 ? 'not-allowed' : 'pointer', fontSize: 12, opacity: lines.length === 1 ? 0.4 : 1 }}>✕</button>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 64px 90px 96px', padding: '8px 12px', background: T.paperAlt, fontSize: 10, fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase', color: T.inkSub }}>
+          <span>Product</span><span style={{ textAlign: 'right' }}>Qty</span><span style={{ textAlign: 'right' }}>Unit Price</span><span style={{ textAlign: 'right' }}>Subtotal</span>
+        </div>
+        {(a.lines || []).map((l: any, i: number) => (
+          <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 64px 90px 96px', padding: '9px 12px', borderTop: `1px solid ${T.line}`, fontSize: 12.5 }}>
+            <span style={{ fontWeight: 600, color: T.ink }}>{l.product_name || 'Product'}</span>
+            <span style={{ textAlign: 'right', fontFamily: T.fMono, color: T.inkSub }}>{l.qty}</span>
+            <span style={{ textAlign: 'right', fontFamily: T.fMono, color: T.inkSub }}>{money(l.unit_price || 0)}</span>
+            <span style={{ textAlign: 'right', fontFamily: T.fMono, color: T.ink }}>{money(l.qty * (l.unit_price || 0))}</span>
           </div>
         ))}
-        <div style={{ padding: '8px 12px', borderTop: `1px solid ${T.line}` }}><button onClick={() => setLines((ls: any[]) => [...ls, { product_id: '', qty: '' }])} style={{ background: 'none', border: 'none', color: T.accent.text, fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: T.fBody }}>+ Add product</button></div>
       </div>
-      {err && <div style={{ marginTop: 16, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}>⚠ {err}</div>}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end', marginTop: 12, fontSize: 12.5, color: T.inkMid }}>
+        <span>Total: <b style={{ fontFamily: T.fMono, color: T.ink }}>{money(a.total_value || 0)}</b></span>
+        <span>Recovered: <b style={{ fontFamily: T.fMono, color: T.ink }}>{money(a.total_recovered || 0)}</b></span>
+      </div>
+      {a.reason && <div style={{ marginTop: 12, padding: '9px 12px', background: T.paperAlt, borderRadius: 8, fontSize: 12.5, color: T.inkMid }}>{a.reason}</div>}
     </Modal>
   );
 }
@@ -164,8 +191,6 @@ function TaxGroupManager({ T, onClose, toast }: { T: Theme; onClose: () => void;
     </Modal>
   );
 }
-
-function ajMini(T: Theme, danger: boolean): React.CSSProperties { return { padding: '5px 11px', borderRadius: 7, cursor: 'pointer', fontFamily: T.fBody, fontSize: 12, fontWeight: 600, border: `1px solid ${danger ? T.redSoft : T.line}`, background: danger ? T.redSoft : T.paper, color: danger ? T.redText : T.inkMid }; }
 
 // ── File-local stat helper (mirrors prototype StatStrip) ─
 function StatStrip({ T, stats }: { T: Theme; stats: any[] }) {

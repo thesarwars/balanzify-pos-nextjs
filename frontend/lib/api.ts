@@ -2766,27 +2766,47 @@ function toRealPaymentAccountBody(f: any): any {
   };
 }
 
-// ── Stock adjustments (/api/v1/stock/adjustments) ─────────────────────────────
-// The backend stores one row per product; the screen models a multi-line
-// adjustment. We surface each backend row as a single-line adjustment and split
-// the screen's lines into N create calls. Backend types map to normal/abnormal.
-const ABNORMAL_ADJ_TYPES = new Set(['theft', 'damage', 'write_off']);
+// ── Stock adjustments (/api/v1/stock/adjustments/docs) ────────────────────────
+// Document-style: one header (location, Normal/Abnormal, reference, recovered
+// amount, reason) with priced lines. Saving removes the quantities from stock.
 function adaptRealAdjustment(a: any): any {
   if (!a) return a;
-  const q = Math.abs(Number(a.quantity || 0));
-  const cost = Number((a.product && a.product.costPrice) || 0);
+  const lines = Array.isArray(a.items) ? a.items.map((it: any) => ({
+    product_id: it.productId, product_name: (it.product && it.product.name) || '',
+    sku: (it.product && it.product.sku) || '',
+    qty: Number(it.quantity || 0),
+    unit_price: Number(it.unitPrice ?? 0),
+  })) : [];
   return {
     id: a.id,
-    ref: 'ADJ-' + String(a.id || '').replace(/-/g, '').slice(0, 6).toUpperCase(),
+    ref: a.referenceNo || '',
     location_id: a.locationId, location_name: (a.location && a.location.name) || '—',
-    type: ABNORMAL_ADJ_TYPES.has(a.type) ? 'abnormal' : 'normal',
+    type: a.type || 'normal',
     reason: a.reason || '',
-    item_count: q,
-    total_value: Number(a.totalValue || 0) || q * cost,
-    date: a.createdAt ? String(a.createdAt).slice(0, 10) : '',
-    status: a.status,
-    lines: [{ product_id: a.productId, product_name: (a.product && a.product.name) || '', qty: q }],
+    added_by: (a.createdBy && a.createdBy.name) || '—',
+    item_count: lines.reduce((n: number, l: any) => n + l.qty, 0),
+    total_value: Number(a.totalAmount ?? lines.reduce((s: number, l: any) => s + l.qty * l.unit_price, 0)),
+    total_recovered: Number(a.totalRecovered || 0),
+    // Local day, not the ISO string's UTC day.
+    date: (a.adjustmentDate || a.createdAt) ? new Date(a.adjustmentDate || a.createdAt).toLocaleDateString('en-CA') : '',
+    adjustment_date: a.adjustmentDate || a.createdAt || null,
+    lines,
     _real: a,
+  };
+}
+function toRealAdjustmentBody(b: any): any {
+  return {
+    location_id: b.location_id,
+    ref_no: b.ref_no || undefined,
+    adjustment_date: b.adjustment_date || undefined,
+    type: b.type || 'normal',
+    total_recovered: b.total_recovered != null ? Number(b.total_recovered) : undefined,
+    reason: b.reason || undefined,
+    items: (b.lines || []).map((l: any) => ({
+      product_id: l.product_id,
+      qty: Number(l.qty || 1),
+      unit_price: l.unit_price != null ? Number(l.unit_price) : undefined,
+    })),
   };
 }
 
@@ -3280,35 +3300,28 @@ const API: any = {
   stockAdjustment: {
     async list() {
       if (REAL_MODE) {
-        const res = await realReq('GET', '/stock/adjustments');
+        const res = await realReq('GET', '/stock/adjustments/docs');
         return (Array.isArray(res) ? res : (res.adjustments || res.data || [])).map(adaptRealAdjustment);
       }
       return (await transport('GET', '/connector/api/stock-adjustment')).data;
     },
+    async get(id: any) {
+      if (REAL_MODE) return adaptRealAdjustment(await realReq('GET', '/stock/adjustments/docs/' + id));
+      return (await transport('GET', '/connector/api/stock-adjustment/' + id)).data[0];
+    },
     async create(body: any) {
-      if (REAL_MODE) {
-        // One backend row per line; quantity is negative (stock reduction). Approve
-        // immediately so stock updates (matches the mock) — skipped silently if the
-        // user lacks the owner/manager role the approve step requires.
-        const beType = body.type === 'abnormal' ? 'damage' : 'loss';
-        let created = 0;
-        for (const l of (body.lines || [])) {
-          const adj = await realReq('POST', '/stock/adjustments', { body: {
-            product_id: l.product_id,
-            location_id: isUuid(body.location_id) ? body.location_id : undefined,
-            type: beType,
-            quantity: -Math.abs(Number(l.qty || 0)),
-            reason: body.reason || undefined,
-          }});
-          if (adj && adj.id) { try { await realReq('POST', '/stock/adjustments/' + adj.id + '/approve'); } catch (e) {} }
-          created++;
-        }
-        return { created };
-      }
+      if (REAL_MODE) return adaptRealAdjustment(await realReq('POST', '/stock/adjustments/docs', { body: toRealAdjustmentBody(body) }));
       return (await transport('POST', '/connector/api/stock-adjustment', { body })).data;
     },
+    /** Full document edit — the backend restores the old stock, unwinds its GL
+     *  and posts the new document from scratch. */
+    async update(id: any, body: any) {
+      if (REAL_MODE) return adaptRealAdjustment(await realReq('PUT', '/stock/adjustments/docs/' + id, { body: toRealAdjustmentBody(body) }));
+      throw new ApiError(501, 'Editing adjustments needs the live backend.');
+    },
+    /** Delete restores the goods to the shelf and mirrors the GL out. */
     async remove(id: any) {
-      if (REAL_MODE) throw new ApiError(501, 'Adjustments can’t be deleted (audit trail).');
+      if (REAL_MODE) return await realReq('DELETE', '/stock/adjustments/docs/' + id);
       return (await transport('DELETE', '/connector/api/stock-adjustment/' + id)).data;
     },
   },

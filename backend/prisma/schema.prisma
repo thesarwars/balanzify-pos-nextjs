@@ -523,6 +523,7 @@ model Business {
   products           Product[]
   stockMovements     StockMovement[]
   stockAdjustments   StockAdjustment[]
+  stockAdjustmentDocs StockAdjustmentDoc[]
   stockTransfers     StockTransfer[]
   stockCounts        StockCount[]
   suppliers          Supplier[]
@@ -1212,6 +1213,7 @@ model User {
   stockMovements           StockMovement[]
   stockAdjustmentsApproved StockAdjustment[]       @relation("approver")
   stockAdjustmentsCreated  StockAdjustment[]       @relation("creator")
+  stockAdjustmentDocs      StockAdjustmentDoc[]    @relation("adjustment_doc_creator")
   stockTransfersApproved   StockTransfer[]         @relation("transfer_approver")
   stockTransfersCreated    StockTransfer[]         @relation("transfer_creator")
   stockCountsApproved      StockCount[]            @relation("count_approver")
@@ -1378,6 +1380,7 @@ model Location {
   stockBatches       StockBatch[]
   stockMovements     StockMovement[]
   stockAdjustments   StockAdjustment[]
+  stockAdjustmentDocs StockAdjustmentDoc[]
   stockTransfersFrom StockTransfer[]     @relation("from_location")
   stockTransfersTo   StockTransfer[]     @relation("to_location")
   stockCounts        StockCount[]
@@ -1461,6 +1464,7 @@ model Product {
   stockBatches       StockBatch[]
   stockMovements     StockMovement[]
   stockAdjustments   StockAdjustment[]
+  stockAdjustmentDocItems StockAdjustmentDocItem[]
   stockTransferItems StockTransferItem[]
   stockCountItems    StockCountItem[]
   supplierProducts   SupplierProduct[]
@@ -1612,6 +1616,59 @@ model StockAdjustment {
   createdBy  User?    @relation("creator", fields: [createdById], references: [id])
 
   @@map("stock_adjustments")
+}
+
+
+enum AdjustmentDocType {
+  normal
+  abnormal
+}
+
+/// Document-style stock adjustment (the reference's Add Stock Adjustment): one
+/// header per event with priced lines. Quantities are REMOVED from stock at the
+/// location when the document is saved; deleting the document restores them.
+model StockAdjustmentDoc {
+  id             String            @id @default(uuid()) @db.Uuid
+  businessId     String            @map("business_id") @db.Uuid
+  // Unique PER BUSINESS: tenants hand-number adjustments independently.
+  referenceNo    String?           @map("reference_no") @db.VarChar(50)
+  locationId     String            @map("location_id") @db.Uuid
+  type           AdjustmentDocType @default(normal)
+  adjustmentDate DateTime?         @default(now()) @map("adjustment_date")
+  // Σ qty × unitPrice — the display value. GL posts at consumed FEFO cost.
+  totalAmount    Decimal           @default(0) @map("total_amount") @db.Decimal(12, 2)
+  // Money recovered against the loss (insurance, salvage sale) — nets the expense.
+  totalRecovered Decimal           @default(0) @map("total_recovered") @db.Decimal(12, 2)
+  reason         String?
+  createdById    String?           @map("created_by") @db.Uuid
+  createdAt      DateTime          @default(now()) @map("created_at")
+
+  business  Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  location  Location  @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  createdBy User?     @relation("adjustment_doc_creator", fields: [createdById], references: [id])
+  items     StockAdjustmentDocItem[]
+
+  @@unique([businessId, referenceNo])
+  @@index([businessId])
+  @@map("stock_adjustment_docs")
+}
+
+model StockAdjustmentDocItem {
+  id        String  @id @default(uuid()) @db.Uuid
+  docId     String  @map("doc_id") @db.Uuid
+  productId String  @map("product_id") @db.Uuid
+  quantity  Int
+  unitPrice Decimal @default(0) @map("unit_price") @db.Decimal(12, 2)
+  // What the write-off actually cost (FEFO layers). totalCost is the EXACT
+  // 2dp line amount summed into the posted loss — reversal mirrors it to the
+  // cent; unitCost is the per-unit quotient kept for display/layer valuation.
+  unitCost  Decimal @default(0) @map("unit_cost") @db.Decimal(12, 2)
+  totalCost Decimal @default(0) @map("total_cost") @db.Decimal(12, 2)
+
+  doc     StockAdjustmentDoc @relation(fields: [docId], references: [id], onDelete: Cascade)
+  product Product            @relation(fields: [productId], references: [id])
+
+  @@map("stock_adjustment_doc_items")
 }
 
 model StockTransfer {
