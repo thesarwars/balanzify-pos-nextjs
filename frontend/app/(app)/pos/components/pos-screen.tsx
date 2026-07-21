@@ -181,6 +181,8 @@ export function POS({ T, tweaks, editSaleId }: { T: any; tweaks: any; editSaleId
     return Math.round(base * groupMult * 100) / 100;
   };
   const stockOf = (p: any, varName?: any) => {
+    // "Manage Stock?" off — sells in any quantity; nothing may gate on level 0.
+    if (p.enable_stock === false) return Infinity;
     if (varName && p.variations) { const v = p.variations.find((v: any) => v.name === varName); return v ? v.stock : 0; }
     // Per-location stock when the backend supplied stockLevels (real mode);
     // demo products fall back to their flat total.

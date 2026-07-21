@@ -178,6 +178,15 @@ export function Sidebar({ T, screen, setScreen, collapsed, setCollapsed, onLogou
     return enabledMods.has(mod);
   };
   const groups = NAV.map((g) => ({ ...g, items: g.items.filter((it: any) => showItem(it.id)) })).filter((g) => g.items.length > 0);
+  // Nav entries are REAL links: middle-click / Cmd+click opens the page in a new
+  // tab natively. A plain click is intercepted and routed through setScreen so
+  // client-side navigation (and the unsaved-changes guard) still apply.
+  const hrefOf = (r: string) => (r.startsWith('/') ? r : '/' + r);
+  const navClick = (route: string) => (e: React.MouseEvent) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; // new tab/window
+    e.preventDefault();
+    setScreen(route);
+  };
   // Expand/collapse state for parent nav items with children. Undefined = follow
   // whether the active screen lives inside the group; a click overrides it.
   const [openGroups, setOpenGroups] = React.useState<Record<string, boolean>>({});
@@ -272,12 +281,12 @@ export function Sidebar({ T, screen, setScreen, collapsed, setCollapsed, onLogou
                     {!collapsed && isOpen && item.children.map((c: any) => {
                       const cActive = isChildActive(c);
                       return (
-                        <button key={c.key} onClick={() => setScreen(c.route)}
+                        <a key={c.key} href={hrefOf(c.route)} onClick={navClick(c.route)}
                           style={{
-                            width: 'calc(100% - 10px)', textAlign: 'left',
+                            width: 'calc(100% - 10px)', textAlign: 'left', boxSizing: 'border-box',
                             display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer',
                             padding: '7px 14px 7px 30px', margin: '1px 5px 1px 0',
-                            border: 'none', borderRadius: '0 9px 9px 0',
+                            border: 'none', borderRadius: '0 9px 9px 0', textDecoration: 'none',
                             borderLeft: `3px solid ${cActive ? S.activeRail : 'transparent'}`,
                             background: cActive ? S.activeBg : 'transparent',
                             color: cActive ? S.activeText : S.itemText,
@@ -290,7 +299,7 @@ export function Sidebar({ T, screen, setScreen, collapsed, setCollapsed, onLogou
                           <span style={{ fontSize: 6, width: 8, textAlign: 'center', flexShrink: 0, opacity: cActive ? 1 : 0.55 } as React.CSSProperties}>●</span>
                           {/* keyed by c.key, so the POS child keeps the 'pos' translation it had as a top-level item */}
                           <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{navLabel(locale, c.key, c.label)}</span>
-                        </button>
+                        </a>
                       );
                     })}
                   </div>
@@ -298,14 +307,14 @@ export function Sidebar({ T, screen, setScreen, collapsed, setCollapsed, onLogou
               }
               const active = screen === item.id;
               return (
-                <button key={item.id} onClick={() => setScreen(item.id)} title={collapsed ? item.label : undefined}
+                <a key={item.id} href={hrefOf(item.id)} onClick={navClick(item.id)} title={collapsed ? item.label : undefined}
                   style={{
-                    width: collapsed ? 'auto' : 'calc(100% - 10px)', textAlign: 'left',
+                    width: collapsed ? 'auto' : 'calc(100% - 10px)', textAlign: 'left', boxSizing: 'border-box',
                     display: 'flex', alignItems: 'center', gap: 11, cursor: 'pointer',
                     padding: collapsed ? '10px 0' : '9px 14px',
                     justifyContent: collapsed ? 'center' : 'flex-start',
                     margin: collapsed ? '2px 8px' : '1px 5px 1px 0',
-                    border: 'none', borderRadius: collapsed ? 10 : '0 9px 9px 0',
+                    border: 'none', borderRadius: collapsed ? 10 : '0 9px 9px 0', textDecoration: 'none',
                     borderLeft: `3px solid ${active ? S.activeRail : 'transparent'}`,
                     background: active ? S.activeBg : (item.highlight ? S.highlight : 'transparent'),
                     color: active ? S.activeText : S.itemText,
@@ -326,7 +335,7 @@ export function Sidebar({ T, screen, setScreen, collapsed, setCollapsed, onLogou
                   {!collapsed && item.soft && !item.badge && (
                     <span style={{ fontSize: 9, color: S.chev }}>›</span>
                   )}
-                </button>
+                </a>
               );
             })}
           </div>

@@ -221,6 +221,7 @@ async function resolveLines(tx, { businessId, items }) {
       costPrice: true,
       sellByUnit: true,
       packSize: true,
+      enableStock: true,
     },
   });
   const byId = new Map(products.map((p) => [p.id, p]));
@@ -270,6 +271,8 @@ async function resolveLines(tx, { businessId, items }) {
           ? Number(i.quantity) * p.packSize
           : Number(i.quantity),
       fallbackCost: parseFloat(p.costPrice) || 0,
+      // "Manage Stock?" off — sells in any quantity, touches no stock, no COGS.
+      trackStock: p.enableStock !== false,
     };
   });
 }
@@ -351,19 +354,24 @@ async function postFinal(
 
   // Cost each line on its own: the same product can appear twice and the second
   // occurrence may consume a different (dearer) cost layer than the first.
+  // Untracked lines ("Manage Stock?" off) consume nothing and carry zero cost —
+  // posting COGS against inventory the shelf never held would corrupt both.
   let cogs = 0;
   for (const line of lines) {
-    const { cogs: lineCogs, unitCost } = await consumeStock(tx, {
-      businessId,
-      userId,
-      saleId: sale.id,
-      locationId: sale.locationId,
-      productId: line.productId,
-      variantId: line.variantId,
-      stockQty: line.stockQty,
-      fallbackCost: line.fallbackCost,
-      productName: line.name,
-    });
+    const { cogs: lineCogs, unitCost } =
+      line.trackStock === false
+        ? { cogs: 0, unitCost: 0 }
+        : await consumeStock(tx, {
+            businessId,
+            userId,
+            saleId: sale.id,
+            locationId: sale.locationId,
+            productId: line.productId,
+            variantId: line.variantId,
+            stockQty: line.stockQty,
+            fallbackCost: line.fallbackCost,
+            productName: line.name,
+          });
     cogs = round2(cogs + lineCogs);
     await tx.saleItem.update({
       where: { id: line.saleItemId },
@@ -663,6 +671,9 @@ async function reverseSaleEffects(tx, { businessId, userId, sale, reason }) {
   // ── Goods back on the shelf, at the cost they left it ──────────────────────
   let cogs = 0;
   for (const it of sale.items) {
+    // Untracked products never left the shelf — putting them "back" would mint
+    // phantom stock, and their sale posted no COGS to reverse.
+    if (it.product && it.product.enableStock === false) continue;
     const stockQty =
       it.product && it.product.sellByUnit && it.product.packSize
         ? it.quantity * it.product.packSize
@@ -787,7 +798,7 @@ async function loadForMutation(tx, { businessId, saleId }) {
     include: {
       items: {
         include: {
-          product: { select: { name: true, costPrice: true, sellByUnit: true, packSize: true } },
+          product: { select: { name: true, costPrice: true, sellByUnit: true, packSize: true, enableStock: true } },
         },
       },
       expenses: true,
@@ -852,6 +863,8 @@ async function voidPosSale(tx, { businessId, userId, sale, reason }) {
   // ── Goods back on the shelf at the cost they left it ────────────────────────
   let cogs = 0;
   for (const it of sale.items) {
+    // Untracked products never came off the shelf — no restock, no COGS mirror.
+    if (it.product && it.product.enableStock === false) continue;
     const costPrice = round2(it.costPrice);
     cogs = round2(cogs + costPrice * it.quantity);
     await tx.$executeRaw`

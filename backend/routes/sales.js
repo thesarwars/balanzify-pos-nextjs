@@ -268,7 +268,7 @@ async function createSale(req) {
         // Load product
         const product = await tx.product.findUnique({
           where: { id: item.product_id },
-          select: { id: true, name: true, sellingPrice: true, costPrice: true, businessId: true, isSerialized: true, sellByUnit: true, unitPrice: true, packSize: true },
+          select: { id: true, name: true, sellingPrice: true, costPrice: true, businessId: true, isSerialized: true, sellByUnit: true, unitPrice: true, packSize: true, enableStock: true },
         });
         if (!product || product.businessId !== req.user.business_id) {
           throw Object.assign(new Error(`Product not found: ${item.product_id}`), { statusCode: 400 });
@@ -390,7 +390,12 @@ async function createSale(req) {
           }
         }
 
-        // Stock lock and deduction
+        // Stock lock and deduction — skipped entirely for untracked products
+        // ("Manage Stock?" off): services sell in any quantity, keep no levels,
+        // no movements and no cost layers, and carry zero COGS so the books
+        // never credit inventory that was never held.
+        let fifoUnitCost = 0;
+        if (product.enableStock !== false) {
         if (item.variant_id) {
           const stockRows = await tx.$queryRaw`
             SELECT quantity FROM stock_levels
@@ -442,7 +447,7 @@ async function createSale(req) {
           FOR UPDATE
         `;
 
-        let fifoUnitCost = parseFloat(product.costPrice); // fallback
+        fifoUnitCost = parseFloat(product.costPrice); // fallback
         if (layers.length) {
           let totalCost = 0, totalConsumed = 0;
           for (const layer of layers) {
@@ -478,6 +483,7 @@ async function createSale(req) {
             createdById:  req.user.id,
           },
         });
+        } // end tracked-stock block
 
         // Mark serial numbers sold (after stock deduction succeeds)
         if (product.isSerialized && item.serial_numbers?.length) {
@@ -1464,7 +1470,7 @@ router.post('/:id/refund', auth, requireRole('owner', 'manager'), validate(Refun
       select: {
         id: true, businessId: true, locationId: true, totalAmount: true, taxAmount: true,
         loyaltyPointsEarned: true, customerId: true,
-        items: { select: { id: true, productId: true, quantity: true, unitPrice: true, costPrice: true } },
+        items: { select: { id: true, productId: true, quantity: true, unitPrice: true, costPrice: true, product: { select: { enableStock: true } } } },
       },
     });
     if (!sale || sale.businessId !== req.user.business_id) {
@@ -1501,7 +1507,8 @@ router.post('/:id/refund', auth, requireRole('owner', 'manager'), validate(Refun
         quantity:     reqItem.quantity,
         unit_price:   parseFloat(si.unitPrice), // original price, not the client's
         cost_price:   parseFloat(si.costPrice || 0), // FIFO cost captured at sale
-        restock:      reqItem.restock !== false,
+        // Untracked products never held stock — returning one restocks nothing.
+        restock:      reqItem.restock !== false && si.product?.enableStock !== false,
       });
     }
 
