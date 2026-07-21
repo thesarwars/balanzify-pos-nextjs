@@ -752,6 +752,10 @@ router.post('/advance', auth, requireRole('owner', 'manager'), validate(HrAdvanc
         if (!acc) throw Object.assign(new Error('Account not found'), { status: 404 });
         method = String(acc.type || 'cash').toLowerCase().replace(/\s+/g, '_');
         await tx.paymentAccount.update({ where: { id: b.account_id }, data: { balance: { decrement: b.amount } } });
+        // Visible in Cash Flow — a balance must never mutate without a trace.
+        await tx.paymentAccountTransaction.create({
+          data: { businessId, accountId: b.account_id, type: 'withdrawal', amount: b.amount, note: `Salary advance — ${emp.fullName || emp.name || ''}`.trim(), createdById: req.user.id },
+        });
       }
       const adv = await tx.hrAdvance.create({
         data: { businessId, employeeId: emp.id, amount: b.amount, advanceDate: new Date(b.date || serverDate()), accountId: b.account_id || null, note: b.note || null, outstanding: b.amount },

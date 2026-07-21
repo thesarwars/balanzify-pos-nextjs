@@ -2796,17 +2796,31 @@ function toRealCouponBody(f: any): any {
 // ── Payment accounts (/api/v1/payment-accounts) ───────────────────────────────
 function adaptRealPaymentAccount(a: any): any {
   if (!a) return a;
+  // Account Type / Sub Type: a type with a parent is the SUB type; its parent
+  // is the type column. A top-level type fills the type column alone.
+  const at = a.accountType || null;
   return {
     id: a.id, name: a.name, type: a.type || 'Cash',
+    account_type_id: a.accountTypeId || '',
+    account_type_name: at ? (at.parent ? at.parent.name : at.name) : '',
+    account_sub_type_name: at && at.parent ? at.name : '',
     account_number: a.accountNumber || '',
-    balance: Number(a.balance || 0),
+    note: a.note || '',
+    balance: Number(a.computedBalance != null ? a.computedBalance : a.balance || 0),
+    opening_balance: Number(a.balance || 0),
+    is_active: a.isActive !== false,
+    added_by: (a.createdBy && a.createdBy.name) || '—',
     _real: a,
   };
 }
 function toRealPaymentAccountBody(f: any): any {
   return {
     name: f.name,
-    type: ['Cash', 'Bank', 'Mobile money', 'Other'].includes(f.type) ? f.type : 'Cash',
+    account_type_id: isUuid(f.account_type_id) ? f.account_type_id : undefined,
+    note: f.note || undefined,
+    // Only send the legacy kind when the caller actually chose one — an edit
+    // that omits it must keep the stored value, not reset to Cash.
+    ...(['Cash', 'Bank', 'Mobile money', 'Other'].includes(f.type) ? { type: f.type } : {}),
     account_number: f.account_number || undefined,
     balance: Number(f.balance || 0),
   };
@@ -4252,20 +4266,60 @@ const API: any = {
     },
   },
   paymentAccount: {
-    async list() {
+    async list(filters: any = {}) {
       if (REAL_MODE) {
-        const res = await realReq('GET', '/payment-accounts');
+        const query: any = {};
+        if (filters.status) query.status = filters.status;
+        if (filters.account_type_id) query.account_type_id = filters.account_type_id;
+        const res = await realReq('GET', '/payment-accounts', { query });
         return ((res && (res.accounts || res.data)) || []).map(adaptRealPaymentAccount);
       }
       return (await transport('GET', '/connector/api/payment-account')).data;
     },
+    /** Same list plus the unlinked-payments banner count. */
+    async listFull(filters: any = {}) {
+      const query: any = {};
+      if (filters.status) query.status = filters.status;
+      if (filters.account_type_id) query.account_type_id = filters.account_type_id;
+      const res = await realReq('GET', '/payment-accounts', { query });
+      return {
+        items: ((res && res.accounts) || []).map(adaptRealPaymentAccount),
+        unlinked: Number(res && res.unlinked_count) || 0,
+      };
+    },
+    // Legacy: the finance screen shows the fixed kind list.
     async types() {
       if (REAL_MODE) return ['Cash', 'Bank', 'Mobile money', 'Other'];
       return (await transport('GET', '/connector/api/account-type')).data;
     },
+    // User-defined account taxonomy (Account Types tab).
+    async accountTypes() {
+      const res = await realReq('GET', '/payment-accounts/types');
+      return ((res && res.types) || []).map((t: any) => ({
+        id: t.id, name: t.name, parent_id: t.parentId || '',
+        parent_name: (t.parent && t.parent.name) || '',
+        children: (t._count && t._count.children) || 0,
+        accounts: (t._count && t._count.accounts) || 0,
+      }));
+    },
+    async addAccountType(body: any) {
+      return await realReq('POST', '/payment-accounts/types', { body: { name: body.name, parent_id: isUuid(body.parent_id) ? body.parent_id : undefined } });
+    },
+    async updateAccountType(id: any, body: any) {
+      return await realReq('PUT', '/payment-accounts/types/' + id, { body: { name: body.name, parent_id: isUuid(body.parent_id) ? body.parent_id : undefined } });
+    },
+    async removeAccountType(id: any) {
+      return await realReq('DELETE', '/payment-accounts/types/' + id);
+    },
     async create(body: any) {
       if (REAL_MODE) return adaptRealPaymentAccount(await realReq('POST', '/payment-accounts', { body: toRealPaymentAccountBody(body) }));
       return (await transport('POST', '/connector/api/payment-account', { body })).data;
+    },
+    async update(id: any, body: any) {
+      return adaptRealPaymentAccount(await realReq('PUT', '/payment-accounts/' + id, { body: toRealPaymentAccountBody(body) }));
+    },
+    async reopen(id: any) {
+      return await realReq('POST', '/payment-accounts/' + id + '/reopen');
     },
     async remove(id: any) {
       if (REAL_MODE) return await realReq('DELETE', '/payment-accounts/' + id);
@@ -4275,9 +4329,37 @@ const API: any = {
       if (REAL_MODE) return await realReq('POST', '/payment-accounts/transfer', { body: { from_id: body.from_id, to_id: body.to_id, amount: Number(body.amount) } });
       return (await transport('POST', '/connector/api/payment-account/transfer', { body })).data;
     },
-    async deposit(id: any, amount: any) {
-      if (REAL_MODE) return adaptRealPaymentAccount(await realReq('POST', '/payment-accounts/' + id + '/deposit', { body: { amount: Number(amount) } }));
+    async deposit(id: any, amount: any, note?: string) {
+      if (REAL_MODE) return adaptRealPaymentAccount(await realReq('POST', '/payment-accounts/' + id + '/deposit', { body: { amount: Number(amount), note: note || undefined } }));
       return (await transport('POST', '/connector/api/payment-account/' + id + '/deposit', { body: { amount } })).data;
+    },
+    /** Every payment across sales / expenses / purchases, with account links. */
+    async report(filters: any = {}) {
+      const query: any = {};
+      for (const k of ['account_id', 'from', 'to']) if (filters[k]) query[k] = filters[k];
+      const res = await realReq('GET', '/payment-accounts/report', { query });
+      return { rows: (res && res.rows) || [], unlinked: Number(res && res.unlinked_count) || 0 };
+    },
+    async linkPayment(payment_type: string, payment_id: string, account_id: string | null) {
+      return await realReq('PUT', '/payment-accounts/link-payment', { body: { payment_type, payment_id, account_id: account_id || undefined } });
+    },
+    async balanceSheet(params: any = {}) {
+      const query: any = {};
+      if (params.location_id) query.location_id = params.location_id;
+      if (params.date) query.date = params.date;
+      return await realReq('GET', '/payment-accounts/balance-sheet', { query });
+    },
+    async trialBalance(params: any = {}) {
+      const query: any = {};
+      if (params.location_id) query.location_id = params.location_id;
+      if (params.date) query.date = params.date;
+      return await realReq('GET', '/payment-accounts/trial-balance', { query });
+    },
+    async cashFlow(params: any = {}) {
+      const query: any = {};
+      for (const k of ['account_id', 'from', 'to', 'type']) if (params[k]) query[k] = params[k];
+      const res = await realReq('GET', '/payment-accounts/cash-flow', { query });
+      return { rows: (res && res.rows) || [], totals: (res && res.totals) || { debit: 0, credit: 0 } };
     },
   },
   restaurant: {

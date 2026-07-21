@@ -99,7 +99,15 @@ export const NAV = [
   },
   {
     sect: 'Finance', items: [
-      { id: 'payment-accounts', label: 'Payment Accounts', icon: LuLandmark },
+      {
+        id: 'payment-accounts', label: 'Payment Accounts', icon: LuLandmark, children: [
+          { key: 'list-accounts',   activeId: 'payment-accounts', label: 'List Accounts', route: '/payment-accounts' },
+          { key: 'balance-sheet',   activeId: 'payment-accounts', activeParams: { 'balance-sheet': '1' }, label: 'Balance Sheet', route: '/payment-accounts?balance-sheet=1' },
+          { key: 'trial-balance',   activeId: 'payment-accounts', activeParams: { 'trial-balance': '1' }, label: 'Trial Balance', route: '/payment-accounts?trial-balance=1' },
+          { key: 'cash-flow',       activeId: 'payment-accounts', activeParams: { 'cash-flow': '1' }, label: 'Cash Flow', route: '/payment-accounts?cash-flow=1' },
+          { key: 'account-report',  activeId: 'payment-accounts', activeParams: { report: '1' }, label: 'Payment Account Report', route: '/payment-accounts?report=1' },
+        ],
+      },
       {
         id: 'expenses', label: 'Expenses', icon: LuBanknote, children: [
           { key: 'list-expenses',      activeId: 'expenses', label: 'List Expenses', route: '/expenses' },

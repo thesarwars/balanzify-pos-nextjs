@@ -856,9 +856,24 @@ const ExpenseCategorySchema = z.object({
 
 const PaymentAccountSchema = z.object({
   name:           shortStr(255),
-  type:           z.enum(['Cash', 'Bank', 'Mobile money', 'Other']).default('Cash'),
+  // No default: an EDIT that omits the legacy kind must keep the stored one,
+  // not silently reset it to Cash. Create fills 'Cash' in the route.
+  type:           z.enum(['Cash', 'Bank', 'Mobile money', 'Other']).optional(),
+  account_type_id: uuid.optional().nullable(),
   account_number: optStr(100),
-  balance:        money.default(0),
+  note:           optStr(1000),
+  balance:        money.default(0), // opening balance; ignored on edit
+});
+
+const PaymentAccountTypeSchema = z.object({
+  name: shortStr(255),
+  parent_id: uuid.optional().nullable(),
+});
+
+const LinkPaymentSchema = z.object({
+  payment_type: z.enum(['sell', 'expense', 'purchase', 'refund']),
+  payment_id: uuid,
+  account_id: uuid.optional().nullable(),
 });
 
 const AccountTransferSchema = z.object({
@@ -869,6 +884,7 @@ const AccountTransferSchema = z.object({
 
 const AccountDepositSchema = z.object({
   amount: money.refine(v => v > 0, 'Amount must be greater than 0'),
+  note: optStr(500),
 });
 
 const ProductVariantSchema = z.object({
@@ -1222,7 +1238,7 @@ module.exports = {
   CreateUserSchema, UpdateUserSchema,
   SettingsSchema, CategorySchema, LocationSchema, CustomerSchema,
   ExpenseSchema, ExpenseCategorySchema, ExpensePaymentSchema, ExpenseImportSchema,
-  PaymentAccountSchema, AccountTransferSchema, AccountDepositSchema,
+  PaymentAccountSchema, PaymentAccountTypeSchema, LinkPaymentSchema, AccountTransferSchema, AccountDepositSchema,
   BarcodeSettingSchema, ReceiptPrinterSchema,
   CustomerGroupSchema, UnitSchema, BrandSchema, VariationTemplateSchema, DiscountSchema,
   CommissionAgentSchema,

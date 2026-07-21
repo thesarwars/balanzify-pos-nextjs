@@ -599,6 +599,8 @@ model Business {
   wholesaleOrders    WholesaleOrder[]
   expenses           Expense[]
   expensePayments    ExpensePayment[]
+  paymentAccountTypes PaymentAccountType[]
+  paymentAccountTransactions PaymentAccountTransaction[]
   expenseCategories  ExpenseCategory[]
   paymentAccounts    PaymentAccount[]
   customerGroups     CustomerGroup[]
@@ -1231,18 +1233,66 @@ model PaymentAccount {
   id            String   @id @default(uuid()) @db.Uuid
   businessId    String   @map("business_id") @db.Uuid
   name          String   @db.VarChar(255)
+  // Legacy free-text kind; accountType below is the user-defined taxonomy.
   type          String   @default("Cash") @db.VarChar(30)
+  accountTypeId String?  @map("account_type_id") @db.Uuid
   accountNumber String?  @map("account_number") @db.VarChar(100)
+  note          String?
+  // Opening balance plus manual deposits/transfers. The LIVE balance adds the
+  // linked payment rows (sales in, expenses/purchases out) — computed in the API.
   balance       Decimal  @default(0) @db.Decimal(14, 2)
   isActive      Boolean  @default(true) @map("is_active")
+  createdById   String?  @map("created_by") @db.Uuid
   createdAt     DateTime @default(now()) @map("created_at")
 
-  business   Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  business    Business            @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  accountType PaymentAccountType? @relation(fields: [accountTypeId], references: [id], onDelete: SetNull)
+  createdBy   User?               @relation("payment_account_creator", fields: [createdById], references: [id])
   hrAdvances   HrAdvance[]
   salePayments SalePayment[]
+  poPayments   POPayment[]
+  refunds      Refund[]
+  transactions PaymentAccountTransaction[]
 
   expensePayments ExpensePayment[]
   @@map("payment_accounts")
+}
+
+/// User-defined account taxonomy, one level of nesting: a type with a parent is
+/// a sub-type (the reference's Account Type / Account Sub Type columns).
+model PaymentAccountType {
+  id         String   @id @default(uuid()) @db.Uuid
+  businessId String   @map("business_id") @db.Uuid
+  name       String   @db.VarChar(255)
+  parentId   String?  @map("parent_id") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  business Business             @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  parent   PaymentAccountType?  @relation("payment_account_type_parent", fields: [parentId], references: [id], onDelete: SetNull)
+  children PaymentAccountType[] @relation("payment_account_type_parent")
+  accounts PaymentAccount[]
+
+  @@unique([businessId, name])
+  @@map("payment_account_types")
+}
+
+/// Deposits and inter-account transfers — the explainable half of an account's
+/// balance (linked payment rows are the other half).
+model PaymentAccountTransaction {
+  id          String   @id @default(uuid()) @db.Uuid
+  businessId  String   @map("business_id") @db.Uuid
+  accountId   String   @map("account_id") @db.Uuid
+  type        String   @db.VarChar(20) // deposit | transfer_in | transfer_out
+  amount      Decimal  @db.Decimal(14, 2)
+  note        String?
+  createdById String?  @map("created_by") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  business Business       @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  account  PaymentAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId])
+  @@map("payment_account_transactions")
 }
 
 model User {
@@ -1293,6 +1343,7 @@ model User {
   refunds                  Refund[]
   expenses                 Expense[]
   expensesFor              Expense[]               @relation("expense_for_user")
+  paymentAccountsCreated   PaymentAccount[]        @relation("payment_account_creator")
   employeeRecords          Employee[]
   projectsOwned            Project[]               @relation("project_owner")
   projectsCreated          Project[]               @relation("project_creator")
@@ -2077,8 +2128,11 @@ model POPayment {
   createdById   String?  @map("created_by") @db.Uuid
   createdAt     DateTime @default(now()) @map("created_at")
 
-  purchaseOrder PurchaseOrder @relation(fields: [poId], references: [id], onDelete: Cascade)
-  createdBy     User?         @relation(fields: [createdById], references: [id])
+  paymentAccountId String? @map("payment_account_id") @db.Uuid
+
+  purchaseOrder  PurchaseOrder   @relation(fields: [poId], references: [id], onDelete: Cascade)
+  createdBy      User?           @relation(fields: [createdById], references: [id])
+  paymentAccount PaymentAccount? @relation(fields: [paymentAccountId], references: [id], onDelete: SetNull)
 
   @@map("po_payments")
 }
@@ -2418,12 +2472,15 @@ model Refund {
   totalRefunded Decimal  @map("total_refunded") @db.Decimal(12, 2)
   refundMethod  String?  @map("refund_method") @db.VarChar(30)
   restocked     Boolean  @default(true)
+  // Which account the refund cash left — linkable from the account report.
+  paymentAccountId String? @map("payment_account_id") @db.Uuid
   createdById   String?  @map("created_by") @db.Uuid
   createdAt     DateTime @default(now()) @map("created_at")
 
   business  Business     @relation(fields: [businessId], references: [id], onDelete: Cascade)
   sale      Sale         @relation(fields: [saleId], references: [id])
   createdBy User?        @relation(fields: [createdById], references: [id])
+  paymentAccount PaymentAccount? @relation(fields: [paymentAccountId], references: [id], onDelete: SetNull)
   items     RefundItem[]
 
   @@map("refunds")
