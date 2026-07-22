@@ -1981,9 +1981,11 @@ function toRealCategoryBody(vm: any): any {
   };
 }
 function adaptRealProduct(p: any): any {
+  // (custom_values attached below via the returned object spread)
   if (!p) return p;
   const catName = (p.category && p.category.name) || '';
   return {
+    custom_values: p.customValues || {},
     id: p.id,                                   // real uuid
     name: p.name,
     sku: p.sku || '',
@@ -2022,6 +2024,7 @@ function adaptRealProduct(p: any): any {
 // Editor view-model → backend ProductSchema (snake_case) body.
 function toRealProductBody(vm: any): any {
   return {
+    ...(vm.custom_values !== undefined ? { custom_values: vm.custom_values } : {}),
     name: vm.name,
     sku: vm.sku || undefined,
     barcode: vm.barcode || undefined,
@@ -2410,6 +2413,7 @@ function toRealTransferBody(b: any): any {
 function adaptRealCustomer(c: any): any {
   if (!c) return c;
   return {
+    custom_values: c.customValues || {},
     id: c.id, name: c.name, type: 'customer',
     contact_id: 'CUS-' + String(c.id || '').replace(/-/g, '').slice(0, 6).toUpperCase(),
     mobile: c.phone || '', email: c.email || '', address: c.address || '',
@@ -2428,6 +2432,7 @@ function adaptRealCustomer(c: any): any {
 }
 function toRealCustomerBody(f: any): any {
   return {
+    ...(f.custom_values !== undefined ? { custom_values: f.custom_values } : {}),
     name: f.name,
     phone: f.mobile || undefined,
     email: f.email || undefined,
@@ -4264,6 +4269,23 @@ const API: any = {
       if (REAL_MODE) return await realReq('DELETE', '/expenses/' + id);
       return (await transport('DELETE', '/connector/api/expense/' + id)).data;
     },
+  },
+  sms: {
+    async get() { const r = await realReq('GET', '/settings/sms'); return (r && r.config) || {}; },
+    async save(cfg: any) { const r = await realReq('PUT', '/settings/sms', { body: cfg }); return (r && r.config) || {}; },
+    async test(to: string) { return await realReq('POST', '/settings/sms/test', { body: { to } }); },
+  },
+  customField: {
+    async list(entity?: string) {
+      const r = await realReq('GET', '/settings/custom-fields', { query: entity ? { entity } : undefined });
+      return ((r && r.fields) || []).map((f: any) => ({
+        id: f.id, entity: f.entity, label: f.label, field_type: f.fieldType,
+        options: f.options || [], required: !!f.required, sort_order: f.sortOrder || 0, is_active: f.isActive !== false,
+      }));
+    },
+    async create(b: any) { return await realReq('POST', '/settings/custom-fields', { body: b }); },
+    async update(id: string, b: any) { return await realReq('PUT', '/settings/custom-fields/' + id, { body: b }); },
+    async remove(id: string) { return await realReq('DELETE', '/settings/custom-fields/' + id); },
   },
   paymentAccount: {
     async list(filters: any = {}) {

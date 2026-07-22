@@ -153,6 +153,8 @@ export function Products({ T }: { T: any }) {
     const byId = id ? refs.units.find((u: any) => String(u.id) === String(id)) : null;
     return (byId || refs.units[0] || {}).short_name || 'Pc(s)';
   };
+  const [productDefs, setProductDefs] = useStatePr<any[]>([]);
+  React.useEffect(() => { API.customField.list('product').then(setProductDefs).catch(() => {}); }, []);
   const blankForm = () => ({
     // Business Settings seed the new-product defaults.
     type: 'single', name: '', sku: '', sku_prefix: getSetting<string>('sku_prefix', '') || '', cat: '',
@@ -163,7 +165,7 @@ export function Products({ T }: { T: any }) {
     sw: SWATCHES[Math.floor(Math.random() * SWATCHES.length)], img: null, _imgFile: null,
     barcode: '', barcode_type: 'C128', weight: '', prep_time_minutes: '',
     is_serialized: false, selling_price_tax_type: 'exclusive',
-    location_ids: [], description: '', brochure_url: '', brochure_key: '',
+    location_ids: [], description: '', brochure_url: '', brochure_key: '', custom_values: {},
   });
   function openNew() {
     setEditing(null); setFormErr(null);
@@ -173,6 +175,7 @@ export function Products({ T }: { T: any }) {
   async function openEdit(p: any) {
     setEditing(p); setFormErr(null);
     setForm({
+      custom_values: p.custom_values || {},
       type: p.type || 'single', name: p.name, sku: p.sku, sku_prefix: '', cat: p.cat,
       unit: p.unit, brand_id: p.brand_id || '', tax_id: p.tax_id || 0,
       alert_quantity: p.alert_quantity ? String(p.alert_quantity) : '',
@@ -565,6 +568,17 @@ export function Products({ T }: { T: any }) {
                 style={{ width: '100%', padding: '10px 13px', fontSize: 13.5, fontFamily: T.fBody, color: T.ink, background: T.paper, border: `1.5px solid ${T.line}`, borderRadius: T.r, outline: 'none', resize: 'vertical', boxSizing: 'border-box' }} />
             </Field>
 
+            {productDefs.filter((d: any) => d.is_active).map((d: any) => (
+              <Field key={d.id} T={T} label={d.label + (d.required ? ' *' : '')}>
+                {d.field_type === 'select'
+                  ? <SelectField T={T} value={((form as any).custom_values || {})[d.id] || ''} options={['', ...(d.options || [])]}
+                      onChange={(v: any) => setForm((fm: any) => ({ ...fm, custom_values: { ...(fm.custom_values || {}), [d.id]: v } }))}
+                      render={(v: any) => v === '' ? '—' : v} />
+                  : <TextField T={T} type={d.field_type === 'number' ? 'number' : d.field_type === 'date' ? 'date' : 'text'}
+                      value={((form as any).custom_values || {})[d.id] || ''}
+                      onChange={(v: any) => setForm((fm: any) => ({ ...fm, custom_values: { ...(fm.custom_values || {}), [d.id]: v } }))} />}
+              </Field>
+            ))}
             <Field T={T} label="Product brochure" hint="PDF, CSV, ZIP, DOC, DOCX or image · up to 5 MB" full>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                 <input ref={brochureRef} type="file" accept=".pdf,.csv,.zip,.doc,.docx,.jpeg,.jpg,.png" onChange={onPickBrochure} style={{ display: 'none' }} />

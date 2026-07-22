@@ -131,10 +131,13 @@ function ContactEditor({ T, contact, groups, onClose, onSaved, toast }: { T: The
     address: contact.address || '', tax_number: contact.tax_number || '',
     customer_group_id: contact.customer_group_id ?? 1, pay_term_number: contact.pay_term_number || '', pay_term_type: contact.pay_term_type || 'days',
     credit_limit: contact.credit_limit ?? (editing ? '' : (getSetting('default_credit_limit', '') ?? '')), opening_balance: contact.opening_balance || '',
+    custom_values: contact.custom_values || {},
     contact_kind: contact.contact_kind || (contact.type === 'supplier' ? 'business' : 'individual'),
     assigned_to_id: contact.assigned_to_id || '',
   });
   const [more, setMore] = useStateC(editing && (contact.credit_limit != null || contact.opening_balance));
+  const [customDefs, setCustomDefs] = useStateC<any[]>([]);
+  React.useEffect(() => { API.customField.list('contact').then(setCustomDefs).catch(() => {}); }, []);
   const [busy, setBusy] = useStateC(false);
   const [err, setErr] = useStateC<string | null>(null);
   const [team, setTeam] = useStateC<any[]>([]);
@@ -196,6 +199,17 @@ function ContactEditor({ T, contact, groups, onClose, onSaved, toast }: { T: The
               </div>
             </Field>
             {isCust && <Field T={T} label="Credit limit"><TextField T={T} type="number" value={f.credit_limit} onChange={v => set('credit_limit', v)} placeholder="Blank = no limit" /></Field>}
+            {customDefs.filter((d: any) => d.is_active).map((d: any) => (
+              <Field key={d.id} T={T} label={d.label + (d.required ? ' *' : '')}>
+                {d.field_type === 'select'
+                  ? <SelectField T={T} value={(f.custom_values || {})[d.id] || ''} options={['', ...(d.options || [])]}
+                      onChange={(v: any) => set('custom_values', { ...(f.custom_values || {}), [d.id]: v })}
+                      render={(v: any) => v === '' ? '—' : v} />
+                  : <TextField T={T} type={d.field_type === 'number' ? 'number' : d.field_type === 'date' ? 'date' : 'text'}
+                      value={(f.custom_values || {})[d.id] || ''}
+                      onChange={(v: any) => set('custom_values', { ...(f.custom_values || {}), [d.id]: v })} />}
+              </Field>
+            ))}
             <Field T={T} label="Opening balance"><TextField T={T} type="number" value={f.opening_balance} onChange={v => set('opening_balance', v)} placeholder="0.00" /></Field>
           </FormGrid>
           <div style={{ fontSize: 11, color: T.inkMute, marginTop: 8, lineHeight: 1.5 }}>{isCust ? 'Opening balance = amount this customer already owes you. Credit limit blank means unlimited credit.' : 'Opening balance = amount you already owe this supplier.'}</div>

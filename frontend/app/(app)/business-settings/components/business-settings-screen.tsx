@@ -70,7 +70,7 @@ const SHORTCUTS: [string, string, string?][] = [
   ['finalize_payment', 'Finalize Payment'], ['add_new_product', 'Add new product'],
 ];
 
-const TABS = [['business', 'Business'], ['tax', 'Tax'], ['product', 'Product'], ['contact', 'Contact'], ['sale', 'Sale'], ['pos', 'POS'], ['display', 'Display Screen'], ['purchases', 'Purchases'], ['payment', 'Payment'], ['dashboard', 'Dashboard'], ['system', 'System']];
+const TABS = [['business', 'Business'], ['tax', 'Tax'], ['product', 'Product'], ['contact', 'Contact'], ['sale', 'Sale'], ['pos', 'POS'], ['display', 'Display Screen'], ['purchases', 'Purchases'], ['payment', 'Payment'], ['dashboard', 'Dashboard'], ['system', 'System'], ['sms', 'SMS Settings'], ['custom-fields', 'Custom Fields']];
 
 export function BusinessSettings({ T }: { T: any }) {
   const [tab, setTab] = useState('business');
@@ -521,6 +521,9 @@ export function BusinessSettings({ T }: { T: any }) {
                   </div>
                 )}
 
+                {tab === 'sms' && <SmsTab T={T} toast={show} />}
+                {tab === 'custom-fields' && <CustomFieldsTab T={T} toast={show} />}
+
                 {err && <div style={{ marginTop: 18, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5, fontWeight: 500 }}>⚠ {err}</div>}
               </>
             )}
@@ -530,6 +533,154 @@ export function BusinessSettings({ T }: { T: any }) {
       {node}
     </div>
   );
+}
+
+// SMS settings — driver presets first (Africa's Talking, Twilio), generic HTTP
+// as the escape hatch. Secrets are write-only: the server returns *_set flags.
+function SmsTab({ T, toast }: { T: any; toast: (m: string) => void }) {
+  const [c, setC] = React.useState<any>({ driver: 'africastalking' });
+  const [busy, setBusy] = React.useState(false);
+  const [testTo, setTestTo] = React.useState('');
+  const [err, setErr] = React.useState<string | null>(null);
+  React.useEffect(() => { API.sms.get().then((cfg: any) => setC((p: any) => ({ ...p, ...cfg }))).catch(() => {}); }, []);
+  const set = (k: string, v: any) => setC((p: any) => ({ ...p, [k]: v }));
+  async function save(): Promise<boolean> {
+    setBusy(true); setErr(null);
+    try { const cfg = await API.sms.save(c); setC((p: any) => ({ ...p, ...cfg, at_api_key: '', twilio_auth_token: '' })); toast('SMS settings saved'); return true; }
+    catch (e: any) { setErr(e.message); return false; }
+    finally { setBusy(false); }
+  }
+  async function test() {
+    if (!testTo.trim()) { setErr('Enter the number to send the test to.'); return; }
+    setBusy(true); setErr(null);
+    try { if (await save()) { await API.sms.test(testTo.trim()); toast('Test SMS sent'); } }
+    catch (e: any) { setErr(e.message); }
+    finally { setBusy(false); }
+  }
+  const secretHint = (flag: string) => c[flag] ? 'Configured — leave blank to keep' : 'Not set yet';
+  return (
+    <div>
+      <FormGrid cols={3}>
+        <Field T={T} label="SMS Service">
+          <SelectField T={T} value={c.driver || 'africastalking'} options={['africastalking', 'twilio', 'custom']}
+            onChange={(v: any) => set('driver', v)}
+            render={(v: any) => ({ africastalking: "Africa's Talking", twilio: 'Twilio', custom: 'Other (Custom HTTP)' } as any)[v]} />
+        </Field>
+        <Field T={T} label="Sender ID / From" hint="Your approved sender name or number"><TextField T={T} value={c.sender_id || ''} onChange={(v: any) => set('sender_id', v)} /></Field>
+      </FormGrid>
+      {c.driver === 'africastalking' && (
+        <FormGrid cols={2} style={{ marginTop: 10 }}>
+          <Field T={T} label="Username" hint="'sandbox' while testing"><TextField T={T} value={c.at_username || ''} onChange={(v: any) => set('at_username', v)} /></Field>
+          <Field T={T} label="API Key" hint={secretHint('at_api_key_set')}><TextField T={T} type="password" value={c.at_api_key || ''} onChange={(v: any) => set('at_api_key', v)} /></Field>
+        </FormGrid>
+      )}
+      {c.driver === 'twilio' && (
+        <FormGrid cols={2} style={{ marginTop: 10 }}>
+          <Field T={T} label="Account SID"><TextField T={T} value={c.twilio_sid || ''} onChange={(v: any) => set('twilio_sid', v)} /></Field>
+          <Field T={T} label="Auth Token" hint={secretHint('twilio_auth_token_set')}><TextField T={T} type="password" value={c.twilio_auth_token || ''} onChange={(v: any) => set('twilio_auth_token', v)} /></Field>
+        </FormGrid>
+      )}
+      {c.driver === 'custom' && (
+        <FormGrid cols={3} style={{ marginTop: 10 }}>
+          <Field T={T} label="URL"><TextField T={T} value={c.custom_url || ''} onChange={(v: any) => set('custom_url', v)} placeholder="https://…" /></Field>
+          <Field T={T} label="Request Method"><SelectField T={T} value={c.custom_method || 'POST'} options={['POST', 'GET']} onChange={(v: any) => set('custom_method', v)} /></Field>
+          <Field T={T} label="Data Parameter Type"><SelectField T={T} value={c.custom_body_type || 'form'} options={['form', 'json']} onChange={(v: any) => set('custom_body_type', v)} render={(v: any) => v === 'form' ? 'Form Data' : 'JSON'} /></Field>
+          <Field T={T} label="SEND TO parameter name"><TextField T={T} value={c.custom_to_param || 'to'} onChange={(v: any) => set('custom_to_param', v)} /></Field>
+          <Field T={T} label="MESSAGE parameter name"><TextField T={T} value={c.custom_msg_param || 'text'} onChange={(v: any) => set('custom_msg_param', v)} /></Field>
+          <Field T={T} label="Extra headers (JSON)" hint='e.g. {"Authorization":"Bearer …"}'><TextField T={T} value={c.custom_headers || ''} onChange={(v: any) => set('custom_headers', v)} /></Field>
+        </FormGrid>
+      )}
+      <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', marginTop: 16, flexWrap: 'wrap' }}>
+        <Btn T={T} kind="accent" onClick={save} disabled={busy}>{busy ? 'Saving…' : 'Save SMS settings'}</Btn>
+        <div style={{ width: 180 }}><Field T={T} label="Test number"><TextField T={T} value={testTo} onChange={setTestTo} placeholder="+2526…" /></Field></div>
+        <Btn T={T} kind="ghost" onClick={test} disabled={busy}>Send test SMS</Btn>
+      </div>
+      {err && <div style={{ marginTop: 12, padding: '9px 12px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}>{err}</div>}
+    </div>
+  );
+}
+
+// Custom fields — unlimited, table-driven, per entity.
+function CustomFieldsTab({ T, toast }: { T: any; toast: (m: string) => void }) {
+  const [entity, setEntity] = React.useState('contact');
+  const [fields, setFields] = React.useState<any[]>([]);
+  const [edit, setEdit] = React.useState<any>(null); // {} = new
+  const [busy, setBusy] = React.useState(false);
+  const reload = React.useCallback(() => { API.customField.list(entity).then(setFields).catch(() => setFields([])); }, [entity]);
+  React.useEffect(() => { reload(); }, [reload]);
+  async function saveField() {
+    if (!edit.label?.trim()) return;
+    setBusy(true);
+    const body = {
+      entity, label: edit.label.trim(), field_type: edit.field_type || 'text',
+      options: edit.field_type === 'select' ? String(edit.options_text || '').split(',').map((x: string) => x.trim()).filter(Boolean) : undefined,
+      required: !!edit.required,
+      sort_order: edit.sort_order != null ? Number(edit.sort_order) : fields.length,
+    };
+    try {
+      if (edit.id) await API.customField.update(edit.id, body); else await API.customField.create(body);
+      setEdit(null); toast('Field saved'); reload();
+    } catch (e: any) { toast(e.message); } finally { setBusy(false); }
+  }
+  async function move(f: any, dir: number) {
+    const idx = fields.findIndex((x) => x.id === f.id);
+    const other = fields[idx + dir];
+    if (!other) return;
+    await API.customField.update(f.id, { sort_order: other.sort_order }).catch(() => {});
+    await API.customField.update(other.id, { sort_order: f.sort_order }).catch(() => {});
+    reload();
+  }
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', marginBottom: 14 }}>
+        <div style={{ width: 190 }}>
+          <Field T={T} label="Entity">
+            <SelectField T={T} value={entity} options={['contact', 'product']} onChange={setEntity}
+              render={(v: any) => v === 'contact' ? 'Contacts' : 'Products'} />
+          </Field>
+        </div>
+        <Btn T={T} kind="accent" onClick={() => setEdit({ field_type: 'text' })}>+ Add field</Btn>
+      </div>
+      <div style={{ border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+        {fields.map((f, i) => (
+          <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 13px', borderBottom: `1px solid ${T.line}`, opacity: f.is_active ? 1 : 0.5 }}>
+            <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: T.ink }}>{f.label}{f.required && <span style={{ color: T.redText }}> *</span>}</span>
+            <span style={{ fontSize: 11.5, color: T.inkSub, fontFamily: T.fMono }}>{f.field_type}{f.field_type === 'select' ? ` (${(f.options || []).length})` : ''}</span>
+            <button onClick={() => move(f, -1)} disabled={i === 0} style={cfMini(T)}>↑</button>
+            <button onClick={() => move(f, 1)} disabled={i === fields.length - 1} style={cfMini(T)}>↓</button>
+            <button onClick={() => setEdit({ ...f, options_text: (f.options || []).join(', ') })} style={cfMini(T)}>Edit</button>
+            <button onClick={async () => { await API.customField.update(f.id, { is_active: !f.is_active }).catch(() => {}); reload(); }} style={cfMini(T)}>{f.is_active ? 'Disable' : 'Enable'}</button>
+            <button onClick={async () => { await API.customField.remove(f.id).catch((e: any) => toast(e.message)); reload(); }} style={{ ...cfMini(T), color: T.redText }}>Delete</button>
+          </div>
+        ))}
+        {fields.length === 0 && <div style={{ padding: 26, textAlign: 'center', fontSize: 12.5, color: T.inkMute }}>No custom fields for {entity}s yet — add as many as you need.</div>}
+      </div>
+      {edit && (
+        <div style={{ marginTop: 14, padding: 14, border: `1px solid ${T.line}`, borderRadius: 10, background: T.paperAlt }}>
+          <FormGrid cols={3}>
+            <Field T={T} label="Label *"><TextField T={T} value={edit.label || ''} onChange={(v: any) => setEdit({ ...edit, label: v })} /></Field>
+            <Field T={T} label="Field type">
+              <SelectField T={T} value={edit.field_type || 'text'} options={['text', 'number', 'date', 'select']}
+                onChange={(v: any) => setEdit({ ...edit, field_type: v })} render={(v: any) => v[0].toUpperCase() + v.slice(1)} />
+            </Field>
+            {edit.field_type === 'select' && (
+              <Field T={T} label="Options" hint="Comma separated"><TextField T={T} value={edit.options_text || ''} onChange={(v: any) => setEdit({ ...edit, options_text: v })} /></Field>
+            )}
+          </FormGrid>
+          <label style={{ display: 'inline-flex', gap: 8, alignItems: 'center', marginTop: 8, fontSize: 12.5, color: T.inkMid, cursor: 'pointer' }}>
+            <input type="checkbox" checked={!!edit.required} onChange={(e) => setEdit({ ...edit, required: e.target.checked })} /> Required
+          </label>
+          <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+            <Btn T={T} kind="accent" onClick={saveField} disabled={busy}>{busy ? 'Saving…' : edit.id ? 'Update field' : 'Add field'}</Btn>
+            <Btn T={T} kind="ghost" onClick={() => setEdit(null)}>Cancel</Btn>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+function cfMini(T: any): React.CSSProperties {
+  return { padding: '4px 9px', borderRadius: 6, border: `1px solid ${T.line}`, background: T.paper, color: T.inkMid, cursor: 'pointer', fontFamily: T.fBody, fontSize: 11.5, fontWeight: 600 };
 }
 
 // A hotkey recorder: focus it and PRESS the combination — typing strings is

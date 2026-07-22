@@ -45,6 +45,7 @@ const VerifyMfaSchema = z.object({
 
 // ── Products ─────────────────────────────────────────────────────────────────
 const ProductSchema = z.object({
+  custom_values: z.record(z.string().max(64), z.string().max(500)).optional().nullable(),
   name: shortStr(255),
   sku: optStr(100),
   barcode: optStr(100),
@@ -746,6 +747,7 @@ const LocationSchema = z.object({
 });
 
 const CustomerSchema = z.object({
+  custom_values: z.record(z.string().max(64), z.string().max(500)).optional().nullable(),
   name: shortStr(255),
   phone,
   whatsapp: phone,

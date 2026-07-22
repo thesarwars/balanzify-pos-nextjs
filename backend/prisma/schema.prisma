@@ -511,7 +511,10 @@ model Business {
   taxNumber     String?  @map("tax_number") @db.VarChar(100)
   serviceChargePct Decimal? @map("service_charge_pct") @db.Decimal(6, 4) // accepts 10 or 0.10
   enforceRxOnSale Boolean @default(false) @map("enforce_rx_on_sale") // pharmacy: block Rx-only drugs at POS without a valid prescription
-  settings      Json?    @map("settings")  // business-settings preference bag (start date, precisions, prefixes, product toggles, stock method, tax names, date/time format, etc.)
+  settings      Json?    @map("settings")
+  // SMS driver config — SECRETS live here, never in `settings` (which every
+  // authenticated browser receives). Read/written only by the redacting routes.
+  smsConfig     Json?    @map("sms_config")  // business-settings preference bag (start date, precisions, prefixes, product toggles, stock method, tax names, date/time format, etc.)
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @default(now()) @updatedAt @map("updated_at")
 
@@ -599,6 +602,8 @@ model Business {
   wholesaleOrders    WholesaleOrder[]
   expenses           Expense[]
   expensePayments    ExpensePayment[]
+  smsLogs            SmsLog[]
+  customFieldDefs    CustomFieldDef[]
   paymentAccountTypes PaymentAccountType[]
   paymentAccountTransactions PaymentAccountTransaction[]
   expenseCategories  ExpenseCategory[]
@@ -1519,6 +1524,7 @@ model Location {
 }
 
 model Product {
+  customValues Json? @map("custom_values")
   id                 String   @id @default(uuid()) @db.Uuid
   businessId         String   @map("business_id") @db.Uuid
   categoryId         String?  @map("category_id") @db.Uuid
@@ -1780,6 +1786,45 @@ model StockAdjustmentDocItem {
   product Product            @relation(fields: [productId], references: [id])
 
   @@map("stock_adjustment_doc_items")
+}
+
+
+/// One row per outbound SMS attempt — the audit trail for the SMS engine.
+model SmsLog {
+  id          String   @id @default(uuid()) @db.Uuid
+  businessId  String   @map("business_id") @db.Uuid
+  to          String   @db.VarChar(30)
+  message     String
+  provider    String   @db.VarChar(20)
+  status      String   @db.VarChar(10) // sent | failed
+  error       String?
+  createdById String?  @map("created_by") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([businessId, createdAt])
+  @@map("sms_logs")
+}
+
+/// Unlimited per-entity custom fields; values live on the entity rows as
+/// JSONB keyed by this definition's id.
+model CustomFieldDef {
+  id         String   @id @default(uuid()) @db.Uuid
+  businessId String   @map("business_id") @db.Uuid
+  entity     String   @db.VarChar(20) // contact | product
+  label      String   @db.VarChar(100)
+  fieldType  String   @default("text") @map("field_type") @db.VarChar(10) // text | number | date | select
+  options    Json?
+  required   Boolean  @default(false)
+  sortOrder  Int      @default(0) @map("sort_order")
+  isActive   Boolean  @default(true) @map("is_active")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([businessId, entity])
+  @@map("custom_field_defs")
 }
 
 model StockTransfer {
@@ -2182,6 +2227,7 @@ model SupplierInvoiceItem {
 // ═══════════════════════════════════════════════════════════════════
 
 model Customer {
+  customValues Json? @map("custom_values")
   id                 String   @id @default(uuid()) @db.Uuid
   businessId         String   @map("business_id") @db.Uuid
   name               String   @db.VarChar(255)

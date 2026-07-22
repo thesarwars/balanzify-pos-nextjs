@@ -259,6 +259,7 @@ router.post('/', auth, requireRole('owner', 'manager'), validate(ProductSchema),
           allowPriceOverride: data.allow_price_override ?? true,
           isActive: data.is_active ?? true,
           notes: data.notes || null,
+          customValues: data.custom_values || undefined,
           ...productProfileData(data),
         },
       });
@@ -324,7 +325,7 @@ router.put('/:id', auth, requireRole('owner', 'manager'), validate(ProductSchema
       allow_price_override, is_active,
       barcode_type, weight, prep_time_minutes, not_for_selling, enable_stock,
       selling_price_tax_type, tax_rate_id, is_serialized, brochure_url, brochure_key,
-      location_ids, tile_color, ...rest
+      location_ids, tile_color, custom_values, ...rest
     } = req.body;
 
     const bad = await invalidProductRef(req.body, req.user.business_id);
@@ -334,6 +335,7 @@ router.put('/:id', auth, requireRole('owner', 'manager'), validate(ProductSchema
       where: { id: req.params.id },
       data: {
         ...rest,
+        ...(custom_values !== undefined && { customValues: custom_values }),
         ...productProfileData(req.body),
         ...(category_id !== undefined && { categoryId: category_id }),
         ...(brand_id !== undefined && { brandId: brand_id }),
