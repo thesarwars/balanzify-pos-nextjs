@@ -4270,6 +4270,11 @@ const API: any = {
       return (await transport('DELETE', '/connector/api/expense/' + id)).data;
     },
   },
+  emailSettings: {
+    async get() { const r = await realReq('GET', '/settings/email'); return (r && r.config) || {}; },
+    async save(cfg: any) { const r = await realReq('PUT', '/settings/email', { body: cfg }); return (r && r.config) || {}; },
+    async test(to: string) { return await realReq('POST', '/settings/email/test', { body: { to } }); },
+  },
   sms: {
     async get() { const r = await realReq('GET', '/settings/sms'); return (r && r.config) || {}; },
     async save(cfg: any) { const r = await realReq('PUT', '/settings/sms', { body: cfg }); return (r && r.config) || {}; },

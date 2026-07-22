@@ -233,7 +233,7 @@ expensesRouter.post('/', auth, validate(ExpenseSchema), async (req, res, next) =
     const b = req.body;
     const expense = await prisma.$transaction(async (tx) => {
       const { taxRate } = await expAssertRefs(tx, req.user.business_id, b);
-      const ref = (b.ref_no || '').trim() || `EXP-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+      const ref = (b.ref_no || '').trim() || `${await require('../../lib/prefix').refPrefix(tx, req.user.business_id, 'prefix_expense', 'EXP')}-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
       if (b.ref_no && b.ref_no.trim()) await expAssertRef(tx, req.user.business_id, ref);
 
       const amount = expRound(b.amount);

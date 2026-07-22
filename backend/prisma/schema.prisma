@@ -514,7 +514,8 @@ model Business {
   settings      Json?    @map("settings")
   // SMS driver config — SECRETS live here, never in `settings` (which every
   // authenticated browser receives). Read/written only by the redacting routes.
-  smsConfig     Json?    @map("sms_config")  // business-settings preference bag (start date, precisions, prefixes, product toggles, stock method, tax names, date/time format, etc.)
+  smsConfig     Json?    @map("sms_config")
+  emailConfig   Json?    @map("email_config")  // business-settings preference bag (start date, precisions, prefixes, product toggles, stock method, tax names, date/time format, etc.)
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @default(now()) @updatedAt @map("updated_at")
 

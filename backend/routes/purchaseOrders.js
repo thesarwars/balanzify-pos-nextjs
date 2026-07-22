@@ -81,7 +81,7 @@ router.post('/', auth, requireRole('owner', 'manager'), validate(PurchaseOrderSc
         businessId: req.user.business_id,
         supplierId: supplier_id,
         locationId: location_id || null,
-        poNumber: reference_no || `PO-${Date.now()}`,
+        poNumber: reference_no || `${await require('../lib/prefix').refPrefix(prisma, req.user.business_id, 'prefix_purchase', 'PO')}-${Date.now()}`,
         status: status === 'received' ? 'approved' : status === 'ordered' ? 'sent' : 'draft',
         orderDate: order_date ? new Date(order_date) : new Date(),
         expectedDelivery: expected_delivery ? new Date(expected_delivery) : null,

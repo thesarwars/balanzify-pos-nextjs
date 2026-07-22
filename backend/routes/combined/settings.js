@@ -137,10 +137,60 @@ settingsRouter.post('/sms/test', auth, requireRole('owner'), validate(zSms.objec
   }
 });
 
+// ── Email (SMTP) settings — password write-only, per business ────────────────
+const EmailCfgSchema = zSms.object({
+  host: zSms.string().trim().max(200).optional().nullable(),
+  port: zSms.coerce.number().int().min(1).max(65535).optional().nullable(),
+  username: zSms.string().trim().max(200).optional().nullable(),
+  password: zSms.string().max(200).optional().nullable(),
+  encryption: zSms.enum(['tls', 'ssl', 'none']).optional().nullable(),
+  from_address: zSms.string().trim().max(200).optional().nullable(),
+  from_name: zSms.string().trim().max(100).optional().nullable(),
+});
+settingsRouter.get('/email', auth, requireRole('owner'), async (req, res, next) => {
+  try {
+    const biz = await prisma.business.findUnique({ where: { id: req.user.business_id }, select: { emailConfig: true } });
+    const c = { ...((biz && biz.emailConfig) || {}) };
+    c.password_set = Boolean(c.password); delete c.password;
+    res.json({ config: c });
+  } catch (err) { next(err); }
+});
+settingsRouter.put('/email', auth, requireRole('owner'), validate(EmailCfgSchema), async (req, res, next) => {
+  try {
+    const biz = await prisma.business.findUnique({ where: { id: req.user.business_id }, select: { emailConfig: true } });
+    const stored = (biz && biz.emailConfig) || {};
+    const merged = { ...stored, ...req.body };
+    if (req.body.password === '' || req.body.password == null) merged.password = stored.password;
+    await prisma.business.update({ where: { id: req.user.business_id }, data: { emailConfig: merged } });
+    const out = { ...merged }; out.password_set = Boolean(out.password); delete out.password;
+    res.json({ config: out });
+  } catch (err) { next(err); }
+});
+settingsRouter.post('/email/test', auth, requireRole('owner'), validate(zSms.object({ to: zSms.string().trim().email() })), async (req, res, next) => {
+  try {
+    const biz = await prisma.business.findUnique({ where: { id: req.user.business_id }, select: { emailConfig: true, name: true } });
+    const c = (biz && biz.emailConfig) || {};
+    if (!c.host) return res.status(400).json({ title: 'Set the SMTP host first.', status: 400 });
+    const nodemailer = require('nodemailer');
+    const t = nodemailer.createTransport({
+      host: c.host, port: Number(c.port) || 587, secure: c.encryption === 'ssl',
+      ...(c.username ? { auth: { user: c.username, pass: c.password || '' } } : {}),
+    });
+    await t.sendMail({
+      from: c.from_name ? `"${c.from_name}" <${c.from_address || c.username}>` : (c.from_address || c.username),
+      to: req.body.to, subject: 'Balanzify test email',
+      text: `Your SMTP settings for ${biz.name} work.`,
+    });
+    res.json({ message: 'Test email sent.' });
+  } catch (err) {
+    res.status(502).json({ title: `Email failed: ${err.message}`, status: 502 });
+  }
+});
+
 // ── Custom field definitions — unlimited, per entity ─────────────────────────
 const CF_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CustomFieldSchema = zSms.object({
-  entity: zSms.enum(['contact', 'product']),
+  entity: zSms.enum(['contact', 'product', 'payment', 'location', 'user', 'purchase', 'purchase_shipping', 'sell', 'sale_shipping', 'service_type']),
   label: zSms.string().trim().min(1).max(100),
   field_type: zSms.enum(['text', 'number', 'date', 'select']).default('text'),
   options: zSms.array(zSms.string().trim().max(100)).max(50).optional().nullable(),

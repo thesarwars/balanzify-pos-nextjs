@@ -625,6 +625,12 @@ const BusinessSettingsBag = z.object({
   // ── Dashboard ──────────────────────────────────────────────────────────────
   stock_expiry_alert_days: z.coerce.number().int().min(1).max(365),
   // ── System ─────────────────────────────────────────────────────────────────
+  // Prefixes for auto-generated reference numbers (wired: purchase, transfer,
+  // adjustment, expense; the rest stored for their future generators).
+  prefix_purchase: optStr(8), prefix_purchase_return: optStr(8), prefix_stock_transfer: optStr(8),
+  prefix_stock_adjustment: optStr(8), prefix_sell_return: optStr(8), prefix_expense: optStr(8),
+  prefix_contact: optStr(8), prefix_purchase_payment: optStr(8), prefix_sell_payment: optStr(8),
+  prefix_business_location: optStr(8), prefix_draft: optStr(8), prefix_sales_order: optStr(8),
   theme_color: optStr(20),
   datatable_entries: z.coerce.number().int().min(10).max(200),
   show_help_text: z.boolean(),

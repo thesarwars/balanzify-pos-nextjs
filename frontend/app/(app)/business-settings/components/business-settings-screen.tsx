@@ -55,6 +55,9 @@ const DEFAULTS: any = {
   cash_denominations: '', cash_denomination_on: 'pos', cash_denomination_methods: 'cash', cash_denomination_strict: false,
   stock_expiry_alert_days: 30,
   theme_color: '', datatable_entries: 25, show_help_text: true,
+  prefix_purchase: 'PO', prefix_purchase_return: '', prefix_stock_transfer: 'TRF', prefix_stock_adjustment: 'ADJ',
+  prefix_sell_return: 'CN', prefix_expense: 'EXP', prefix_contact: 'CO', prefix_purchase_payment: 'PP',
+  prefix_sell_payment: 'SP', prefix_business_location: 'BL', prefix_draft: '', prefix_sales_order: '',
 };
 
 // The POS keyboard map — labels mirror the reference; empty = no shortcut.
@@ -70,7 +73,7 @@ const SHORTCUTS: [string, string, string?][] = [
   ['finalize_payment', 'Finalize Payment'], ['add_new_product', 'Add new product'],
 ];
 
-const TABS = [['business', 'Business'], ['tax', 'Tax'], ['product', 'Product'], ['contact', 'Contact'], ['sale', 'Sale'], ['pos', 'POS'], ['display', 'Display Screen'], ['purchases', 'Purchases'], ['payment', 'Payment'], ['dashboard', 'Dashboard'], ['system', 'System'], ['sms', 'SMS Settings'], ['custom-fields', 'Custom Fields']];
+const TABS = [['business', 'Business'], ['tax', 'Tax'], ['product', 'Product'], ['contact', 'Contact'], ['sale', 'Sale'], ['pos', 'POS'], ['display', 'Display Screen'], ['purchases', 'Purchases'], ['payment', 'Payment'], ['dashboard', 'Dashboard'], ['system', 'System'], ['prefixes', 'Prefixes'], ['email', 'Email Settings'], ['sms', 'SMS Settings'], ['reward', 'Reward Points'], ['custom-fields', 'Custom Fields']];
 
 export function BusinessSettings({ T }: { T: any }) {
   const [tab, setTab] = useState('business');
@@ -222,6 +225,12 @@ export function BusinessSettings({ T }: { T: any }) {
           cash_denomination_methods: s.cash_denomination_methods || null,
           cash_denomination_strict: !!s.cash_denomination_strict,
           stock_expiry_alert_days: Number(s.stock_expiry_alert_days) || 30,
+          prefix_purchase: s.prefix_purchase || null, prefix_purchase_return: s.prefix_purchase_return || null,
+          prefix_stock_transfer: s.prefix_stock_transfer || null, prefix_stock_adjustment: s.prefix_stock_adjustment || null,
+          prefix_sell_return: s.prefix_sell_return || null, prefix_expense: s.prefix_expense || null,
+          prefix_contact: s.prefix_contact || null, prefix_purchase_payment: s.prefix_purchase_payment || null,
+          prefix_sell_payment: s.prefix_sell_payment || null, prefix_business_location: s.prefix_business_location || null,
+          prefix_draft: s.prefix_draft || null, prefix_sales_order: s.prefix_sales_order || null,
           theme_color: s.theme_color || null,
           datatable_entries: Number(s.datatable_entries) || 25,
           show_help_text: !!s.show_help_text,
@@ -521,6 +530,23 @@ export function BusinessSettings({ T }: { T: any }) {
                   </div>
                 )}
 
+                {tab === 'prefixes' && (
+                  <div>
+                    <div style={{ fontSize: 12, color: T.inkSub, marginBottom: 12 }}>
+                      Prefixes for auto-generated reference numbers. Wired today: Purchase, Stock Transfer, Stock Adjustment, Expenses — the rest are stored for their screens.
+                    </div>
+                    <FormGrid cols={3}>
+                      {([['prefix_purchase', 'Purchase'], ['prefix_purchase_return', 'Purchase Return'], ['prefix_stock_transfer', 'Stock Transfer'],
+                        ['prefix_stock_adjustment', 'Stock Adjustment'], ['prefix_sell_return', 'Sell Return'], ['prefix_expense', 'Expenses'],
+                        ['prefix_contact', 'Contacts'], ['prefix_purchase_payment', 'Purchase Payment'], ['prefix_sell_payment', 'Sell Payment'],
+                        ['prefix_business_location', 'Business Location'], ['prefix_draft', 'Draft'], ['prefix_sales_order', 'Sales Order']] as [string, string][]).map(([k, label]) => (
+                        <Field key={k} T={T} label={label}><TextField T={T} value={s[k] || ''} onChange={(v: any) => set(k, v.toUpperCase().slice(0, 8))} /></Field>
+                      ))}
+                    </FormGrid>
+                  </div>
+                )}
+                {tab === 'email' && <EmailTab T={T} toast={show} />}
+                {tab === 'reward' && <RewardTab T={T} toast={show} />}
                 {tab === 'sms' && <SmsTab T={T} toast={show} />}
                 {tab === 'custom-fields' && <CustomFieldsTab T={T} toast={show} />}
 
@@ -531,6 +557,91 @@ export function BusinessSettings({ T }: { T: any }) {
         </div>
       </div>
       {node}
+    </div>
+  );
+}
+
+// Email (SMTP) settings — password write-only, with a live test send.
+function EmailTab({ T, toast }: { T: any; toast: (m: string) => void }) {
+  const [c, setC] = React.useState<any>({});
+  const [testTo, setTestTo] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState<string | null>(null);
+  React.useEffect(() => { API.emailSettings.get().then(setC).catch(() => {}); }, []);
+  const set = (k: string, v: any) => setC((p: any) => ({ ...p, [k]: v }));
+  async function save(): Promise<boolean> {
+    setBusy(true); setErr(null);
+    try { const cfg = await API.emailSettings.save(c); setC({ ...cfg, password: '' }); toast('Email settings saved'); return true; }
+    catch (e: any) { setErr(e.message); return false; } finally { setBusy(false); }
+  }
+  async function test() {
+    if (!testTo.trim()) { setErr('Enter the address to send the test to.'); return; }
+    setBusy(true); setErr(null);
+    try { if (await save()) { await API.emailSettings.test(testTo.trim()); toast('Test email sent'); } }
+    catch (e: any) { setErr(e.message); } finally { setBusy(false); }
+  }
+  return (
+    <div>
+      <FormGrid cols={3}>
+        <Field T={T} label="Mail Driver"><SelectField T={T} value="smtp" options={['smtp']} onChange={() => {}} render={() => 'SMTP'} /></Field>
+        <Field T={T} label="Host"><TextField T={T} value={c.host || ''} onChange={(v: any) => set('host', v)} placeholder="smtp.example.com" /></Field>
+        <Field T={T} label="Port"><TextField T={T} type="number" value={c.port != null ? String(c.port) : ''} onChange={(v: any) => set('port', v)} placeholder="587" /></Field>
+        <Field T={T} label="Username"><TextField T={T} value={c.username || ''} onChange={(v: any) => set('username', v)} /></Field>
+        <Field T={T} label="Password" hint={c.password_set ? 'Configured — leave blank to keep' : 'Not set yet'}>
+          <TextField T={T} type="password" value={c.password || ''} onChange={(v: any) => set('password', v)} />
+        </Field>
+        <Field T={T} label="Encryption"><SelectField T={T} value={c.encryption || 'tls'} options={['tls', 'ssl', 'none']} onChange={(v: any) => set('encryption', v)} render={(v: any) => v.toUpperCase()} /></Field>
+        <Field T={T} label="From Address"><TextField T={T} value={c.from_address || ''} onChange={(v: any) => set('from_address', v)} /></Field>
+        <Field T={T} label="From Name"><TextField T={T} value={c.from_name || ''} onChange={(v: any) => set('from_name', v)} /></Field>
+      </FormGrid>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', marginTop: 16, flexWrap: 'wrap' }}>
+        <Btn T={T} kind="accent" onClick={save} disabled={busy}>{busy ? 'Saving…' : 'Save email settings'}</Btn>
+        <div style={{ width: 220 }}><Field T={T} label="Test address"><TextField T={T} value={testTo} onChange={setTestTo} placeholder="you@example.com" /></Field></div>
+        <Btn T={T} kind="ghost" onClick={test} disabled={busy}>Send test email</Btn>
+      </div>
+      {err && <div style={{ marginTop: 12, padding: '9px 12px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}>{err}</div>}
+    </div>
+  );
+}
+
+// Reward Point settings — the same rules the Loyalty screen and the till use.
+function RewardTab({ T, toast }: { T: any; toast: (m: string) => void }) {
+  const [r, setR] = React.useState<any>(null);
+  const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState<string | null>(null);
+  React.useEffect(() => { API.reward.getSettings().then(setR).catch(() => setR({})); }, []);
+  const set = (k: string, v: any) => setR((p: any) => ({ ...p, [k]: v }));
+  async function save() {
+    setBusy(true); setErr(null);
+    try { await API.reward.saveSettings(r); toast('Reward point settings saved'); }
+    catch (e: any) { setErr(e.message); } finally { setBusy(false); }
+  }
+  if (!r) return <div style={{ padding: 20, color: T.inkSub, fontSize: 13 }}>Loading…</div>;
+  const num = (k: string, label: string, hint?: string) => (
+    <Field T={T} label={label} hint={hint}><TextField T={T} type="number" value={r[k] != null ? String(r[k]) : ''} onChange={(v: any) => set(k, v === '' ? null : Number(v))} /></Field>
+  );
+  return (
+    <div>
+      <label style={{ display: 'inline-flex', gap: 8, alignItems: 'center', fontSize: 13.5, fontWeight: 700, color: T.ink, cursor: 'pointer' }}>
+        <input type="checkbox" checked={!!r.enabled} onChange={(e) => set('enabled', e.target.checked)} /> Enable Reward Point
+      </label>
+      <div style={{ margin: '16px 0 8px', fontSize: 13, fontWeight: 700, color: T.ink }}>Earning Points Settings</div>
+      <FormGrid cols={3}>
+        {num('amount_per_unit_point', 'Amount spend for unit point *', 'Spend this much = 1 point')}
+        {num('min_order_total_earn', 'Minimum order total to earn reward')}
+        {num('max_points_per_order', 'Maximum points per order')}
+      </FormGrid>
+      <div style={{ margin: '16px 0 8px', fontSize: 13, fontWeight: 700, color: T.ink }}>Redeem Points Settings</div>
+      <FormGrid cols={3}>
+        {num('redeem_amount_per_point', 'Redeem amount per unit point *', '1 point = this much off')}
+        {num('min_order_total_redeem', 'Minimum order total to redeem points')}
+        {num('min_redeem_point', 'Minimum redeem point')}
+        {num('max_redeem_point', 'Maximum redeem point per order')}
+      </FormGrid>
+      <div style={{ marginTop: 16 }}>
+        <Btn T={T} kind="accent" onClick={save} disabled={busy}>{busy ? 'Saving…' : 'Save reward settings'}</Btn>
+      </div>
+      {err && <div style={{ marginTop: 12, padding: '9px 12px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}>{err}</div>}
     </div>
   );
 }
@@ -635,11 +746,16 @@ function CustomFieldsTab({ T, toast }: { T: any; toast: (m: string) => void }) {
       <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', marginBottom: 14 }}>
         <div style={{ width: 190 }}>
           <Field T={T} label="Entity">
-            <SelectField T={T} value={entity} options={['contact', 'product']} onChange={setEntity}
-              render={(v: any) => v === 'contact' ? 'Contacts' : 'Products'} />
+            <SelectField T={T} value={entity}
+              options={['contact', 'product', 'payment', 'location', 'user', 'purchase', 'purchase_shipping', 'sell', 'sale_shipping', 'service_type']}
+              onChange={setEntity}
+              render={(v: any) => (({ contact: 'Contacts', product: 'Products', payment: 'Payments', location: 'Locations', user: 'Users', purchase: 'Purchases', purchase_shipping: 'Purchase Shipping', sell: 'Sell', sale_shipping: 'Sale Shipping', service_type: 'Types of Service' } as any)[v] || v)} />
           </Field>
         </div>
         <Btn T={T} kind="accent" onClick={() => setEdit({ field_type: 'text' })}>+ Add field</Btn>
+        {!['contact', 'product'].includes(entity) && (
+          <span style={{ fontSize: 11.5, color: T.inkMute, alignSelf: 'center' }}>Definitions saved — this entity's form renders them as its screen gets wired.</span>
+        )}
       </div>
       <div style={{ border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
         {fields.map((f, i) => (
