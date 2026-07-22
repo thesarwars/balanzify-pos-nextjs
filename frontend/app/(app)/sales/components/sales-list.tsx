@@ -11,7 +11,7 @@ import React from 'react';
 import { Btn, Badge, Panel, Field, TextField, SelectField, useToast } from '@/components/kit';
 import { Topbar } from '@/components/shell';
 import { money } from '@/lib/theme';
-import { formatDate, todayLocal } from '@/lib/business-settings';
+import { formatDate, getSetting, todayLocal } from '@/lib/business-settings';
 import { API } from '@/lib/api';
 import { LuEye, LuUndo2, LuBadgeCheck, LuTruck, LuPrinter, LuClipboardList, LuFileText, LuWallet, LuLink, LuMail, LuPencil, LuTrash2 } from 'react-icons/lu';
 import { ActionsMenu } from '../../products/components/list-table';
@@ -69,7 +69,7 @@ export function SalesList({ T, onAdd, onEdit, flash, preset }:
     shipping_status: '', payment_method: '', status: '', from: '', to: '', search: '',
   });
   const [showFilters, setShowFilters] = useState(true);
-  const [perPage, setPerPage] = useState('25');
+  const [perPage, setPerPage] = useState(() => String(getSetting('datatable_entries', 25)));
   const [hidden, setHidden] = useState<Record<string, boolean>>({ sell_note: true, staff_note: true });
   const [showCols, setShowCols] = useState(false);
   const [nonce, setNonce] = useState(0);

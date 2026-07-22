@@ -295,6 +295,19 @@ export function POS({ T, tweaks, editSaleId }: { T: any; tweaks: any; editSaleId
     return () => setNavBlock(false);
   }, [cart.length]);
 
+  // Customer display screen: mirror the live order to /display (same browser)
+  // over a BroadcastChannel whenever it changes.
+  useEffectP(() => {
+    if (bset.display_enabled !== true || typeof BroadcastChannel === 'undefined') return;
+    const ch = new BroadcastChannel('bz-pos-display');
+    ch.postMessage({
+      lines: lines.map((l: any) => ({ name: l.name, qty: l.qty, price: l.price })),
+      subtotal, tax, discount: discount + couponDiscount, total,
+      charged: !!charged, change: changeDue || 0,
+    });
+    return () => ch.close();
+  });
+
   // Configurable keyboard shortcuts (Business Settings → POS). Combos like
   // 'shift+p' / 'f2'; ignored while typing in an input.
   useEffectP(() => {
@@ -887,6 +900,23 @@ export function POS({ T, tweaks, editSaleId }: { T: any; tweaks: any; editSaleId
                       {tenders.length > 1 && <button onClick={() => setTenders((ts: any[]) => ts.filter((_: any, j: number) => j !== i))} style={{ width: 30, height: 30, borderRadius: 7, border: `1px solid ${T.line}`, background: T.paper, color: T.redText, cursor: 'pointer' }}>✕</button>}
                     </div>
                   ))}
+                  {(() => {
+                    // Cash denominations (Business Settings → Payment): tap to
+                    // count the customer's notes into the first cash tender.
+                    const denoms = String(bset.cash_denominations || '').split(',').map((x: string) => Number(x.trim())).filter((n: number) => n > 0);
+                    const cashIdx = tenders.findIndex((x: any) => x.method === 'cash');
+                    if (!denoms.length || cashIdx < 0) return null;
+                    return (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '2px 0' }}>
+                        {denoms.map((d: number) => (
+                          <button key={d} onClick={() => setT(cashIdx, 'amount', ((Number(tenders[cashIdx].amount) || 0) + d).toFixed(2))}
+                            style={{ padding: '5px 11px', borderRadius: 99, border: `1.5px solid ${T.line}`, background: T.paper, color: T.inkMid, fontFamily: T.fMono, fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>+{d}</button>
+                        ))}
+                        <button onClick={() => setT(cashIdx, 'amount', '0')}
+                          style={{ padding: '5px 11px', borderRadius: 99, border: `1.5px solid ${T.line}`, background: T.paper, color: T.redText, fontFamily: T.fBody, fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>Reset</button>
+                      </div>
+                    );
+                  })()}
                   <button onClick={() => setTenders((ts: any[]) => [...ts, { method: 'cash', amount: Math.max(0, remaining).toFixed(2) }])} style={{ alignSelf: 'flex-start', background: 'none', border: 'none', color: T.accent.text, fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: T.fBody, padding: '4px 0' }}>+ Add payment line</button>
                   <div style={{ marginTop: 6, borderTop: `1px dashed ${T.line}`, paddingTop: 10, display: 'flex', flexDirection: 'column', gap: 6 } as React.CSSProperties}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}><span style={{ color: T.inkSub }}>Tendered</span><span style={{ fontFamily: T.fMono, color: T.ink }}>{money(paid)}</span></div>

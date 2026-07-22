@@ -597,7 +597,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  const T = makeTheme({ accent: tweaks.accent, type: tweaks.type, sidebar: tweaks.sidebar });
+  // System → Theme Color overrides the accent when set.
+  const themeColor = getSetting('theme_color', '') as any;
+  const T = makeTheme({ accent: themeColor || tweaks.accent, type: tweaks.type, sidebar: tweaks.sidebar });
 
   const [collapsed, setCollapsed] = React.useState(false);
   const [drawerOpen, setDrawerOpen] = React.useState(false);

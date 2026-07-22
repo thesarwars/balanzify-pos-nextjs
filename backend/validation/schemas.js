@@ -606,6 +606,27 @@ const BusinessSettingsBag = z.object({
   scale_sku_length: z.coerce.number().int().min(1).max(10),
   scale_qty_int_length: z.coerce.number().int().min(1).max(6),
   scale_qty_frac_length: z.coerce.number().int().min(0).max(4),
+  // ── Display Screen ─────────────────────────────────────────────────────────
+  display_enabled: z.boolean(),
+  display_heading: optStr(2000),
+  display_images: z.array(z.string().max(500)).max(10).nullable(),
+  // ── Purchases ──────────────────────────────────────────────────────────────
+  purchases_edit_price: z.boolean(),
+  purchases_enable_status: z.boolean(),
+  purchases_enable_lot: z.boolean(),
+  purchases_enable_po: z.boolean(),
+  purchases_enable_requisition: z.boolean(),
+  // ── Payment ────────────────────────────────────────────────────────────────
+  cash_denominations: optStr(200),
+  cash_denomination_on: z.enum(['pos', 'all']),
+  cash_denomination_methods: optStr(200),
+  cash_denomination_strict: z.boolean(),
+  // ── Dashboard ──────────────────────────────────────────────────────────────
+  stock_expiry_alert_days: z.coerce.number().int().min(1).max(365),
+  // ── System ─────────────────────────────────────────────────────────────────
+  theme_color: optStr(20),
+  datatable_entries: z.coerce.number().int().min(10).max(200),
+  show_help_text: z.boolean(),
 }).partial();
 
 const SettingsSchema = z.object({

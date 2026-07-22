@@ -48,6 +48,13 @@ const DEFAULTS: any = {
   pos_disable_credit_sale: false, pos_enable_weighing_scale: false,
   pos_show_invoice_scheme: false, pos_show_invoice_layout: false, pos_print_on_suspend: false, pos_show_pricing_tooltip: false,
   scale_prefix: '', scale_sku_length: 5, scale_qty_int_length: 4, scale_qty_frac_length: 3,
+  // Display Screen / Purchases / Payment / Dashboard / System
+  display_enabled: false, display_heading: 'Welcome', display_images: [],
+  purchases_edit_price: true, purchases_enable_status: true, purchases_enable_lot: false,
+  purchases_enable_po: false, purchases_enable_requisition: false,
+  cash_denominations: '', cash_denomination_on: 'pos', cash_denomination_methods: 'cash', cash_denomination_strict: false,
+  stock_expiry_alert_days: 30,
+  theme_color: '', datatable_entries: 25, show_help_text: true,
 };
 
 // The POS keyboard map — labels mirror the reference; empty = no shortcut.
@@ -63,7 +70,7 @@ const SHORTCUTS: [string, string, string?][] = [
   ['finalize_payment', 'Finalize Payment'], ['add_new_product', 'Add new product'],
 ];
 
-const TABS = [['business', 'Business'], ['tax', 'Tax'], ['product', 'Product'], ['contact', 'Contact'], ['sale', 'Sale'], ['pos', 'POS']];
+const TABS = [['business', 'Business'], ['tax', 'Tax'], ['product', 'Product'], ['contact', 'Contact'], ['sale', 'Sale'], ['pos', 'POS'], ['display', 'Display Screen'], ['purchases', 'Purchases'], ['payment', 'Payment'], ['dashboard', 'Dashboard'], ['system', 'System']];
 
 export function BusinessSettings({ T }: { T: any }) {
   const [tab, setTab] = useState('business');
@@ -76,6 +83,7 @@ export function BusinessSettings({ T }: { T: any }) {
   const [unitsErr, setUnitsErr] = useState('');
   const [logoUrl, setLogoUrl] = useState('');
   const [logoBusy, setLogoBusy] = useState(false);
+  const [imgBusy, setImgBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<any>(null);
@@ -201,6 +209,22 @@ export function BusinessSettings({ T }: { T: any }) {
           scale_sku_length: Number(s.scale_sku_length) || 5,
           scale_qty_int_length: Number(s.scale_qty_int_length) || 4,
           scale_qty_frac_length: Number(s.scale_qty_frac_length) ?? 3,
+          display_enabled: !!s.display_enabled,
+          display_heading: s.display_heading || null,
+          display_images: (s.display_images || []).filter(Boolean),
+          purchases_edit_price: !!s.purchases_edit_price,
+          purchases_enable_status: !!s.purchases_enable_status,
+          purchases_enable_lot: !!s.purchases_enable_lot,
+          purchases_enable_po: !!s.purchases_enable_po,
+          purchases_enable_requisition: !!s.purchases_enable_requisition,
+          cash_denominations: s.cash_denominations || null,
+          cash_denomination_on: s.cash_denomination_on || 'pos',
+          cash_denomination_methods: s.cash_denomination_methods || null,
+          cash_denomination_strict: !!s.cash_denomination_strict,
+          stock_expiry_alert_days: Number(s.stock_expiry_alert_days) || 30,
+          theme_color: s.theme_color || null,
+          datatable_entries: Number(s.datatable_entries) || 25,
+          show_help_text: !!s.show_help_text,
         },
       });
       // Let AppShell re-read the bag so money/date formatting updates immediately.
@@ -403,6 +427,97 @@ export function BusinessSettings({ T }: { T: any }) {
                       <Field T={T} label="Quantity integer part length"><SelectField T={T} value={String(s.scale_qty_int_length)} options={['1','2','3','4','5']} onChange={(v: any) => set('scale_qty_int_length', v)} render={(v: any) => v} /></Field>
                       <Field T={T} label="Quantity fractional part length"><SelectField T={T} value={String(s.scale_qty_frac_length)} options={['0','1','2','3','4']} onChange={(v: any) => set('scale_qty_frac_length', v)} render={(v: any) => v} /></Field>
                     </FormGrid>
+                  </div>
+                )}
+
+                {tab === 'display' && (
+                  <div>
+                    <Check T={T} label="Enable Customer display screen"
+                      hint="Open /display in a new tab of the SAME browser as the till and mirror that tab to the customer-facing monitor"
+                      checked={s.display_enabled} onChange={(v: any) => set('display_enabled', v)} />
+                    <div style={{ marginTop: 14 }}>
+                      <Field T={T} label="Display screen heading">
+                        <textarea value={s.display_heading || ''} onChange={(e) => set('display_heading', e.target.value)} rows={2}
+                          style={{ width: '100%', padding: '10px 13px', fontSize: 14, fontFamily: T.fBody, color: T.ink, background: T.paper, border: `1.5px solid ${T.line}`, borderRadius: T.r, outline: 'none', boxSizing: 'border-box', resize: 'vertical' }} />
+                      </Field>
+                    </div>
+                    <div style={{ margin: '16px 0 8px', fontSize: 13.5, fontWeight: 700, color: T.ink }}>Carousel images (up to 10)</div>
+                    <div style={{ fontSize: 12, color: T.inkSub, marginBottom: 10 }}>Shown to the customer while no sale is in progress.</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+                      {(s.display_images || []).map((url: string, i: number) => (
+                        <div key={i} style={{ position: 'relative' }}>
+                          <img src={url} alt="" style={{ width: 96, height: 64, objectFit: 'cover', borderRadius: 8, border: `1px solid ${T.line}` }} />
+                          <button onClick={() => set('display_images', (s.display_images || []).filter((_: any, j: number) => j !== i))}
+                            style={{ position: 'absolute', top: -6, right: -6, width: 20, height: 20, borderRadius: 99, border: 'none', background: T.redText, color: '#fff', fontSize: 11, cursor: 'pointer', lineHeight: 1 }}>✕</button>
+                        </div>
+                      ))}
+                      {(s.display_images || []).length < 10 && (
+                        <label style={{ width: 96, height: 64, borderRadius: 8, border: `2px dashed ${T.line}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, color: T.inkSub, cursor: 'pointer' }}>
+                          {imgBusy ? '…' : '+ Add'}
+                          <input type="file" accept="image/*" style={{ display: 'none' }} disabled={imgBusy}
+                            onChange={async (e) => {
+                              const f = e.target.files && e.target.files[0]; e.target.value = '';
+                              if (!f) return;
+                              setImgBusy(true);
+                              try { const r = await API.upload.image(f); set('display_images', [...(s.display_images || []), r.url]); }
+                              catch (ex: any) { setErr(ex.message || 'Upload failed.'); }
+                              finally { setImgBusy(false); }
+                            }} />
+                        </label>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {tab === 'purchases' && (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '2px 18px' }}>
+                    <Check T={T} label="Enable editing product price from purchase screen" hint="Selling price column on purchase lines" checked={s.purchases_edit_price} onChange={(v: any) => set('purchases_edit_price', v)} />
+                    <Check T={T} label="Enable Purchase Status" hint="Received / Ordered / Pending on the purchase form" checked={s.purchases_enable_status} onChange={(v: any) => set('purchases_enable_status', v)} />
+                    <Check T={T} label="Enable Lot number" hint="Batch / lot field on purchase lines" checked={s.purchases_enable_lot} onChange={(v: any) => set('purchases_enable_lot', v)} />
+                    <Check T={T} label="Enable purchase order" checked={s.purchases_enable_po} onChange={(v: any) => set('purchases_enable_po', v)} />
+                    <Check T={T} label="Enable Purchase Requisition" checked={s.purchases_enable_requisition} onChange={(v: any) => set('purchases_enable_requisition', v)} />
+                  </div>
+                )}
+
+                {tab === 'payment' && (
+                  <div>
+                    <FormGrid cols={2}>
+                      <Field T={T} label="Cash Denominations" hint="Comma separated — example: 100,200,500,2000">
+                        <TextField T={T} value={s.cash_denominations || ''} onChange={(v: any) => set('cash_denominations', v.replace(/[^0-9.,\s]/g, ''))} placeholder="1,5,10,20,50,100" />
+                      </Field>
+                      <Field T={T} label="Enable cash denomination on">
+                        <SelectField T={T} value={s.cash_denomination_on || 'pos'} options={['pos', 'all']}
+                          onChange={(v: any) => set('cash_denomination_on', v)} render={(v: any) => v === 'pos' ? 'POS screen' : 'All screens'} />
+                      </Field>
+                    </FormGrid>
+                    <div style={{ marginTop: 10 }}>
+                      <Check T={T} label="Strict check" hint="Payment amount must equal the sum of counted cash denominations" checked={s.cash_denomination_strict} onChange={(v: any) => set('cash_denomination_strict', v)} />
+                    </div>
+                  </div>
+                )}
+
+                {tab === 'dashboard' && (
+                  <FormGrid cols={2}>
+                    <Field T={T} label="View Stock Expiry Alert For *" hint="Days ahead the expiring-stock widgets look">
+                      <TextField T={T} type="number" value={String(s.stock_expiry_alert_days)} onChange={(v: any) => set('stock_expiry_alert_days', v)} />
+                    </Field>
+                  </FormGrid>
+                )}
+
+                {tab === 'system' && (
+                  <div>
+                    <FormGrid cols={3}>
+                      <Field T={T} label="Theme Color" hint="The app's accent colour">
+                        <SelectField T={T} value={s.theme_color || ''} options={['', 'brass', 'emerald', 'indigo']}
+                          onChange={(v: any) => set('theme_color', v)}
+                          render={(v: any) => v === '' ? 'Default (Brass)' : v[0].toUpperCase() + v.slice(1)} />
+                      </Field>
+                      <Field T={T} label="Default datatable page entries">
+                        <SelectField T={T} value={String(s.datatable_entries)} options={['10', '25', '50', '100']}
+                          onChange={(v: any) => set('datatable_entries', v)} render={(v: any) => v} />
+                      </Field>
+                    </FormGrid>
+                    <Check T={T} label="Show help text" hint="The small grey hints under form fields" checked={s.show_help_text} onChange={(v: any) => set('show_help_text', v)} />
                   </div>
                 )}
 
