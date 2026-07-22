@@ -356,16 +356,14 @@ export function BusinessSettings({ T }: { T: any }) {
                   <div>
                     <div style={{ marginBottom: 6, fontSize: 13.5, fontWeight: 700, color: T.ink }}>Add keyboard shortcuts</div>
                     <div style={{ fontSize: 12, color: T.inkSub, marginBottom: 12 }}>
-                      Keys separated by '+' — example: <b>shift+p</b>, <b>f2</b>. Available: shift, ctrl, alt, enter, esc, space, f1–f12, letters and digits.
+                      Click a field and <b>press the key combination</b> (e.g. hold Ctrl+Shift and tap P). Backspace clears it.
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '6px 22px' }}>
                       {SHORTCUTS.map(([key, label]) => (
                         <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                           <span style={{ flex: 1, fontSize: 12.5, color: T.inkMid, fontWeight: 600 }}>{label}:</span>
-                          <div style={{ width: 150 }}>
-                            <TextField T={T} value={(s.pos_shortcuts || {})[key] || ''} placeholder="e.g. shift+p"
-                              onChange={(v: any) => set('pos_shortcuts', { ...(s.pos_shortcuts || {}), [key]: v.toLowerCase().replace(/\s+/g, '') })} />
-                          </div>
+                          <ShortcutInput T={T} value={(s.pos_shortcuts || {})[key] || ''}
+                            onChange={(v: string) => set('pos_shortcuts', { ...(s.pos_shortcuts || {}), [key]: v })} />
                         </div>
                       ))}
                     </div>
@@ -408,6 +406,39 @@ export function BusinessSettings({ T }: { T: any }) {
         </div>
       </div>
       {node}
+    </div>
+  );
+}
+
+// A hotkey recorder: focus it and PRESS the combination — typing strings is
+// error-prone and half the combos (ctrl+shift+p) are browser shortcuts that
+// never reach a text input as characters. Backspace/Delete clears.
+function ShortcutInput({ T, value, onChange }: { T: any; value: string; onChange: (v: string) => void }) {
+  const [focused, setFocused] = React.useState(false);
+  const capture = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const k = e.key.toLowerCase();
+    if (k === 'backspace' || k === 'delete') { onChange(''); return; }
+    if (['shift', 'control', 'alt', 'meta'].includes(k)) return; // modifiers alone: wait for the key
+    if (k === 'tab') return; // keep keyboard navigation working
+    const parts: string[] = [];
+    if (e.ctrlKey) parts.push('ctrl');
+    if (e.altKey) parts.push('alt');
+    if (e.shiftKey) parts.push('shift');
+    parts.push(k === ' ' ? 'space' : k === 'escape' ? 'esc' : k);
+    onChange(parts.join('+'));
+  };
+  return (
+    <div style={{ position: 'relative', width: 170 }}>
+      <input readOnly value={value} onKeyDown={capture}
+        onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
+        placeholder={focused ? 'Press keys…' : 'Click to set'}
+        style={{ width: '100%', padding: '9px 30px 9px 12px', fontSize: 13, fontFamily: T.fMono, color: T.ink, background: focused ? T.accent.soft : T.paper, border: `1.5px solid ${focused ? T.accent.base : T.line}`, borderRadius: T.r, outline: 'none', boxSizing: 'border-box', cursor: 'pointer', caretColor: 'transparent' }} />
+      {value && (
+        <button onClick={() => onChange('')} title="Clear" tabIndex={-1}
+          style={{ position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)', width: 20, height: 20, border: 'none', borderRadius: 5, background: 'transparent', color: T.inkSub, cursor: 'pointer', fontSize: 12, lineHeight: 1 }}>✕</button>
+      )}
     </div>
   );
 }
