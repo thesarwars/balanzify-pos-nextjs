@@ -322,6 +322,32 @@ export function POS({ T, tweaks, editSaleId }: { T: any; tweaks: any; editSaleId
       else if (match(e, combos.express_checkout) && !posDisableExpress) { e.preventDefault(); expressCheckout(); }
       else if (match(e, combos.draft) && !posDisableDraft) { e.preventDefault(); if (lines.length) park('draft'); }
       else if (match(e, combos.cancel)) { e.preventDefault(); clear(); }
+      else if (match(e, combos.add_new_product)) {
+        // A NEW TAB, so the order in progress is not lost to navigation.
+        e.preventDefault(); window.open('/products?new=1', '_blank');
+      }
+      else if (match(e, combos.go_qty)) {
+        // Jump to the newest cart line's quantity stepper.
+        e.preventDefault();
+        const btns = document.querySelectorAll('[data-qty-btn]');
+        (btns[btns.length - 1] as HTMLElement | undefined)?.focus();
+      }
+      else if (match(e, combos.add_payment_row) && payOpen && !posDisableSplit) {
+        e.preventDefault();
+        if (payMode !== 'split') { setPayMode('split'); if (!tenders.length) setTenders([{ method: 'cash', amount: total.toFixed(2) }]); }
+        else setTenders((ts: any[]) => [...ts, { method: 'cash', amount: '0' }]);
+      }
+      else if (match(e, combos.finalize_payment) && payOpen) {
+        e.preventDefault();
+        if (payMode === 'split') {
+          const paidNow = tenders.reduce((sum: number, x: any) => sum + (Number(x.amount) || 0), 0);
+          // Same guard as the Finalize button: a shortfall needs a customer.
+          if (total - paidNow > 0.001 && !customer) return;
+          finalize(tenders, tenders[0] && tenders[0].method);
+        } else {
+          finalize([{ method: 'cash', amount: total }], 'cash');
+        }
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -636,7 +662,7 @@ export function POS({ T, tweaks, editSaleId }: { T: any; tweaks: any; editSaleId
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             <button onClick={() => setQty(l.key, -1)} style={stepBtn(D, T)}>−</button>
             <span style={{ minWidth: 22, textAlign: 'center', fontFamily: T.fMono, fontSize: 13, fontWeight: 600, color: D.ink } as React.CSSProperties}>{l.qty}</span>
-            <button onClick={() => setQty(l.key, +1)} style={stepBtn(D, T)}>+</button>
+            <button data-qty-btn onClick={() => setQty(l.key, +1)} style={stepBtn(D, T)}>+</button>
           </div>
           <span style={{ minWidth: 58, textAlign: 'right', fontFamily: T.fMono, fontSize: 13.5, fontWeight: 600, color: D.ink } as React.CSSProperties}>{money(l.price * l.qty)}</span>
         </div>

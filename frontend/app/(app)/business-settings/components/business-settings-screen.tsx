@@ -51,11 +51,15 @@ const DEFAULTS: any = {
 };
 
 // The POS keyboard map — labels mirror the reference; empty = no shortcut.
-const SHORTCUTS: [string, string][] = [
+// third element: a note for combos this till has no matching control for yet
+// (discount/tax are rules- and settings-driven; no scale modal exists).
+const SHORTCUTS: [string, string, string?][] = [
   ['express_checkout', 'Express Checkout'], ['pay_checkout', 'Pay & Checkout'],
   ['draft', 'Draft'], ['cancel', 'Cancel'], ['go_qty', 'Go to product quantity'],
-  ['weighing_scale', 'Weighing Scale'], ['edit_discount', 'Edit Discount'],
-  ['edit_order_tax', 'Edit Order Tax'], ['add_payment_row', 'Add Payment Row'],
+  ['weighing_scale', 'Weighing Scale', 'no matching control in this till yet'],
+  ['edit_discount', 'Edit Discount', 'discounts are rule/settings-driven here'],
+  ['edit_order_tax', 'Edit Order Tax', 'order tax is settings-driven here'],
+  ['add_payment_row', 'Add Payment Row'],
   ['finalize_payment', 'Finalize Payment'], ['add_new_product', 'Add new product'],
 ];
 
@@ -359,9 +363,12 @@ export function BusinessSettings({ T }: { T: any }) {
                       Click a field and <b>press the key combination</b> (e.g. hold Ctrl+Shift and tap P). Backspace clears it.
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '6px 22px' }}>
-                      {SHORTCUTS.map(([key, label]) => (
+                      {SHORTCUTS.map(([key, label, note]) => (
                         <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                          <span style={{ flex: 1, fontSize: 12.5, color: T.inkMid, fontWeight: 600 }}>{label}:</span>
+                          <span style={{ flex: 1, fontSize: 12.5, color: T.inkMid, fontWeight: 600 }}>
+                            {label}:
+                            {note && <span style={{ display: 'block', fontSize: 10.5, fontWeight: 500, color: T.inkMute }}>{note}</span>}
+                          </span>
                           <ShortcutInput T={T} value={(s.pos_shortcuts || {})[key] || ''}
                             onChange={(v: string) => set('pos_shortcuts', { ...(s.pos_shortcuts || {}), [key]: v })} />
                         </div>

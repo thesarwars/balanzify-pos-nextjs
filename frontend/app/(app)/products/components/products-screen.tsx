@@ -84,6 +84,13 @@ export function Products({ T }: { T: any }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   React.useEffect(() => {
+    // ?new=1 (POS "Add new product" shortcut, opened in a fresh tab) goes
+    // straight into the Add Product form.
+    if (searchParams.get('new') === '1') {
+      openNew();
+      router.replace('/products', { scroll: false });
+      return;
+    }
     const tool = searchParams.get('tool');
     if (tool) {
       const openers: Record<string, (v: boolean) => void> = {
