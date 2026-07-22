@@ -158,6 +158,7 @@ export const NAV = [
       { key: 'barcode-settings',  activeId: 'barcode-settings',  label: 'Barcode Settings', route: '/barcode-settings' },
           { key: 'receipt-printers', activeId: 'receipt-printers', label: 'Receipt Printers', route: '/receipt-printers' },
           { key: 'tax-rates', activeId: 'tax-rates', label: 'Tax Rates', route: '/tax-rates' },
+          { key: 'notification-templates', activeId: 'notification-templates', label: 'Notification Templates', route: '/notification-templates' },
         ]
       },
       { id: 'modules', label: 'Plan & Modules', icon: LuLayers },

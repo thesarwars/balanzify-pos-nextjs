@@ -14,6 +14,7 @@ import { Btn, Badge, Modal, Field, TextField } from '@/components/kit';
 import { money } from '@/lib/theme';
 import { formatDate, formatDateTime, toLocalYmd } from '@/lib/business-settings';
 import { API } from '@/lib/api';
+import { getSetting } from '@/lib/business-settings';
 
 const { useState, useEffect } = React;
 
@@ -166,6 +167,8 @@ export function InvoiceUrlModal({ T, sale, onClose }: { T: Theme; sale: any; onC
 // Only tags the server actually substitutes are advertised.
 const TAGS = ['business_name', 'invoice_number', 'invoice_url', 'total_amount', 'paid_amount', 'received_amount', 'due_amount', 'contact_name', 'location_name', 'location_address', 'sale_date'];
 
+// Stored templates (Notification Templates screen) override the built-ins.
+const storedTpl = (key: string) => (getSetting('notification_templates', {}) as any)?.[key] || null;
 const TEMPLATES = {
   sale: {
     subject: 'Thank you from {business_name}',

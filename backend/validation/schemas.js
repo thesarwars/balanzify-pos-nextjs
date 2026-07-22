@@ -631,6 +631,10 @@ const BusinessSettingsBag = z.object({
   prefix_stock_adjustment: optStr(8), prefix_sell_return: optStr(8), prefix_expense: optStr(8),
   prefix_contact: optStr(8), prefix_purchase_payment: optStr(8), prefix_sell_payment: optStr(8),
   prefix_business_location: optStr(8), prefix_draft: optStr(8), prefix_sales_order: optStr(8),
+  notification_templates: z.record(z.string().max(40), z.object({
+    subject: z.string().max(200), cc: z.string().max(200), bcc: z.string().max(200),
+    email_body: z.string().max(5000), sms_body: z.string().max(1000), whatsapp: z.string().max(1000),
+  }).partial()).nullable(),
   theme_color: optStr(20),
   datatable_entries: z.coerce.number().int().min(10).max(200),
   show_help_text: z.boolean(),
