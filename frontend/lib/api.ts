@@ -4722,6 +4722,10 @@ const API: any = {
       if (REAL_MODE) return await realReq('GET', '/reports/profit-loss/by', { query: { group, ...params } });
       return null;
     },
+    async purchaseSale(params: any = {}) {
+      if (REAL_MODE) return await realReq('GET', '/reports/purchase-sale', { query: params });
+      return null;
+    },
     async salesSummary(range: any = {}) {
       if (REAL_MODE) return await realReq('GET', '/reports/sales', { query: range });
       return null;

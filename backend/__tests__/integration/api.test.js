@@ -1193,4 +1193,41 @@ describe('Profit / Loss report', () => {
     // Gross profit and the profit-by totals are the same number on both views.
     expect(st.body.summary.gross_profit).toBeCloseTo(by.body.totals.profit, 1); // 51
   });
+
+  test('purchase & sale report reconciles with the same data', async () => {
+    const res = await request(app).get('/api/v1/reports/purchase-sale').set(auth(plToken));
+    expect(res.status).toBe(200);
+    const { purchases, sales, overall } = res.body;
+    // No purchase orders in this business; both cash sales carried no tax.
+    expect(purchases.total_inc_tax).toBeCloseTo(0, 2);
+    expect(purchases.due).toBeCloseTo(0, 2);
+    expect(sales.total_inc_tax).toBeCloseTo(SELL * QTY + 30, 2); // 160 + 30 pack sale
+    expect(sales.total_ex_tax).toBeCloseTo(SELL * QTY + 30, 2);
+    expect(sales.returns).toBeCloseTo(SELL, 2);                  // the refunded unit
+    expect(sales.due).toBeCloseTo(0, 2);
+    expect(overall.sale_minus_purchase).toBeCloseTo(SELL * QTY + 30 - SELL, 2); // 150
+    expect(overall.due_amount).toBeCloseTo(0, 2);
+  });
+
+  test('customer repayment settles POS credit sale dues, and the report follows', async () => {
+    const cust = await request(app).post('/api/v1/customers').set(auth(plToken))
+      .send({ name: 'PL Credit Cust', credit_limit: 1000 });
+    const sale = await checkout(plToken, {
+      items: [{ product_id: plProduct.id, quantity: 1 }],
+      payment_method: 'credit', customer_id: cust.body.id,
+      shift_id: plShift.id, location_id: plLocId,
+    });
+    expect(sale.status).toBe(201);
+    const before = await request(app).get('/api/v1/reports/purchase-sale').set(auth(plToken));
+    expect(before.body.sales.due).toBeCloseTo(SELL, 2); // 40 outstanding
+    const pay = await request(app).post('/api/v1/sales/customer-payment').set(auth(plToken))
+      .send({ customer_id: cust.body.id, amount: SELL, payment_method: 'cash' });
+    expect(pay.status).toBe(200);
+    // The repayment allocates against the open sale, not just the ledger.
+    const row = await prisma.sale.findUnique({ where: { id: sale.body.id }, select: { amountDue: true, amountPaid: true } });
+    expect(parseFloat(row.amountDue)).toBeCloseTo(0, 2);
+    expect(parseFloat(row.amountPaid)).toBeCloseTo(SELL, 2);
+    const after = await request(app).get('/api/v1/reports/purchase-sale').set(auth(plToken));
+    expect(after.body.sales.due).toBeCloseTo(0, 2);
+  });
 });

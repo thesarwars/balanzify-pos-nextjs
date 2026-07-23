@@ -1685,16 +1685,44 @@ router.post('/customer-payment', auth, requireRole('owner', 'manager'), async (r
 
     // Run in a transaction so the balance read + ledger write are atomic;
     // prevents concurrent repayments from both passing the balance check.
-    const newBalance = await prisma.$transaction((tx) => creditEngine.postRepayment(tx, {
-      businessId:    req.user.business_id,
-      customerId:    customer_id,
-      amount:        parseFloat(amount),
-      currency:      req.user.currency || 'USD',
-      paymentMethod: payment_method || null,
-      reference:     reference      || null,
-      description:   notes          || 'Credit repayment',
-      recordedById:  req.user.id,
-    }));
+    const newBalance = await prisma.$transaction(async (tx) => {
+      const balance = await creditEngine.postRepayment(tx, {
+        businessId:    req.user.business_id,
+        customerId:    customer_id,
+        amount:        parseFloat(amount),
+        currency:      req.user.currency || 'USD',
+        paymentMethod: payment_method || null,
+        reference:     reference      || null,
+        description:   notes          || 'Credit repayment',
+        recordedById:  req.user.id,
+      });
+      // Allocate the repayment against the customer's open sales oldest-first,
+      // so per-sale dues (the sales grid, the Purchase & Sale report) settle
+      // alongside the customer-level ledger. Any overpayment simply stays on
+      // the ledger — sale rows never go negative.
+      let remaining = parseFloat(amount);
+      const open = await tx.sale.findMany({
+        where: {
+          businessId: req.user.business_id, customerId: customer_id,
+          amountDue: { gt: 0 }, status: { in: ['completed', 'partially_refunded'] },
+        },
+        orderBy: { createdAt: 'asc' },
+        select: { id: true, amountDue: true, amountPaid: true },
+      });
+      for (const s of open) {
+        if (remaining <= 0) break;
+        const take = Math.min(remaining, parseFloat(s.amountDue));
+        await tx.sale.update({
+          where: { id: s.id },
+          data: {
+            amountDue:  { decrement: take },
+            amountPaid: { increment: take },
+          },
+        });
+        remaining = +(remaining - take).toFixed(2);
+      }
+      return balance;
+    });
 
     res.json({ message: 'Payment recorded.', outstanding_balance: newBalance });
   } catch (err) {

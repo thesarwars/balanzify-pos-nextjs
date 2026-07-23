@@ -147,6 +147,7 @@ export const NAV = [
         // to every role) rather than the owner/manager-only Profit / Loss.
         id: 'reports', label: 'Reports', icon: LuChartColumn, collapsedRoute: '/reports', children: [
           { key: 'profit-loss', activeId: 'reports', activeParams: { tab: 'profit-loss' }, label: 'Profit / Loss', route: '/reports?tab=profit-loss' },
+          { key: 'purchase-sale', activeId: 'reports', activeParams: { tab: 'purchase-sale' }, label: 'Purchase & Sale', route: '/reports?tab=purchase-sale' },
           { key: 'reports-overview', activeId: 'reports', label: 'Overview', route: '/reports' },
           { key: 'reports-commission', activeId: 'reports', activeParams: { tab: 'commission' }, label: 'Sales Representative', route: '/reports?tab=commission' },
           { key: 'reports-register', activeId: 'reports', activeParams: { tab: 'register' }, label: 'Cash Register', route: '/reports?tab=register' },
