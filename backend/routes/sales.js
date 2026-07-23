@@ -519,7 +519,10 @@ async function createSale(req) {
           quantity:       item.quantity,
           unit_price:     unitPrice,
           original_price: basePrice,
-          cost_price:     fifoUnitCost,
+          // Per SELL unit, so cost_price × quantity is always the line's true
+          // cost. A pack sale consumes stockQty (= qty × packSize) base units
+          // at fifoUnitCost each; dividing back by qty folds the pack factor in.
+          cost_price:     item.quantity > 0 ? (fifoUnitCost * stockQty) / item.quantity : 0,
           total_price:    lineTotal,
           notes:          item.notes || null,
           serial_numbers: item.serial_numbers || [],
@@ -1490,7 +1493,7 @@ router.post('/:id/refund', auth, requireRole('owner', 'manager'), validate(Refun
       select: {
         id: true, businessId: true, locationId: true, totalAmount: true, taxAmount: true,
         loyaltyPointsEarned: true, customerId: true,
-        items: { select: { id: true, productId: true, quantity: true, unitPrice: true, costPrice: true, product: { select: { enableStock: true } } } },
+        items: { select: { id: true, productId: true, quantity: true, unitPrice: true, costPrice: true, product: { select: { enableStock: true, sellByUnit: true, packSize: true } } } },
       },
     });
     if (!sale || sale.businessId !== req.user.business_id) {
@@ -1528,7 +1531,12 @@ router.post('/:id/refund', auth, requireRole('owner', 'manager'), validate(Refun
         unit_price:   parseFloat(si.unitPrice), // original price, not the client's
         cost_price:   parseFloat(si.costPrice || 0), // FIFO cost captured at sale
         // Untracked products never held stock — returning one restocks nothing.
-        restock:      reqItem.restock !== false && si.product?.enableStock !== false,
+        // Sell-by-unit pack products can't be restocked either: the sale item
+        // doesn't record whether the line sold packs or single units, so the
+        // base-unit quantity to put back is unknowable (same reason voids
+        // refuse such lines). The money is refunded; stock stays as-is.
+        restock:      reqItem.restock !== false && si.product?.enableStock !== false
+                      && !(si.product?.sellByUnit && si.product?.packSize),
       });
     }
 

@@ -395,9 +395,13 @@ async function postFinal(
             allowNegative: allowOversell,
           });
     cogs = round2(cogs + lineCogs);
+    // Per SELL unit (lineCogs spread over the sold quantity), so downstream
+    // cost_price × quantity reads — GL for POS, refunds, every report — are
+    // exact even for pack sales, where a unit of sale consumes packSize base
+    // units. For plain lines this equals the consumed per-base unitCost.
     await tx.saleItem.update({
       where: { id: line.saleItemId },
-      data: { costPrice: round2(unitCost) },
+      data: { costPrice: line.quantity > 0 ? round2(lineCogs / line.quantity) : round2(unitCost) },
     });
   }
 
@@ -712,8 +716,11 @@ async function reverseSaleEffects(tx, { businessId, userId, sale, reason }) {
       it.product && it.product.sellByUnit && it.product.packSize
         ? it.quantity * it.product.packSize
         : it.quantity;
+    // costPrice is per SELL unit; the line's cost is × quantity. The restock
+    // layer below holds base units, so its unit cost is the per-base share.
     const costPrice = round2(it.costPrice);
-    cogs = round2(cogs + costPrice * stockQty);
+    const lineCost = round2(costPrice * it.quantity);
+    cogs = round2(cogs + lineCost);
 
     await tx.$executeRaw`
       INSERT INTO stock_levels (id, product_id, location_id, quantity)
@@ -733,7 +740,7 @@ async function reverseSaleEffects(tx, { businessId, userId, sale, reason }) {
         createdById: userId || null,
       },
     });
-    if (costPrice > 0) {
+    if (lineCost > 0 && stockQty > 0) {
       await tx.costLayer.create({
         data: {
           businessId,
@@ -741,7 +748,7 @@ async function reverseSaleEffects(tx, { businessId, userId, sale, reason }) {
           locationId: sale.locationId,
           quantityReceived: stockQty,
           quantityRemaining: stockQty,
-          unitCost: costPrice,
+          unitCost: Math.round((lineCost / stockQty) * 10000) / 10000,
         },
       });
     }
@@ -895,30 +902,40 @@ async function voidPosSale(tx, { businessId, userId, sale, reason }) {
   }
 
   // ── Goods back on the shelf at the cost they left it ────────────────────────
+  // costPrice is per SELL unit; stock (and the restock layer) is in base units,
+  // so a pack line puts back qty × packSize units at the per-base share.
+  // (The sell-by-unit guard above currently refuses pack lines outright — the
+  // conversion here is kept so relaxing that guard can never corrupt stock.)
   let cogs = 0;
   for (const it of sale.items) {
     // Untracked products never came off the shelf — no restock, no COGS mirror.
     if (it.product && it.product.enableStock === false) continue;
+    const stockQty =
+      it.product && it.product.sellByUnit && it.product.packSize
+        ? it.quantity * it.product.packSize
+        : it.quantity;
     const costPrice = round2(it.costPrice);
-    cogs = round2(cogs + costPrice * it.quantity);
+    const lineCost = round2(costPrice * it.quantity);
+    cogs = round2(cogs + lineCost);
     await tx.$executeRaw`
       INSERT INTO stock_levels (id, product_id, location_id, quantity)
-      VALUES (gen_random_uuid(), ${it.productId}::uuid, ${sale.locationId}::uuid, ${it.quantity})
+      VALUES (gen_random_uuid(), ${it.productId}::uuid, ${sale.locationId}::uuid, ${stockQty})
       ON CONFLICT (product_id, location_id)
-      DO UPDATE SET quantity = stock_levels.quantity + ${it.quantity}, updated_at = NOW()
+      DO UPDATE SET quantity = stock_levels.quantity + ${stockQty}, updated_at = NOW()
     `;
     await tx.stockMovement.create({
       data: {
         businessId, productId: it.productId, locationId: sale.locationId,
-        type: "return", quantity: it.quantity,
+        type: "return", quantity: stockQty,
         referenceType: "sale_void", referenceId: sale.id, createdById: userId || null,
       },
     });
-    if (costPrice > 0) {
+    if (lineCost > 0 && stockQty > 0) {
       await tx.costLayer.create({
         data: {
           businessId, productId: it.productId, locationId: sale.locationId,
-          quantityReceived: it.quantity, quantityRemaining: it.quantity, unitCost: costPrice,
+          quantityReceived: stockQty, quantityRemaining: stockQty,
+          unitCost: Math.round((lineCost / stockQty) * 10000) / 10000,
         },
       });
     }
