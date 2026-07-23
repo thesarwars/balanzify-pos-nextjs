@@ -9,8 +9,8 @@ import type { Theme } from '@/lib/theme';
 import { money } from '@/lib/theme';
 import { Btn, Panel, Field, TextField, SelectField, FormGrid, StatCard } from '@/components/kit';
 import { API } from '@/lib/api';
-import { toLocalYmd, todayLocal } from '@/lib/business-settings';
-import { LuPrinter, LuDownload, LuSearch, LuFileSpreadsheet, LuColumns3, LuFileText, LuChevronDown } from 'react-icons/lu';
+import { toLocalYmd, todayLocal, getSetting } from '@/lib/business-settings';
+import { LuPrinter, LuDownload, LuSearch, LuFileSpreadsheet, LuColumns3, LuFileText, LuChevronDown, LuCalendarDays } from 'react-icons/lu';
 
 // [key, label, informational] — informational rows sit outside the column
 // totals and the profit formulas: stock at sale price is indicative, and
@@ -57,13 +57,50 @@ const GROUPS: [string, string, string][] = [
 
 const esc = (v: any) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-export function ProfitLossReport({ T }: { T: Theme }) {
+// The reference's standard "Filter by date" presets. Financial years follow the
+// business's configured start month (Business Settings → fy_start_month).
+const DATE_PRESETS: [string, string][] = [
+  ['today', 'Today'], ['yesterday', 'Yesterday'],
+  ['last7', 'Last 7 Days'], ['last30', 'Last 30 Days'],
+  ['this_month', 'This Month'], ['last_month', 'Last Month'],
+  ['this_month_ly', 'This month last year'],
+  ['this_year', 'This Year'], ['last_year', 'Last Year'],
+  ['fy', 'Current financial year'], ['last_fy', 'Last financial year'],
+  ['custom', 'Custom Range'],
+];
+
+function presetRange(key: string, fyStart: number): [string, string] | null {
   const now = new Date();
+  const y = now.getFullYear(), m = now.getMonth();
+  const first = (yy: number, mm: number) => toLocalYmd(new Date(yy, mm, 1));
+  const last = (yy: number, mm: number) => toLocalYmd(new Date(yy, mm + 1, 0));
+  const shift = (days: number) => toLocalYmd(new Date(y, m, now.getDate() + days));
+  switch (key) {
+    case 'today': return [toLocalYmd(now), toLocalYmd(now)];
+    case 'yesterday': return [shift(-1), shift(-1)];
+    case 'last7': return [shift(-6), toLocalYmd(now)];
+    case 'last30': return [shift(-29), toLocalYmd(now)];
+    case 'this_month': return [first(y, m), last(y, m)];
+    case 'last_month': return [first(y, m - 1), last(y, m - 1)];
+    case 'this_month_ly': return [first(y - 1, m), last(y - 1, m)];
+    case 'this_year': return [first(y, 0), last(y, 11)];
+    case 'last_year': return [first(y - 1, 0), last(y - 1, 11)];
+    case 'fy': case 'last_fy': {
+      const s = Math.min(12, Math.max(1, fyStart)) - 1;
+      const startY = (m >= s ? y : y - 1) - (key === 'last_fy' ? 1 : 0);
+      return [first(startY, s), last(startY + 1, s - 1)];
+    }
+  }
+  return null;
+}
+
+export function ProfitLossReport({ T }: { T: Theme }) {
+  const fyStart = Number(getSetting('fy_start_month', 1)) || 1;
+  const [preset, setPreset] = React.useState('this_month');
   const [locs, setLocs] = React.useState<any[]>([]);
-  const [filters, setFilters] = React.useState<any>({
-    location_id: '',
-    from: toLocalYmd(new Date(now.getFullYear(), now.getMonth(), 1)),
-    to: todayLocal(),
+  const [filters, setFilters] = React.useState<any>(() => {
+    const [from, to] = presetRange('this_month', fyStart)!;
+    return { location_id: '', from, to };
   });
   const [data, setData] = React.useState<any>(null);
   const [err, setErr] = React.useState('');
@@ -73,7 +110,15 @@ export function ProfitLossReport({ T }: { T: Theme }) {
   const [q, setQ] = React.useState('');
   // Breakdown-table toolbar: toggleable columns + which dropdown menu is open.
   const [cols, setCols] = React.useState<Record<string, boolean>>({ sub: true, qty: true, sales: true, profit: true });
-  const [menu, setMenu] = React.useState<null | 'cols' | 'pdf'>(null);
+  const [menu, setMenu] = React.useState<null | 'cols' | 'pdf' | 'date'>(null);
+
+  function pickPreset(key: string) {
+    setMenu(null);
+    setPreset(key);
+    const range = presetRange(key, fyStart);
+    if (range) setFilters((p: any) => ({ ...p, from: range[0], to: range[1] }));
+    // 'custom' keeps the current dates — the From/To fields take over.
+  }
 
   React.useEffect(() => { API.location.list().then(setLocs).catch(() => {}); }, []);
 
@@ -95,7 +140,11 @@ export function ProfitLossReport({ T }: { T: Theme }) {
     return () => { dead = true; clearTimeout(timer); };
   }, [filters, group]);
 
-  const setF = (k: string, v: any) => setFilters((p: any) => ({ ...p, [k]: v }));
+  // Hand-edited dates switch the preset to Custom Range.
+  const setF = (k: string, v: any) => {
+    if (k === 'from' || k === 'to') setPreset('custom');
+    setFilters((p: any) => ({ ...p, [k]: v }));
+  };
   const val = (side: 'left' | 'right', key: string) => Number(data?.[side]?.[key] || 0);
   const colTotal = (side: 'left' | 'right', rows: [string, string, boolean?][]) =>
     rows.reduce((s, [k, , info]) => info ? s : s + val(side, k), 0);
@@ -274,6 +323,25 @@ export function ProfitLossReport({ T }: { T: Theme }) {
       {/* filters + actions */}
       <div style={{ padding: '16px 20px', background: T.card, border: `1px solid ${T.line}`, borderRadius: T.rLg, marginBottom: 16 }}>
         <div style={{ display: 'flex', gap: 14, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+          <div style={{ position: 'relative', paddingBottom: 2 }}>
+            <Btn T={T} kind="accent" onClick={() => setMenu(menu === 'date' ? null : 'date')}>
+              <LuCalendarDays size={14} style={{ verticalAlign: -2, marginRight: 6 }} />
+              {(DATE_PRESETS.find(([k]) => k === preset) || [, 'Filter by date'])[1]}
+              <LuChevronDown size={12} style={{ verticalAlign: -1, marginLeft: 6 }} />
+            </Btn>
+            {menu === 'date' && (
+              <div style={{ position: 'absolute', left: 0, top: 'calc(100% + 4px)', zIndex: 30, background: T.paper, border: `1px solid ${T.line}`, borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,.12)', padding: 6, minWidth: 190, maxHeight: 340, overflowY: 'auto' }}>
+                {DATE_PRESETS.map(([k, lbl]) => (
+                  <button key={k} onClick={() => pickPreset(k)}
+                    style={{ display: 'block', width: '100%', textAlign: 'left', padding: '7px 10px', borderRadius: 7, border: 'none', cursor: 'pointer', fontSize: 12.5, fontFamily: T.fBody, fontWeight: preset === k ? 700 : 450, background: preset === k ? T.accent.base : 'transparent', color: preset === k ? T.accent.on : T.ink }}
+                    onMouseEnter={e => { if (preset !== k) e.currentTarget.style.background = T.paperAlt; }}
+                    onMouseLeave={e => { if (preset !== k) e.currentTarget.style.background = 'transparent'; }}>
+                    {lbl}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <div style={{ flex: 1, minWidth: 420 }}>
             <FormGrid cols={3}>
               <Field T={T} label="Location">

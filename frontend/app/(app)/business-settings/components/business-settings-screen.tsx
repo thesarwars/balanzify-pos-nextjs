@@ -24,7 +24,7 @@ const DATE_FMTS = ['mm/dd/yyyy', 'dd/mm/yyyy', 'yyyy-mm-dd', 'dd-mm-yyyy', 'mm-d
 // Only settings the app actually honours. Anything that could not be wired to a
 // real consumer was removed rather than shown as an inert toggle.
 const DEFAULTS: any = {
-  start_date: '', currency_symbol_placement: 'before', transaction_edit_days: 0,
+  start_date: '', fy_start_month: 1, currency_symbol_placement: 'before', transaction_edit_days: 0,
   date_format: 'yyyy-mm-dd', time_format: '24', currency_precision: 2, quantity_precision: 0,
   default_profit_percent: 25, timezone: '',
   tax1_name: '', tax2_name: '', tax2_number: '',
@@ -165,6 +165,7 @@ export function BusinessSettings({ T }: { T: any }) {
         name: name.trim(), currency, tax_number: taxNumber.trim() || null,
         settings: {
           start_date: s.start_date || null,
+          fy_start_month: Number(s.fy_start_month) || 1,
           currency_symbol_placement: s.currency_symbol_placement,
           transaction_edit_days: Number(s.transaction_edit_days),
           date_format: s.date_format, time_format: s.time_format,
@@ -277,6 +278,11 @@ export function BusinessSettings({ T }: { T: any }) {
                   <FormGrid cols={3}>
                     <Field T={T} label="Business name *"><TextField T={T} value={name} onChange={setName} placeholder="Business name" /></Field>
                     <Field T={T} label="Start date"><TextField T={T} type="date" value={s.start_date || ''} onChange={(v: any) => set('start_date', v)} /></Field>
+                    <Field T={T} label="Financial year start month" hint="Drives the financial-year ranges in reports">
+                      <SelectField T={T} value={String(s.fy_start_month || 1)} options={['1','2','3','4','5','6','7','8','9','10','11','12']}
+                        onChange={(v: any) => set('fy_start_month', v)}
+                        render={(v: any) => ['January','February','March','April','May','June','July','August','September','October','November','December'][Number(v) - 1]} />
+                    </Field>
                     <Field T={T} label="Default profit percent *"><TextField T={T} type="number" value={String(s.default_profit_percent)} onChange={(v: any) => set('default_profit_percent', v)} placeholder="25" /></Field>
 
                     <Field T={T} label="Currency"><SelectField T={T} value={currency} options={CCY.map(([c]) => c)} onChange={setCurrency} render={(v: any) => { const c = CCY.find(([x]) => x === v); return c ? `${c[0]} — ${c[1]}` : v; }} /></Field>

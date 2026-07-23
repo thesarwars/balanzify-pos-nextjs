@@ -540,10 +540,11 @@ const PayslipSettingsSchema = z.object({
 // UltimatePOS-style Business Settings preference bag. Every field optional so
 // partial saves work; the route shallow-merges into the stored settings JSON.
 // Every key here is honoured somewhere in the app. Keys that had no consumer
-// (fy_start_month, enable_inline_tax, the sub-category/sub-unit/rack/row/position/
+// (enable_inline_tax, the sub-category/sub-unit/rack/row/position/
 // warranty/expiry toggles, and LIFO) were removed rather than stored inertly.
 const BusinessSettingsBag = z.object({
   start_date: isoDate,                                    // reports lower bound
+  fy_start_month: z.coerce.number().int().min(1).max(12), // P&L financial-year presets
   currency_symbol_placement: z.enum(['before', 'after']),  // money()
   transaction_edit_days: z.coerce.number().int().min(0).max(3650), // edit-window guard
   date_format: z.enum(['mm/dd/yyyy', 'dd/mm/yyyy', 'yyyy-mm-dd', 'dd-mm-yyyy', 'mm-dd-yyyy']),
