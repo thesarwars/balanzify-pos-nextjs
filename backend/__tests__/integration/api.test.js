@@ -1036,3 +1036,161 @@ describe('General ledger — accounts receivable (credit)', () => {
     expect(parseFloat(rBy['1100'].credit)).toBeCloseTo(total, 2); // AR reduced
   });
 });
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PROFIT / LOSS REPORT
+// ══════════════════════════════════════════════════════════════════════════════
+
+describe('Profit / Loss report', () => {
+  // Fresh business so every total in the statement is exactly what this suite
+  // created: 30 units @ cost 25 / sell 40 opening stock, 4 units sold for cash.
+  let plToken, plBizId, plLocId, plProduct, plShift;
+  const COST = 25, SELL = 40, STOCK = 30, QTY = 4;
+
+  beforeAll(async () => {
+    const reg = await registerBusiness(`pl_${RUN}`);
+    plToken = reg.access_token;
+    plBizId = reg.business.id;
+    await request(app).post('/api/v1/locations').set(auth(plToken)).send({ name: 'PL Main', type: 'store' });
+    const locRes = await request(app).get('/api/v1/locations').set(auth(plToken));
+    plLocId = locRes.body.locations[0].id;
+    plProduct = await createProductWithStock(plToken, { locationId: plLocId, stock: STOCK, sellingPrice: SELL, costPrice: COST });
+    plShift = await openShift(plToken, plLocId);
+    const sale = await checkout(plToken, {
+      items: [{ product_id: plProduct.id, quantity: QTY }],
+      payment_method: 'cash', cash_tendered: 200,
+      shift_id: plShift.id, location_id: plLocId,
+    });
+    expect(sale.status).toBe(201);
+  }, 30000);
+
+  afterAll(async () => {
+    if (plBizId) {
+      await prisma.refund.deleteMany({ where: { sale: { businessId: plBizId } } }).catch(() => {});
+      await prisma.sale.deleteMany({ where: { businessId: plBizId } }).catch(() => {});
+      await prisma.business.deleteMany({ where: { id: plBizId } }).catch(() => {});
+    }
+  });
+
+  test('statement totals and closing stock are exact', async () => {
+    const res = await request(app).get('/api/v1/reports/profit-loss').set(auth(plToken));
+    expect(res.status).toBe(200);
+    const { left, right, summary } = res.body;
+    expect(right.total_sales).toBeCloseTo(SELL * QTY, 2);                       // 160
+    expect(right.closing_stock_purchase).toBeCloseTo((STOCK - QTY) * COST, 2);  // 650
+    expect(right.closing_stock_sale).toBeCloseTo((STOCK - QTY) * SELL, 2);      // 1040
+    expect(left.sell_return).toBeCloseTo(0, 2);
+    expect(left.total_expense).toBeCloseTo(0, 2);
+    expect(summary.transactions).toBe(1);
+  });
+
+  test('transactional profit formulas hold and COGS is the FIFO line cost', async () => {
+    const res = await request(app).get('/api/v1/reports/profit-loss').set(auth(plToken));
+    const { right, summary } = res.body;
+    // COGS is the sold lines' FIFO cost — NOT opening+purchases−closing, which
+    // would go negative here (the opening stock has no purchase document).
+    expect(summary.cogs).toBeCloseTo(COST * QTY, 2);                 // 100
+    expect(summary.net_sales).toBeCloseTo(SELL * QTY, 2);            // 160
+    expect(summary.gross_profit).toBeCloseTo(summary.net_sales - summary.cogs, 1);
+    expect(summary.net_profit).toBeCloseTo(
+      summary.gross_profit + summary.other_income - summary.other_expense, 1);
+    // Reconciliation: the 30 opening units arrived without a PO document.
+    expect(summary.purchases_received).toBeCloseTo(0, 2);
+    expect(summary.stock_received_other).toBeCloseTo(STOCK * COST, 2); // 750
+    expect(right.pos_charges).toBeCloseTo(0, 2);
+  });
+
+  test('a future date range zeroes the flows and freezes stock at current value', async () => {
+    const from = new Date(Date.now() + 2 * 86400000).toISOString().slice(0, 10);
+    const to = new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10);
+    const res = await request(app).get('/api/v1/reports/profit-loss')
+      .set(auth(plToken)).query({ from, to });
+    expect(res.status).toBe(200);
+    const { left, right, summary } = res.body;
+    expect(right.total_sales).toBeCloseTo(0, 2);
+    expect(left.opening_stock_purchase).toBeCloseTo((STOCK - QTY) * COST, 2);
+    expect(right.closing_stock_purchase).toBeCloseTo((STOCK - QTY) * COST, 2);
+    expect(summary.cogs).toBeCloseTo(0, 2);
+  });
+
+  test('profit by product nets line profit exactly', async () => {
+    const res = await request(app).get('/api/v1/reports/profit-loss/by')
+      .set(auth(plToken)).query({ group: 'product' });
+    expect(res.status).toBe(200);
+    const row = res.body.rows.find(r => r.label === plProduct.name);
+    expect(row).toBeTruthy();
+    expect(row.qty).toBe(QTY);
+    expect(row.sales).toBeCloseTo(SELL * QTY, 2);
+    expect(row.profit).toBeCloseTo((SELL - COST) * QTY, 2); // 60
+    expect(res.body.totals.profit).toBeCloseTo((SELL - COST) * QTY, 2);
+  });
+
+  test('every group dimension responds', async () => {
+    for (const group of ['category', 'brand', 'location', 'invoice', 'date', 'customer', 'day', 'staff']) {
+      const res = await request(app).get('/api/v1/reports/profit-loss/by')
+        .set(auth(plToken)).query({ group });
+      expect(res.status).toBe(200);
+      expect(Array.isArray(res.body.rows)).toBe(true);
+      expect(res.body.totals.profit).toBeCloseTo((SELL - COST) * QTY, 1);
+    }
+  }, 30000);
+
+  test('rejects bad group, prototype keys, and malformed dates', async () => {
+    const bad = await request(app).get('/api/v1/reports/profit-loss/by')
+      .set(auth(plToken)).query({ group: 'nope' });
+    expect(bad.status).toBe(400);
+    // Object.prototype keys must not reach the group whitelist.
+    const proto = await request(app).get('/api/v1/reports/profit-loss/by')
+      .set(auth(plToken)).query({ group: 'constructor' });
+    expect(proto.status).toBe(400);
+    const badDate = await request(app).get('/api/v1/reports/profit-loss')
+      .set(auth(plToken)).query({ from: '07/01/2026' });
+    expect(badDate.status).toBe(400);
+    // Calendar-invalid dates are rejected, not silently rolled over.
+    const badCal = await request(app).get('/api/v1/reports/profit-loss')
+      .set(auth(plToken)).query({ from: '2026-02-31' });
+    expect(badCal.status).toBe(400);
+  });
+
+  test('pack sales store per-sell-unit cost so COGS is exact', async () => {
+    // 24 base units @ cost 2; the product sells as a 12-unit pack for 30.
+    const packProd = await createProductWithStock(plToken, { locationId: plLocId, stock: 24, sellingPrice: 30, costPrice: 2 });
+    await prisma.product.update({
+      where: { id: packProd.id },
+      data: { sellByUnit: true, packSize: 12, unitPrice: 3 },
+    });
+    const sale = await checkout(plToken, {
+      items: [{ product_id: packProd.id, quantity: 1 }],
+      payment_method: 'cash', cash_tendered: 100,
+      shift_id: plShift.id, location_id: plLocId,
+    });
+    expect(sale.status).toBe(201);
+    // cost_price is per SELL unit: one pack consumed 12 base units @ 2 → 24.
+    const si = await prisma.saleItem.findFirst({ where: { productId: packProd.id } });
+    expect(parseFloat(si.costPrice)).toBeCloseTo(24, 2);
+    const layerLeft = await prisma.costLayer.aggregate({ where: { productId: packProd.id }, _sum: { quantityRemaining: true } });
+    expect(layerLeft._sum.quantityRemaining).toBe(12);
+    // The statement's COGS carries the pack's full cost (100 from the earlier sale + 24).
+    const res = await request(app).get('/api/v1/reports/profit-loss').set(auth(plToken));
+    expect(res.body.summary.cogs).toBeCloseTo(COST * QTY + 24, 1);
+  });
+
+  test('a restocked refund flows identically through the statement and profit-by', async () => {
+    // Refund 1 of the 4 units sold in beforeAll (restock defaults to true).
+    // The schema requires product_id/unit_price even though the route re-derives
+    // both from the sale item — send them to pass validation.
+    const si = await prisma.saleItem.findFirst({ where: { productId: plProduct.id }, select: { id: true, saleId: true } });
+    const ref = await request(app).post(`/api/v1/sales/${si.saleId}/refund`).set(auth(plToken))
+      .send({ items: [{ sale_item_id: si.id, product_id: plProduct.id, quantity: 1, unit_price: SELL }], reason: 'parity test', refund_method: 'cash' });
+    expect(ref.status).toBe(201);
+    const [st, by] = await Promise.all([
+      request(app).get('/api/v1/reports/profit-loss').set(auth(plToken)),
+      request(app).get('/api/v1/reports/profit-loss/by').set(auth(plToken)).query({ group: 'product' }),
+    ]);
+    // Refunds are stored ex-tax; the returned unit's cost is credited out of COGS.
+    expect(st.body.left.sell_return).toBeCloseTo(SELL, 2);              // 40
+    expect(st.body.summary.cogs).toBeCloseTo(COST * QTY + 24 - COST, 1); // 99
+    // Gross profit and the profit-by totals are the same number on both views.
+    expect(st.body.summary.gross_profit).toBeCloseTo(by.body.totals.profit, 1); // 51
+  });
+});

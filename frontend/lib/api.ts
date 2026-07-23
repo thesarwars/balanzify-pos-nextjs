@@ -2447,6 +2447,7 @@ function toRealCustomerBody(f: any): any {
 function adaptRealSupplier(s: any): any {
   if (!s) return s;
   return {
+    custom_values: s.customValues || {},
     id: s.id, name: s.name, type: 'supplier',
     contact_id: 'SUP-' + String(s.id || '').replace(/-/g, '').slice(0, 6).toUpperCase(),
     mobile: s.phone || s.whatsapp || '', email: s.email || '', address: s.address || '',
@@ -2465,6 +2466,7 @@ function adaptRealSupplier(s: any): any {
 }
 function toRealSupplierBody(f: any): any {
   return {
+    ...(f.custom_values !== undefined ? { custom_values: f.custom_values } : {}),
     name: f.name,
     phone: f.mobile || undefined,
     email: f.email || undefined,
@@ -4709,6 +4711,15 @@ const API: any = {
     },
     async profit(range: any = {}) {
       if (REAL_MODE) return await realReq('GET', '/reports/profit', { query: range });
+      return null;
+    },
+    // Reference-parity P&L statement (two columns + summary + tax). Owner/manager only.
+    async profitLoss(params: any = {}) {
+      if (REAL_MODE) return await realReq('GET', '/reports/profit-loss', { query: params });
+      return null;
+    },
+    async profitLossBy(group: any, params: any = {}) {
+      if (REAL_MODE) return await realReq('GET', '/reports/profit-loss/by', { query: { group, ...params } });
       return null;
     },
     async salesSummary(range: any = {}) {

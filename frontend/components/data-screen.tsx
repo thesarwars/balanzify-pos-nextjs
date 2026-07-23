@@ -11,6 +11,7 @@ import { Topbar, useSession } from '@/components/shell';
 import { API } from '@/lib/api';
 import { BUSINESS, CATEGORIES, DASH, DATA } from '@/lib/data';
 import { toLocalYmd } from '@/lib/business-settings';
+import { ProfitLossReport } from '@/app/(app)/reports/components/profit-loss';
 
 const { useState: useStateD } = React;
 
@@ -269,8 +270,12 @@ export function DataScreen({ T, id }: { T: Theme; id: any }) {
 }
 
 // ── Reports ─────────────────────────────────────────────────────
-export function Reports({ T }: { T: Theme }) {
-  const [tab, setTab] = useStateD('overview');
+export function Reports({ T, tab: tabProp, onTab }: { T: Theme; tab?: string; onTab?: (t: string) => void }) {
+  // Controlled by the page when it passes tab/onTab (URL-driven); falls back to
+  // local state so the component still works standalone.
+  const [tabLocal, setTabLocal] = useStateD('overview');
+  const tab = tabProp ?? tabLocal;
+  const setTab = onTab ?? setTabLocal;
   // Deterministic per-category value (not Math.random) to avoid SSR/client hydration mismatch.
   const seedByCat = React.useMemo(() => CATEGORIES.filter((c: any) => c.id !== 'all').map((c: any, i: number) => ({ name: c.name, val: Math.round(200 + (((i * 2654435761) % 100) / 100) * 1400) })), []);
   const [byCat, setByCat] = useStateD<any[]>(seedByCat);
@@ -298,7 +303,7 @@ export function Reports({ T }: { T: Theme }) {
       <div style={{ flex: 1, overflowY: 'auto', padding: 28 }}>
         <div style={{ maxWidth: 1280, margin: '0 auto' }}>
           <div style={{ display: 'flex', gap: 4, marginBottom: 18, background: T.paper, padding: 4, borderRadius: 10, width: 'fit-content', border: `1px solid ${T.line}` }}>
-            {[['overview', 'Overview'], ['commission', 'Sales Representative'], ['register', 'Cash Register']].map(([cid, lbl]) => (
+            {[['overview', 'Overview'], ['profit-loss', 'Profit / Loss'], ['commission', 'Sales Representative'], ['register', 'Cash Register']].map(([cid, lbl]) => (
               <button key={cid} onClick={() => setTab(cid)} style={{ padding: '8px 18px', borderRadius: 7, border: 'none', cursor: 'pointer', fontFamily: T.fBody, fontSize: 13, fontWeight: tab === cid ? 700 : 500, background: tab === cid ? T.accent.base : 'transparent', color: tab === cid ? T.accent.on : T.inkMid }}>{lbl}</button>
             ))}
           </div>
@@ -338,6 +343,7 @@ export function Reports({ T }: { T: Theme }) {
             </>
           )}
 
+          {tab === 'profit-loss' && <ProfitLossReport T={T} />}
           {tab === 'commission' && <CommissionReport T={T} />}
           {tab === 'register' && <RegisterReport T={T} />}
         </div>

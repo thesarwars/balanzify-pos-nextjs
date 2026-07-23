@@ -142,7 +142,16 @@ export const NAV = [
   },
   {
     sect: 'Analytics', items: [
-      { id: 'reports', label: 'Reports', icon: LuChartColumn },
+      {
+        // collapsedRoute: a collapsed-sidebar click lands on Overview (visible
+        // to every role) rather than the owner/manager-only Profit / Loss.
+        id: 'reports', label: 'Reports', icon: LuChartColumn, collapsedRoute: '/reports', children: [
+          { key: 'profit-loss', activeId: 'reports', activeParams: { tab: 'profit-loss' }, label: 'Profit / Loss', route: '/reports?tab=profit-loss' },
+          { key: 'reports-overview', activeId: 'reports', label: 'Overview', route: '/reports' },
+          { key: 'reports-commission', activeId: 'reports', activeParams: { tab: 'commission' }, label: 'Sales Representative', route: '/reports?tab=commission' },
+          { key: 'reports-register', activeId: 'reports', activeParams: { tab: 'register' }, label: 'Cash Register', route: '/reports?tab=register' },
+        ]
+      },
       { id: 'insights', label: 'AI Insights', icon: LuSparkles, badge: 'AI' },
     ]
   },
@@ -281,7 +290,7 @@ export function Sidebar({ T, screen, setScreen, collapsed, setCollapsed, onLogou
                 const toggle = () => setOpenGroups((s) => ({ ...s, [item.id]: !(s[item.id] !== undefined ? s[item.id] : inGroup) }));
                 return (
                   <div key={item.id}>
-                    <button onClick={() => collapsed ? setScreen(item.children[0].route) : toggle()} title={collapsed ? item.label : undefined}
+                    <button onClick={() => collapsed ? setScreen(item.collapsedRoute || item.children[0].route) : toggle()} title={collapsed ? item.label : undefined}
                       style={{
                         width: collapsed ? 'auto' : 'calc(100% - 10px)', textAlign: 'left',
                         display: 'flex', alignItems: 'center', gap: 11, cursor: 'pointer',
