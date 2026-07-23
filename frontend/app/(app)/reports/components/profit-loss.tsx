@@ -10,7 +10,7 @@ import { money } from '@/lib/theme';
 import { Btn, Panel, Field, TextField, SelectField, FormGrid, StatCard } from '@/components/kit';
 import { API } from '@/lib/api';
 import { toLocalYmd, todayLocal } from '@/lib/business-settings';
-import { LuPrinter, LuDownload, LuSearch } from 'react-icons/lu';
+import { LuPrinter, LuDownload, LuSearch, LuFileSpreadsheet, LuColumns3, LuFileText, LuChevronDown } from 'react-icons/lu';
 
 // [key, label, informational] — informational rows sit outside the column
 // totals and the profit formulas: stock at sale price is indicative, and
@@ -71,6 +71,9 @@ export function ProfitLossReport({ T }: { T: Theme }) {
   const [group, setGroup] = React.useState('product');
   const [by, setBy] = React.useState<any>(null);
   const [q, setQ] = React.useState('');
+  // Breakdown-table toolbar: toggleable columns + which dropdown menu is open.
+  const [cols, setCols] = React.useState<Record<string, boolean>>({ sub: true, qty: true, sales: true, profit: true });
+  const [menu, setMenu] = React.useState<null | 'cols' | 'pdf'>(null);
 
   React.useEffect(() => { API.location.list().then(setLocs).catch(() => {}); }, []);
 
@@ -111,6 +114,21 @@ export function ProfitLossReport({ T }: { T: Theme }) {
     ? rows.reduce((a, r) => ({ qty: a.qty + (r.qty || 0), sales: a.sales + (r.sales || 0), profit: a.profit + (r.profit || 0) }), { qty: 0, sales: 0, profit: 0 })
     : { qty: by?.totals?.qty || 0, sales: by?.totals?.sales || 0, profit: by?.totals?.profit || 0 };
 
+  // Visible columns beside the always-on label column; exports honour them too,
+  // like the reference's DataTables toolbar.
+  const colDefs = ([
+    { key: 'sub', label: 'Details', right: false },
+    { key: 'qty', label: 'Qty', right: true },
+    { key: 'sales', label: 'Sales', right: true },
+    { key: 'profit', label: 'Gross Profit', right: true },
+  ] as const).filter(c => cols[c.key]);
+  const cellOf = (r: any, key: string) => key === 'sub' ? (r.sub || '') : key === 'qty' ? r.qty : key === 'sales' ? r.sales : r.profit;
+  const totalOf = (key: string) => key === 'sub' ? '' : (byTotals as any)[key];
+  const exportName = () => {
+    const period = data?.period || {};
+    return `profit-by-${group}-${period.from || filters.from}-to-${period.to || filters.to}`;
+  };
+
   function exportCSV() {
     const escCsv = (v: any) => {
       let s = String(v ?? '');
@@ -120,16 +138,57 @@ export function ProfitLossReport({ T }: { T: Theme }) {
       if (/^[=+\-@\t\r]/.test(s) && !/^-?\d+(\.\d+)?$/.test(s)) s = "'" + s;
       return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
     };
-    const period = data?.period || {};
-    const head = [groupDef[2], 'Details', 'Qty', 'Sales', 'Gross Profit'];
-    const body = rows.map((r: any) => [r.label, r.sub || '', r.qty, r.sales.toFixed(2), r.profit.toFixed(2)].map(escCsv).join(',')).join('\n');
-    const totals = ['Total', '', byTotals.qty, byTotals.sales.toFixed(2), byTotals.profit.toFixed(2)].map(escCsv).join(',');
+    const fmt = (key: string, v: any) => (key === 'sales' || key === 'profit') ? Number(v).toFixed(2) : v;
+    const head = [groupDef[2], ...colDefs.map(c => c.label)];
+    const body = rows.map((r: any) => [r.label, ...colDefs.map(c => fmt(c.key, cellOf(r, c.key)))].map(escCsv).join(',')).join('\n');
+    const totals = ['Total', ...colDefs.map(c => fmt(c.key, totalOf(c.key)))].map(escCsv).join(',');
     const blob = new Blob([head.join(',') + '\n' + body + '\n' + totals], { type: 'text/csv' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `profit-by-${group}-${period.from || filters.from}-to-${period.to || filters.to}.csv`;
+    a.download = `${exportName()}.csv`;
     a.click();
     URL.revokeObjectURL(a.href);
+  }
+
+  async function exportExcel() {
+    const XLSX: any = await import('xlsx');
+    const aoa = [
+      [groupDef[2], ...colDefs.map(c => c.label)],
+      ...rows.map((r: any) => [r.label, ...colDefs.map(c => cellOf(r, c.key))]),
+      ['Total', ...colDefs.map(c => totalOf(c.key))],
+    ];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), 'Profit by ' + groupDef[1]);
+    XLSX.writeFile(wb, `${exportName()}.xlsx`);
+  }
+
+  // Print / Export PDF: standalone window, browser print dialog. For PDF the
+  // user picks "Save as PDF"; @page pins the chosen orientation.
+  function printBreakdown(orientation?: 'portrait' | 'landscape') {
+    if (!rows.length || loading) return;
+    const period = data?.period || {};
+    const numCell = (key: string, v: any) => (key === 'sales' || key === 'profit') ? esc(money(v)) : esc(v);
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Profit by ${esc(groupDef[1])} ${esc(period.from || filters.from)} – ${esc(period.to || filters.to)}</title>
+<style>
+  ${orientation ? `@page{size:A4 ${orientation};margin:14mm}` : ''}
+  body{font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#222;margin:28px;font-size:12.5px}
+  h1{font-size:17px;margin:0 0 2px} .sub{color:#666;margin-bottom:14px}
+  table{width:100%;border-collapse:collapse}
+  th,td{border:1px solid #ddd;padding:5px 8px;text-align:left} th{background:#f3f4f6}
+  .r{text-align:right;font-variant-numeric:tabular-nums}
+  tfoot td{font-weight:700;background:#fafafa}
+</style></head><body>
+  <h1>Profit by ${esc(groupDef[1])}</h1>
+  <div class="sub">${esc(period.from || filters.from)} to ${esc(period.to || filters.to)}</div>
+  <table>
+    <thead><tr><th>${esc(groupDef[2])}</th>${colDefs.map(c => `<th${c.right ? ' class="r"' : ''}>${esc(c.label)}</th>`).join('')}</tr></thead>
+    <tbody>${rows.map((r: any) => `<tr><td>${esc(r.label)}</td>${colDefs.map(c => `<td${c.right ? ' class="r"' : ''}>${numCell(c.key, cellOf(r, c.key))}</td>`).join('')}</tr>`).join('')}</tbody>
+    <tfoot><tr><td>Total</td>${colDefs.map(c => `<td${c.right ? ' class="r"' : ''}>${c.key === 'sub' ? '' : numCell(c.key, totalOf(c.key))}</td>`).join('')}</tr></tfoot>
+  </table>
+  <script>window.onload=function(){window.print()}</script>
+</body></html>`;
+    const w = window.open('', '_blank', 'width=980,height=760');
+    if (w) { w.document.write(html); w.document.close(); }
   }
 
   function printStatement() {
@@ -295,7 +354,7 @@ export function ProfitLossReport({ T }: { T: Theme }) {
                     style={{ padding: '7px 14px', borderRadius: 7, border: 'none', cursor: 'pointer', fontFamily: T.fBody, fontSize: 12.5, fontWeight: group === gid ? 700 : 500, background: group === gid ? T.accent.base : 'transparent', color: group === gid ? T.accent.on : T.inkMid }}>{lbl}</button>
                 ))}
               </div>
-              <div style={{ display: 'flex', gap: 10, alignItems: 'center', margin: '12px 0' }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '12px 0', flexWrap: 'wrap' }}>
                 <div style={{ position: 'relative', flex: 1, minWidth: 180, maxWidth: 320 }}>
                   <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: T.inkMute, display: 'inline-flex' }}><LuSearch size={14} /></span>
                   <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search…"
@@ -304,39 +363,70 @@ export function ProfitLossReport({ T }: { T: Theme }) {
                 <div style={{ flex: 1 }} />
                 {by?.limited && <span style={{ fontSize: 11.5, color: T.inkMute }}>Showing the first 1,000 rows</span>}
                 <Btn T={T} kind="ghost" onClick={exportCSV} disabled={!rows.length || loading}><LuDownload size={14} style={{ verticalAlign: -2, marginRight: 6 }} />Export CSV</Btn>
+                <Btn T={T} kind="ghost" onClick={exportExcel} disabled={!rows.length || loading}><LuFileSpreadsheet size={14} style={{ verticalAlign: -2, marginRight: 6 }} />Export Excel</Btn>
+                <Btn T={T} kind="ghost" onClick={() => printBreakdown()} disabled={!rows.length || loading}><LuPrinter size={14} style={{ verticalAlign: -2, marginRight: 6 }} />Print</Btn>
+                <div style={{ position: 'relative' }}>
+                  <Btn T={T} kind="ghost" onClick={() => setMenu(menu === 'cols' ? null : 'cols')}><LuColumns3 size={14} style={{ verticalAlign: -2, marginRight: 6 }} />Column visibility<LuChevronDown size={12} style={{ verticalAlign: -1, marginLeft: 5 }} /></Btn>
+                  {menu === 'cols' && (
+                    <div style={{ position: 'absolute', right: 0, top: 'calc(100% + 4px)', zIndex: 30, background: T.paper, border: `1px solid ${T.line}`, borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,.12)', padding: 6, minWidth: 170 }}>
+                      {([['sub', 'Details'], ['qty', 'Qty'], ['sales', 'Sales'], ['profit', 'Gross Profit']] as const).map(([k, lbl]) => (
+                        <label key={k} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 10px', borderRadius: 7, cursor: 'pointer', fontSize: 12.5, fontFamily: T.fBody, color: T.ink }}>
+                          <input type="checkbox" checked={cols[k]} onChange={() => setCols(p => ({ ...p, [k]: !p[k] }))} />
+                          {lbl}
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div style={{ position: 'relative' }}>
+                  <Btn T={T} kind="ghost" onClick={() => setMenu(menu === 'pdf' ? null : 'pdf')} disabled={!rows.length || loading}><LuFileText size={14} style={{ verticalAlign: -2, marginRight: 6 }} />Export PDF<LuChevronDown size={12} style={{ verticalAlign: -1, marginLeft: 5 }} /></Btn>
+                  {menu === 'pdf' && (
+                    <div style={{ position: 'absolute', right: 0, top: 'calc(100% + 4px)', zIndex: 30, background: T.paper, border: `1px solid ${T.line}`, borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,.12)', padding: 6, minWidth: 140 }}>
+                      {(['portrait', 'landscape'] as const).map(o => (
+                        <button key={o} onClick={() => { setMenu(null); printBreakdown(o); }}
+                          style={{ display: 'block', width: '100%', textAlign: 'left', padding: '7px 10px', borderRadius: 7, border: 'none', cursor: 'pointer', background: 'transparent', fontSize: 12.5, fontFamily: T.fBody, color: T.ink }}
+                          onMouseEnter={e => { e.currentTarget.style.background = T.paperAlt; }}
+                          onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
+                          {o === 'portrait' ? 'Portrait' : 'Landscape'}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
+            {menu && <div onClick={() => setMenu(null)} style={{ position: 'fixed', inset: 0, zIndex: 20 }} />}
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 560 }}>
                 <thead><tr>
                   <th style={th()}>{groupDef[2]}</th>
-                  <th style={th()}>Details</th>
-                  <th style={th('r')}>Qty</th>
-                  <th style={th('r')}>Sales</th>
-                  <th style={th('r')}>Gross Profit</th>
+                  {colDefs.map(c => <th key={c.key} style={th(c.right ? 'r' : 'l')}>{c.label}</th>)}
                 </tr></thead>
                 <tbody>
                   {rows.map((r: any, i: number) => (
                     <tr key={i}>
                       <td style={{ ...td(), color: T.ink, fontWeight: 550 }}>{r.label}</td>
-                      <td style={{ ...td(), color: T.inkMute, fontSize: 12 }}>{r.sub || ''}</td>
-                      <td style={moneyTd()}>{r.qty}</td>
-                      <td style={moneyTd()}>{money(r.sales)}</td>
-                      <td style={{ ...moneyTd(), color: r.profit < 0 ? (T.red) : T.ink }}>{money(r.profit)}</td>
+                      {colDefs.map(c => c.key === 'sub'
+                        ? <td key={c.key} style={{ ...td(), color: T.inkMute, fontSize: 12 }}>{r.sub || ''}</td>
+                        : c.key === 'qty'
+                          ? <td key={c.key} style={moneyTd()}>{r.qty}</td>
+                          : <td key={c.key} style={{ ...moneyTd(), color: c.key === 'profit' && r.profit < 0 ? T.red : T.ink }}>{money(cellOf(r, c.key))}</td>)}
                     </tr>
                   ))}
                   {!rows.length && (
-                    <tr><td colSpan={5} style={{ ...td(), textAlign: 'center', color: T.inkMute, padding: 26 }}>
+                    <tr><td colSpan={1 + colDefs.length} style={{ ...td(), textAlign: 'center', color: T.inkMute, padding: 26 }}>
                       {loading ? 'Loading…' : 'No sales in this period.'}
                     </td></tr>
                   )}
                 </tbody>
                 {rows.length > 0 && (
                   <tfoot><tr style={{ background: T.paperAlt }}>
-                    <td style={{ ...td(), fontWeight: 700 }} colSpan={2}>Total</td>
-                    <td style={{ ...moneyTd(), fontWeight: 700 }}>{byTotals.qty}</td>
-                    <td style={{ ...moneyTd(), fontWeight: 700 }}>{money(byTotals.sales)}</td>
-                    <td style={{ ...moneyTd(), fontWeight: 700 }}>{money(byTotals.profit)}</td>
+                    <td style={{ ...td(), fontWeight: 700 }}>Total</td>
+                    {colDefs.map(c => c.key === 'sub'
+                      ? <td key={c.key} style={td()} />
+                      : c.key === 'qty'
+                        ? <td key={c.key} style={{ ...moneyTd(), fontWeight: 700 }}>{byTotals.qty}</td>
+                        : <td key={c.key} style={{ ...moneyTd(), fontWeight: 700 }}>{money(totalOf(c.key))}</td>)}
                   </tr></tfoot>
                 )}
               </table>
