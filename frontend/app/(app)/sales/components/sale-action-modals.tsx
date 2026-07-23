@@ -168,6 +168,8 @@ export function InvoiceUrlModal({ T, sale, onClose }: { T: Theme; sale: any; onC
 const TAGS = ['business_name', 'invoice_number', 'invoice_url', 'total_amount', 'paid_amount', 'received_amount', 'due_amount', 'contact_name', 'location_name', 'location_address', 'sale_date'];
 
 // Stored templates (Notification Templates screen) override the built-ins.
+// The screen stores under its own event keys; this modal's props use short ones.
+const TPL_KEY: Record<'sale' | 'payment', string> = { sale: 'new_sale', payment: 'payment_received' };
 const storedTpl = (key: string) => (getSetting('notification_templates', {}) as any)?.[key] || null;
 const TEMPLATES = {
   sale: {
@@ -183,11 +185,15 @@ const TEMPLATES = {
 export function SendNotificationModal({ T, sale, template = 'sale', onClose, onSent }:
   { T: Theme; sale: any; template?: 'sale' | 'payment'; onClose: () => void; onSent: (msg: string) => void }) {
   const tpl = TEMPLATES[template];
+  // Prefill from the stored template for this event when one exists (placeholders
+  // stay as {tags} — the server substitutes them from the sale row at send time);
+  // fall back to the built-in wording field-by-field when nothing is stored.
+  const stored = storedTpl(TPL_KEY[template]);
   const [to, setTo] = useState('');
-  const [cc, setCc] = useState('');
-  const [bcc, setBcc] = useState('');
-  const [subject, setSubject] = useState(tpl.subject);
-  const [body, setBody] = useState(tpl.body);
+  const [cc, setCc] = useState<string>(stored?.cc || '');
+  const [bcc, setBcc] = useState<string>(stored?.bcc || '');
+  const [subject, setSubject] = useState<string>(stored?.subject || tpl.subject);
+  const [body, setBody] = useState<string>(stored?.email_body || tpl.body);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 

@@ -25,14 +25,17 @@ export function Loyalty({ T }: { T: Theme }) {
   }, []);
 
   const set = (k: string, v: any) => { setS((p: any) => ({ ...p, [k]: v })); setDirty(true); };
-  async function save() { const saved = await API.reward.saveSettings(s); setS(saved); setDirty(false); toast('Reward settings saved'); API.reward.members().then(setMembers); }
+  async function save() {
+    try { const saved = await API.reward.saveSettings(s); setS(saved); setDirty(false); toast('Reward settings saved'); API.reward.members().then(setMembers); }
+    catch (e: any) { toast(e.message || 'Could not save reward settings.'); }
+  }
 
   if (!s) return <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: T.paperAlt, fontFamily: T.fMono, fontSize: 12.5, color: T.inkSub }}>GET /connector/api/reward-point-setting…</div>;
 
   const name = s.display_name || 'Reward Points';
   // live earning preview for a $100 invoice
   const sample = 100;
-  const earned = sample >= s.min_order_total_earn ? Math.min(s.max_points_per_order || Infinity, Math.floor(sample / s.amount_per_unit_point)) : 0;
+  const earned = s.amount_per_unit_point > 0 && sample >= s.min_order_total_earn ? Math.min(s.max_points_per_order || Infinity, Math.floor(sample / s.amount_per_unit_point)) : 0;
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: T.paperAlt }}>
@@ -61,26 +64,28 @@ export function Loyalty({ T }: { T: Theme }) {
               {/* earning */}
               <Panel T={T} title="Earning points">
                 <Row T={T} label="Display name" hint="Shown on receipts & screens"><Txt T={T} value={s.display_name} onChange={(v: any) => set('display_name', v)} w={150} /></Row>
-                <Row T={T} label="Amount spent per point" hint="$ a customer spends to earn 1 point"><Txt T={T} value={s.amount_per_unit_point} onChange={(v: any) => set('amount_per_unit_point', +v)} num suffix="$ / pt" /></Row>
-                <Row T={T} label="Min order to earn" hint="Invoice total must reach this"><Txt T={T} value={s.min_order_total_earn} onChange={(v: any) => set('min_order_total_earn', +v)} num suffix="$" /></Row>
+                <Row T={T} label="Amount spent per point" hint="$ a customer spends to earn 1 point"><Txt T={T} value={s.amount_per_unit_point} onChange={(v: any) => set('amount_per_unit_point', v === '' ? null : +v)} num suffix="$ / pt" /></Row>
+                <Row T={T} label="Min order to earn" hint="Invoice total must reach this"><Txt T={T} value={s.min_order_total_earn} onChange={(v: any) => set('min_order_total_earn', v === '' ? null : +v)} num suffix="$" /></Row>
                 <Row T={T} label="Max points per order" hint="Blank for no cap" last><Txt T={T} value={s.max_points_per_order || ''} onChange={(v: any) => set('max_points_per_order', v === '' ? null : +v)} num suffix="pts" /></Row>
               </Panel>
               {/* redeem */}
               <Panel T={T} title="Redeeming points">
-                <Row T={T} label="Value per point" hint="$ a single point is worth"><Txt T={T} value={s.redeem_amount_per_point} onChange={(v: any) => set('redeem_amount_per_point', +v)} num suffix="$ / pt" /></Row>
-                <Row T={T} label="Min order to redeem"><Txt T={T} value={s.min_order_total_redeem} onChange={(v: any) => set('min_order_total_redeem', +v)} num suffix="$" /></Row>
+                <Row T={T} label="Value per point" hint="$ a single point is worth"><Txt T={T} value={s.redeem_amount_per_point} onChange={(v: any) => set('redeem_amount_per_point', v === '' ? null : +v)} num suffix="$ / pt" /></Row>
+                <Row T={T} label="Min order to redeem"><Txt T={T} value={s.min_order_total_redeem} onChange={(v: any) => set('min_order_total_redeem', v === '' ? null : +v)} num suffix="$" /></Row>
                 <Row T={T} label="Min / max redeem per order">
                   <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                    <Txt T={T} value={s.min_redeem_point} onChange={(v: any) => set('min_redeem_point', +v)} num w={56} />
+                    <Txt T={T} value={s.min_redeem_point} onChange={(v: any) => set('min_redeem_point', v === '' ? null : +v)} num w={56} />
                     <span style={{ color: T.inkMute }}>–</span>
-                    <Txt T={T} value={s.max_redeem_point} onChange={(v: any) => set('max_redeem_point', +v)} num w={64} />
+                    <Txt T={T} value={s.max_redeem_point} onChange={(v: any) => set('max_redeem_point', v === '' ? null : +v)} num w={64} />
                   </div>
                 </Row>
                 <Row T={T} label="Points expiry" last>
                   <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                    <Txt T={T} value={s.expiry_period} onChange={(v: any) => set('expiry_period', +v)} num w={56} />
+                    <Txt T={T} value={s.expiry_period} onChange={(v: any) => set('expiry_period', v === '' ? null : +v)} num w={56} />
                     <select value={s.expiry_type} onChange={(e: any) => set('expiry_type', e.target.value)} style={{ padding: '7px 9px', fontSize: 12.5, fontFamily: T.fBody, color: T.ink, background: T.paper, border: `1px solid ${T.line}`, borderRadius: 7, outline: 'none', cursor: 'pointer' }}>
-                      <option value="months">months</option><option value="years">years</option>
+                      {/* values must match the API enum: day | week | month | year */}
+                      <option value="day">days</option><option value="week">weeks</option>
+                      <option value="month">months</option><option value="year">years</option>
                     </select>
                   </div>
                 </Row>

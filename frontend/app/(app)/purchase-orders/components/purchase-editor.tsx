@@ -7,7 +7,7 @@ import { PRODUCTS } from '@/lib/data';
 import { blankLine, sub, formStatus, StaticVal, miniNum } from './bits';
 import { ProductCombo } from './product-combo';
 import { readSheet, mapImportRows } from './import-lines';
-import { todayLocal } from '@/lib/business-settings';
+import { todayLocal, getSetting } from '@/lib/business-settings';
 
 const { useState: useStatePu, useEffect: useEffectPu } = React;
 
@@ -215,7 +215,7 @@ export function PurchaseEditor({ T, suppliers, locs, existing, onClose, onSaved 
         <Field T={T} label="Supplier">{locked ? <StaticVal T={T}>{ex.supplier_name}</StaticVal> : <SelectField T={T} value={String(supplier_id)} options={['', ...suppliers.map((s: any) => String(s.id))]} onChange={(v: any) => setSupplier(v)} render={(v: any) => v ? (suppliers.find((s: any) => String(s.id) === v) || {}).name : 'Please select…'} />}</Field>
         <Field T={T} label="Reference No" hint={isEdit ? undefined : 'Blank = auto-generated'}><TextField T={T} value={reference} onChange={setReference} placeholder="e.g. PO-2026-001" /></Field>
         <Field T={T} label="Purchase Date"><TextField T={T} type="date" value={date} onChange={setDate} /></Field>
-        {getSetting('purchases_enable_status', true) !== false && <Field T={T} label="Purchase Status">{locked ? <StaticVal T={T}>{({ received: 'Received', ordered: 'Ordered', pending: 'Pending' } as any)[status] || status}</StaticVal> : <SelectField T={T} value={status} options={['received', 'ordered', 'pending']} onChange={setStatus} render={(v: any) => ({ received: 'Received', ordered: 'Ordered', pending: 'Pending' } as any)[v]} />}</Field>}
+        {getSetting<boolean>('purchases_enable_status', true) !== false && <Field T={T} label="Purchase Status">{locked ? <StaticVal T={T}>{({ received: 'Received', ordered: 'Ordered', pending: 'Pending' } as any)[status] || status}</StaticVal> : <SelectField T={T} value={status} options={['received', 'ordered', 'pending']} onChange={setStatus} render={(v: any) => ({ received: 'Received', ordered: 'Ordered', pending: 'Pending' } as any)[v]} />}</Field>}
         <Field T={T} label="Business Location">{locked ? <StaticVal T={T}>{ex.location_name}</StaticVal> : <SelectField T={T} value={String(location_id)} options={locs.map((l: any) => String(l.id))} onChange={setLocation} render={(v: any) => (locs.find((l: any) => String(l.id) === v) || {}).name} />}</Field>
         <Field T={T} label="Pay term (days)"><TextField T={T} type="number" value={payTerm} onChange={setPayTerm} placeholder="e.g. 30" /></Field>
       </div>
@@ -292,7 +292,7 @@ export function PurchaseEditor({ T, suppliers, locs, existing, onClose, onSaved 
               <input type="number" value={l.discount_percent} onChange={(e: any) => setLine(i, 'discount_percent', e.target.value)} placeholder="0" style={miniNum(T)} />
               <span style={{ textAlign: 'right', fontFamily: T.fMono, fontSize: 12, color: T.inkSub } as React.CSSProperties}>{money(netCost(l))}</span>
               <span style={{ textAlign: 'right', fontFamily: T.fMono, fontSize: 12, color: T.ink } as React.CSSProperties}>{money(lineTotal(l))}</span>
-              {getSetting('purchases_edit_price', true) !== false
+              {getSetting<boolean>('purchases_edit_price', true) !== false
                 ? <input type="number" value={l.selling_price} onChange={(e: any) => setLine(i, 'selling_price', e.target.value)} placeholder="0.00" style={miniNum(T)} />
                 : <span style={{ fontFamily: T.fMono, fontSize: 12.5, color: T.inkSub }}>{l.selling_price || '—'}</span>}
               <span style={{ textAlign: 'right', fontFamily: T.fMono, fontSize: 12, color: lineMargin(l) >= 0 ? T.greenText : T.redText } as React.CSSProperties}>{lineMargin(l)}%</span>

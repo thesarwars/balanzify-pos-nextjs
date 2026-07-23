@@ -1938,6 +1938,7 @@ model Supplier {
   isActive           Boolean  @default(true) @map("is_active")
   contactKind        String   @default("business") @map("contact_kind") @db.VarChar(10) // individual | business
   assignedToId       String?  @map("assigned_to_id") @db.Uuid // team member who owns this relationship
+  customValues       Json?    @map("custom_values")
   notes              String?
   createdAt          DateTime @default(now()) @map("created_at")
   updatedAt          DateTime @default(now()) @updatedAt @map("updated_at")

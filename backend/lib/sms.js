@@ -4,6 +4,7 @@
 // Business.smsConfig, which never travels to the browser unredacted.
 // Every attempt lands in sms_logs.
 const prisma = require('./prisma');
+const { guardedFetch } = require('./urlGuard');
 
 const SECRET_KEYS = ['at_api_key', 'twilio_auth_token', 'custom_headers'];
 
@@ -63,7 +64,10 @@ async function deliver(cfg, to, message) {
     return;
   }
 
-  // Generic HTTP — the reference's screen, kept as the escape hatch.
+  // Generic HTTP — the reference's screen, kept as the escape hatch. The URL is
+  // tenant-supplied, so it goes through the SSRF guard: public destinations
+  // only, and guardedFetch pins the socket to the vetted IP and never follows
+  // redirects — Africa's Talking/Twilio above hit fixed hosts and don't need it.
   if (!cfg.custom_url) throw new Error('The custom gateway URL is required.');
   const params = { [cfg.custom_to_param || 'to']: to, [cfg.custom_msg_param || 'text']: message };
   for (const p of cfg.custom_params || []) if (p && p.key) params[p.key] = p.value || '';
@@ -75,13 +79,15 @@ async function deliver(cfg, to, message) {
   if (method === 'GET') {
     const url = new URL(cfg.custom_url);
     for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
-    res = await fetch(url, { headers });
+    res = await guardedFetch(url.toString(), { headers });
   } else if ((cfg.custom_body_type || 'form') === 'json') {
-    res = await fetch(cfg.custom_url, { method, headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(params) });
+    res = await guardedFetch(cfg.custom_url, { method, headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(params) });
   } else {
-    res = await fetch(cfg.custom_url, { method, headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...headers }, body: new URLSearchParams(params) });
+    res = await guardedFetch(cfg.custom_url, { method, headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...headers }, body: new URLSearchParams(params).toString() });
   }
-  if (!res.ok) throw new Error(`Gateway HTTP ${res.status}: ${(await res.text().catch(() => '')).slice(0, 200)}`);
+  // Status only — never echo the gateway's response body into errors or
+  // sms_logs (it used to leak up to 200 chars of whatever the URL returned).
+  if (!res.ok) throw new Error(`Gateway HTTP ${res.status}`);
 }
 
 /** Send one SMS and log the attempt. Throws on failure (after logging). */

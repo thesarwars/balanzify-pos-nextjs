@@ -149,7 +149,11 @@ loyaltyRouter.get('/rules', auth, async (req, res, next) => {
 
 loyaltyRouter.put('/rules', auth, requireRole('owner'), validate(RewardSettingsSchema), async (req, res, next) => {
   try {
-    const s = { ...REWARD_DEFAULTS, ...req.body };
+    // Cleared numeric inputs parse to undefined (see RewardSettingsSchema) —
+    // drop them so the spread reverts them to the defaults instead of
+    // persisting undefined/0 into the settings JSON.
+    const body = Object.fromEntries(Object.entries(req.body).filter(([, v]) => v !== undefined));
+    const s = { ...REWARD_DEFAULTS, ...body };
     const b = req.body;
     // Accept both the rich reward-settings vocabulary (amount_per_unit_point,
     // redeem_amount_per_point, min_redeem_point, enabled) AND the simpler

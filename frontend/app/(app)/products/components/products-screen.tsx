@@ -252,6 +252,9 @@ export function Products({ T }: { T: any }) {
       if (allValues.some((v: any) => v.price === '' || v.price == null)) return 'Each variation value needs a selling price.';
     }
     if (form.type === 'combo' && !form.combo.length) return 'Add at least one product to the combo.';
+    // Custom fields flagged "required" must actually hold a value.
+    const missing = productDefs.find((d: any) => d.is_active && d.required && !String((form.custom_values || {})[d.id] ?? '').trim());
+    if (missing) return `${missing.label} is required.`;
     return null;
   }
   async function save(andAnother = false) {
@@ -278,6 +281,7 @@ export function Products({ T }: { T: any }) {
       is_serialized: form.is_serialized, selling_price_tax_type: form.selling_price_tax_type,
       location_ids: form.location_ids, description: form.description,
       brochure_url: form.brochure_url, brochure_key: form.brochure_key,
+      custom_values: form.custom_values || {},
     };
     try {
       let savedId: any = editing && editing.id;

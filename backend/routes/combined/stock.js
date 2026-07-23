@@ -376,7 +376,9 @@ stockRouter.post('/adjustments/docs', auth, requireRole('owner', 'manager'), val
     adjNormIds(items);
     const doc = await prisma.$transaction(async (tx) => {
       const { names, costs } = await adjAssertProducts(tx, req.user.business_id, items);
-      const ref = (ref_no || '').trim() || `${await require('../../lib/prefix').refPrefix(tx, req.user.business_id, 'prefix_stock_adjustment', 'ADJ')}-${Date.now()}`;
+      // Random tail like expenses: two same-ms creates would otherwise mint the
+      // same ref and the second would die on @@unique([businessId, referenceNo]).
+      const ref = (ref_no || '').trim() || `${await require('../../lib/prefix').refPrefix(tx, req.user.business_id, 'prefix_stock_adjustment', 'ADJ')}-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
       if (ref_no && ref_no.trim()) await adjAssertRef(tx, req.user.business_id, ref);
 
       const d = await tx.stockAdjustmentDoc.create({
@@ -629,7 +631,9 @@ stockRouter.post('/transfers', auth, requireRole('owner', 'manager'), validate(T
     items.forEach((i) => { i.product_id = String(i.product_id).toLowerCase(); });
     const transfer = await prisma.$transaction(async (tx) => {
       const names = await trAssertProducts(tx, req.user.business_id, items);
-      const ref = (ref_no || '').trim() || `${await require('../../lib/prefix').refPrefix(tx, req.user.business_id, 'prefix_stock_transfer', 'TRF')}-${Date.now()}`;
+      // Random tail like expenses: two same-ms creates would otherwise mint the
+      // same ref and the second would die on @@unique([businessId, transferNumber]).
+      const ref = (ref_no || '').trim() || `${await require('../../lib/prefix').refPrefix(tx, req.user.business_id, 'prefix_stock_transfer', 'TRF')}-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
       if (ref_no && ref_no.trim()) await trAssertRef(tx, req.user.business_id, ref);
 
       const moved = apiStatus !== 'pending';    // stock has left the source

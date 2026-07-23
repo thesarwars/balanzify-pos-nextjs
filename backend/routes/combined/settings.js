@@ -45,12 +45,34 @@ settingsRouter.put('/', auth, requireRole('owner'), validate(SettingsSchema), as
       currency: req.body.currency, receiptHeader: req.body.receipt_header, receiptFooter: req.body.receipt_footer,
       taxNumber: req.body.tax_number, ...(req.body.language !== undefined && { language: req.body.language }),
     };
-    // Shallow-merge the settings bag so a partial save never drops other keys.
-    if (req.body.settings && typeof req.body.settings === 'object') {
-      const current = await prisma.business.findUnique({ where: { id: req.user.business_id }, select: { settings: true } });
-      data.settings = { ...((current && current.settings) || {}), ...req.body.settings };
-    }
-    const biz = await prisma.business.update({ where: { id: req.user.business_id }, data });
+    // Mirror the GET whitelist — update() without a select returns every
+    // column, including smsConfig/emailConfig whose secrets must never leave
+    // the server (the dedicated /sms and /email routes return redacted views).
+    const RESPONSE_SELECT = {
+      id: true, name: true, phone: true, address: true, city: true, country: true,
+      currency: true, receiptHeader: true, receiptFooter: true, taxNumber: true, language: true,
+      logoUrl: true, settings: true,
+    };
+    // The settings bag is read-modify-write; lock the row so two concurrent
+    // partial saves merge sequentially instead of the loser erasing the
+    // winner's keys.
+    const biz = await prisma.$transaction(async (tx) => {
+      if (req.body.settings && typeof req.body.settings === 'object') {
+        await tx.$queryRaw`SELECT id FROM businesses WHERE id = ${req.user.business_id}::uuid FOR UPDATE`;
+        const current = await tx.business.findUnique({ where: { id: req.user.business_id }, select: { settings: true } });
+        const stored = (current && current.settings) || {};
+        const incoming = { ...req.body.settings };
+        // notification_templates is a keyed record edited one template at a time —
+        // merge per template key so a partial save never erases the other templates.
+        // (Sending an explicit null still clears the whole record.)
+        if (incoming.notification_templates && typeof incoming.notification_templates === 'object'
+            && stored.notification_templates && typeof stored.notification_templates === 'object') {
+          incoming.notification_templates = { ...stored.notification_templates, ...incoming.notification_templates };
+        }
+        data.settings = { ...stored, ...incoming };
+      }
+      return tx.business.update({ where: { id: req.user.business_id }, data, select: RESPONSE_SELECT });
+    });
     invalidateBusinessSettings(req.user.business_id);   // routes read the bag through a TTL cache
     res.json({ ...biz, settings: biz.settings || {} });
   } catch (err) { next(err); }
@@ -140,7 +162,9 @@ settingsRouter.post('/sms/test', auth, requireRole('owner'), validate(zSms.objec
 // ── Email (SMTP) settings — password write-only, per business ────────────────
 const EmailCfgSchema = zSms.object({
   host: zSms.string().trim().max(200).optional().nullable(),
-  port: zSms.coerce.number().int().min(1).max(65535).optional().nullable(),
+  // A cleared field arrives as '' (meaning "use the protocol default") — coerce
+  // alone would turn it into 0 and fail min(1), rejecting the whole save.
+  port: zSms.preprocess((v) => (v === '' ? null : v), zSms.coerce.number().int().min(1).max(65535).nullable().optional()),
   username: zSms.string().trim().max(200).optional().nullable(),
   password: zSms.string().max(200).optional().nullable(),
   encryption: zSms.enum(['tls', 'ssl', 'none']).optional().nullable(),
@@ -171,9 +195,19 @@ settingsRouter.post('/email/test', auth, requireRole('owner'), validate(zSms.obj
     const biz = await prisma.business.findUnique({ where: { id: req.user.business_id }, select: { emailConfig: true, name: true } });
     const c = (biz && biz.emailConfig) || {};
     if (!c.host) return res.status(400).json({ title: 'Set the SMTP host first.', status: 400 });
+    // SSRF guard: the host is tenant-supplied — refuse private/internal
+    // destinations before opening a TCP connection from inside our network,
+    // and connect to the vetted address itself (TLS still validates against
+    // the hostname via servername) so a rebinding DNS answer between check
+    // and connect cannot steer us somewhere else.
+    // (Required lazily; the guard is shared with the custom SMS driver.)
+    const { assertPublicHost } = require('../../lib/urlGuard');
+    const vetted = await assertPublicHost(c.host);
     const nodemailer = require('nodemailer');
     const t = nodemailer.createTransport({
-      host: c.host, port: Number(c.port) || 587, secure: c.encryption === 'ssl',
+      host: vetted.address, port: Number(c.port) || (c.encryption === 'ssl' ? 465 : 587), secure: c.encryption === 'ssl',
+      connectionTimeout: 10000, greetingTimeout: 10000,
+      tls: { servername: vetted.host },
       ...(c.username ? { auth: { user: c.username, pass: c.password || '' } } : {}),
     });
     await t.sendMail({
@@ -183,7 +217,12 @@ settingsRouter.post('/email/test', auth, requireRole('owner'), validate(zSms.obj
     });
     res.json({ message: 'Test email sent.' });
   } catch (err) {
-    res.status(502).json({ title: `Email failed: ${err.message}`, status: 502 });
+    // Guard rejections carry their own status (400); everything else is a
+    // gateway failure. The raw driver error goes to the log, not the client —
+    // connect/timeout differentials would otherwise map the network.
+    if (err.statusCode) return res.status(err.statusCode).json({ title: err.message, status: err.statusCode });
+    require('../../lib/logger').logger.warn('email_test_failed', { error: err.message });
+    res.status(502).json({ title: 'Email failed — check the SMTP host, port, encryption and credentials.', status: 502 });
   }
 });
 

@@ -249,11 +249,14 @@ export function POS({ T, tweaks, editSaleId }: { T: any; tweaks: any; editSaleId
 
   // reward points — earn preview + optional redeem against this sale
   const rw = reward && reward.enabled ? reward : null;
-  const custPoints = rw && customer ? Math.floor((customer.total_sale || 0) / rw.amount_per_unit_point) : 0;
-  const canRedeem = !!(rw && customer && custPoints >= rw.min_redeem_point && subtotal >= rw.min_order_total_redeem);
+  // Guard the divisor: a stored 0/absent earn rate must never become
+  // Infinity points (and an unearned redeem discount) at the till.
+  const earnRate = rw && Number(rw.amount_per_unit_point) > 0 ? Number(rw.amount_per_unit_point) : 0;
+  const custPoints = rw && customer && earnRate > 0 ? Math.floor((customer.total_sale || 0) / earnRate) : 0;
+  const canRedeem = !!(rw && customer && custPoints > 0 && custPoints >= rw.min_redeem_point && subtotal >= rw.min_order_total_redeem);
   const redeemPts = canRedeem && redeem ? Math.min(custPoints, rw.max_redeem_point) : 0;
   const redeemDiscount = Math.min(subtotal, +(redeemPts * (rw ? rw.redeem_amount_per_point : 0)).toFixed(2));
-  const pointsEarned = rw && subtotal >= rw.min_order_total_earn ? Math.min(rw.max_points_per_order || Infinity, Math.floor(subtotal / rw.amount_per_unit_point)) : 0;
+  const pointsEarned = rw && earnRate > 0 && subtotal >= rw.min_order_total_earn ? Math.min(rw.max_points_per_order || Infinity, Math.floor(subtotal / earnRate)) : 0;
   // Default Sale Discount (%) applies to every till sale on top of rules;
   // "Disable Discount" suppresses both.
   const settingDiscount = posDisableDiscount ? 0

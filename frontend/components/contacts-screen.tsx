@@ -147,6 +147,10 @@ function ContactEditor({ T, contact, groups, onClose, onSaved, toast }: { T: The
 
   async function save() {
     if (!f.name.trim()) { setErr('Contact name is required.'); return; }
+    // Required custom fields live in the collapsed section — enforce them and
+    // open it so the offending field is visible.
+    const missing = customDefs.find((d: any) => d.is_active && d.required && !String((f.custom_values || {})[d.id] ?? '').trim());
+    if (missing) { setMore(true); setErr(`${missing.label} is required.`); return; }
     setBusy(true); setErr(null);
     try {
       const saved = editing ? await API.contact.update(contact.id, f) : await API.contact.create(f);

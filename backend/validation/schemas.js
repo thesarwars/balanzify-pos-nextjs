@@ -274,6 +274,7 @@ const SupplierSchema = z.object({
   contact_kind: z.enum(['individual', 'business']).optional(),
   assigned_to_id: uuid.optional().nullable(),
   opening_balance: money.optional(),
+  custom_values: z.record(z.string().max(64), z.string().max(500)).optional().nullable(),
   notes: optStr(2000),
 });
 
@@ -1024,17 +1025,22 @@ const LoyaltyRuleSchema = z.object({
 });
 
 // Rich POS reward-settings config (stored as JSON on the loyalty rule).
+// A cleared numeric input arrives as null (or ''), which z.coerce would
+// silently turn into 0 — and 0 stored as amount_per_unit_point divides the
+// POS points math into Infinity. Treat cleared as "not provided" so the
+// default applies instead; the two rate fields must be strictly positive.
+const rewardNum = (inner) => z.preprocess((v) => (v === null || v === '' ? undefined : v), inner);
 const RewardSettingsSchema = z.object({
   enabled:                 z.coerce.boolean().optional(),
   display_name:            optStr(100),
-  amount_per_unit_point:   z.coerce.number().min(0).optional(),
-  min_order_total_earn:    z.coerce.number().min(0).optional(),
-  max_points_per_order:    z.coerce.number().min(0).nullable().optional(),
-  redeem_amount_per_point: z.coerce.number().min(0).optional(),
-  min_order_total_redeem:  z.coerce.number().min(0).optional(),
-  min_redeem_point:        z.coerce.number().int().min(0).optional(),
-  max_redeem_point:        z.coerce.number().int().min(0).optional(),
-  expiry_period:           z.coerce.number().int().min(0).optional(),
+  amount_per_unit_point:   rewardNum(z.coerce.number().positive().optional()),
+  min_order_total_earn:    rewardNum(z.coerce.number().min(0).optional()),
+  max_points_per_order:    z.coerce.number().min(0).nullable().optional(), // null = no cap
+  redeem_amount_per_point: rewardNum(z.coerce.number().positive().optional()),
+  min_order_total_redeem:  rewardNum(z.coerce.number().min(0).optional()),
+  min_redeem_point:        rewardNum(z.coerce.number().int().min(0).optional()),
+  max_redeem_point:        rewardNum(z.coerce.number().int().min(0).optional()),
+  expiry_period:           rewardNum(z.coerce.number().int().min(0).optional()),
   expiry_type:             z.enum(['day', 'week', 'month', 'year']).optional(),
 }).passthrough();
 

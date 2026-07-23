@@ -6,7 +6,7 @@ import React from 'react';
 import { useTheme, Topbar } from '@/components/shell';
 import { Btn, Panel, Field, TextField, SelectField, FormGrid, useToast } from '@/components/kit';
 import { API } from '@/lib/api';
-import { getSetting } from '@/lib/business-settings';
+import { useSetting } from '@/lib/business-settings';
 
 const GROUPS: [string, [string, string, string][]][] = [
   ['Customer Notifications', [
@@ -28,18 +28,29 @@ const ALL = GROUPS.flatMap(([, ts]) => ts);
 export default function NotificationTemplatesPage() {
   const T = useTheme();
   const [key, setKey] = React.useState('new_sale');
-  const [all, setAll] = React.useState<any>({});
+  // Stored templates read REACTIVELY: on a hard reload of this page the settings
+  // bag hydrates after mount, so a one-shot read would render everything blank.
+  // Local edits overlay the stored values per field, so late hydration never
+  // clobbers typing — and Save only writes what was actually edited.
+  const stored = useSetting<any>('notification_templates', {});
+  const [edits, setEdits] = React.useState<any>({});
   const [busy, setBusy] = React.useState(false);
   const [show, node] = useToast();
-  React.useEffect(() => { setAll(getSetting('notification_templates', {}) || {}); }, []);
-  const t = all[key] || {};
-  const set = (k: string, v: any) => setAll((p: any) => ({ ...p, [key]: { ...(p[key] || {}), [k]: v } }));
+  const t = { ...(stored[key] || {}), ...(edits[key] || {}) };
+  const set = (k: string, v: any) => setEdits((p: any) => ({ ...p, [key]: { ...(p[key] || {}), [k]: v } }));
   const meta = ALL.find(([k]) => k === key)!;
   async function save() {
     setBusy(true);
     try {
       const b = await API.business.get();
-      await API.business.update({ name: b.name, currency: b.currency || 'USD', tax_number: b.tax_number || null, settings: { notification_templates: all } });
+      // Read-modify-write: merge the edits over what the server holds, per
+      // template AND per field, so untouched templates/fields always survive.
+      const base = (b?.settings?.notification_templates) || {};
+      const merged: any = { ...base };
+      for (const k of Object.keys(edits)) merged[k] = { ...(merged[k] || {}), ...edits[k] };
+      // Only name/currency (required by the schema) + the templates: absent
+      // fields are left untouched server-side, so nothing else can be wiped.
+      await API.business.update({ name: b.name, currency: b.currency || 'USD', settings: { notification_templates: merged } });
       try { window.dispatchEvent(new Event('bz:settings-changed')); } catch {}
       show('Templates saved');
     } catch (e: any) { show(e.message); } finally { setBusy(false); }
