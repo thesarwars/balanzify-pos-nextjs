@@ -1237,7 +1237,7 @@ describe('Profit / Loss report', () => {
 // ══════════════════════════════════════════════════════════════════════════════
 
 describe('Tax report', () => {
-  let txToken, txBizId, txLocId, cgstId, sgstId, groupId, vatId;
+  let txToken, txBizId, txLocId, cgstId, sgstId, groupId, vatId, txShift;
 
   beforeAll(async () => {
     const reg = await registerBusiness(`tax_${RUN}`);
@@ -1258,6 +1258,9 @@ describe('Tax report', () => {
       .send({ name: 'GST@18%', tax_rate_ids: [cgstId, sgstId] });
     expect(grp.status).toBe(201);
     groupId = grp.body.id;
+    // One open register shared by the checkout-based tests below — a business
+    // can only hold one open shift at a time.
+    txShift = await openShift(txToken, txLocId);
   }, 30000);
 
   afterAll(async () => {
@@ -1399,15 +1402,71 @@ describe('Tax report', () => {
     expect(row.opening_balance).toBeCloseTo(-500, 2);
   });
 
+  test('customer groups report totals sales by group', async () => {
+    const res = await request(app).get('/api/v1/reports/customer-groups').set(auth(txToken));
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body.rows)).toBe(true);
+    // Every sale is accounted for in the group total (walk-in rolls into No group).
+    expect(res.body.totals).toHaveProperty('total_sale');
+  });
+
+  test('stock report returns rows, summary and honours filters', async () => {
+    const res = await request(app).get('/api/v1/reports/stock').set(auth(txToken));
+    expect(res.status).toBe(200);
+    expect(res.body.summary).toHaveProperty('closing_stock_purchase');
+    expect(res.body.summary).toHaveProperty('profit_margin_pct');
+    expect(Array.isArray(res.body.custom_fields)).toBe(true);
+    // The received purchase from the tax test seeded 10 units for its product.
+    const row = res.body.rows.find(r => r.total_transferred_in !== undefined && r.current_stock > 0);
+    expect(row).toBeTruthy();
+    expect(row).toHaveProperty('stock_value_purchase');
+    expect(row).toHaveProperty('total_transferred_out');
+    const badLoc = await request(app).get('/api/v1/reports/stock')
+      .set(auth(txToken)).query({ location_id: 'not-a-uuid' });
+    expect(badLoc.status).toBe(400);
+  });
+
+  test('stock report keeps movement counts for sold-through stock', async () => {
+    // Sell the whole on-hand of a product, then confirm the row still reports
+    // the units sold rather than dropping to zero with the empty layer.
+    const prod = await createProductWithStock(txToken, { locationId: txLocId, stock: 3, sellingPrice: 15, costPrice: 8 });
+    const sale = await checkout(txToken, {
+      items: [{ product_id: prod.id, quantity: 3 }],
+      payment_method: 'cash', cash_tendered: 100, shift_id: txShift.id, location_id: txLocId,
+    });
+    expect(sale.status).toBe(201);
+    const res = await request(app).get('/api/v1/reports/stock').set(auth(txToken));
+    const row = res.body.rows.find(r => r.product_id === prod.id && r.total_sold > 0);
+    expect(row).toBeTruthy();
+    expect(row.total_sold).toBe(3);       // not dropped despite 0 remaining stock
+    expect(row.current_stock).toBe(0);
+  });
+
+  test('stock history breaks movements into in/out buckets', async () => {
+    const stock = await request(app).get('/api/v1/reports/stock').set(auth(txToken));
+    const withStock = stock.body.rows.find(r => r.current_stock > 0);
+    expect(withStock).toBeTruthy();
+    const res = await request(app).get('/api/v1/reports/stock-history')
+      .set(auth(txToken)).query({ product_id: withStock.product_id });
+    expect(res.status).toBe(200);
+    expect(res.body.quantities_in).toHaveProperty('total_purchase');
+    expect(res.body.quantities_out).toHaveProperty('total_sold');
+    expect(Array.isArray(res.body.movements)).toBe(true);
+    // The purchase receipt shows up as an inbound movement.
+    expect(res.body.quantities_in.total_purchase).toBeGreaterThan(0);
+    // product_id is required.
+    const missing = await request(app).get('/api/v1/reports/stock-history').set(auth(txToken));
+    expect(missing.status).toBe(400);
+  });
+
   test('refunding a credit sale clears the receivable it created', async () => {
     const cust = await request(app).post('/api/v1/customers').set(auth(txToken))
       .send({ name: 'Credit Refund Cust', credit_limit: 1000 });
     const prod = await createProductWithStock(txToken, { locationId: txLocId, stock: 5, sellingPrice: 50, costPrice: 20 });
-    const shift = await openShift(txToken, txLocId);
     const sale = await checkout(txToken, {
       items: [{ product_id: prod.id, quantity: 1 }],
       payment_method: 'credit', customer_id: cust.body.id,
-      shift_id: shift.id, location_id: txLocId,
+      shift_id: txShift.id, location_id: txLocId,
     });
     expect(sale.status).toBe(201);
     const si = await prisma.saleItem.findFirst({ where: { saleId: sale.body.id }, select: { id: true } });

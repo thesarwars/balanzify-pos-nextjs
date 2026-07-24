@@ -4739,6 +4739,18 @@ const API: any = {
       if (REAL_MODE) return await realReq('GET', '/reports/contacts', { query: params });
       return null;
     },
+    async customerGroups(params: any = {}) {
+      if (REAL_MODE) return await realReq('GET', '/reports/customer-groups', { query: params });
+      return null;
+    },
+    async stock(params: any = {}) {
+      if (REAL_MODE) return await realReq('GET', '/reports/stock', { query: params });
+      return null;
+    },
+    async stockHistory(params: any = {}) {
+      if (REAL_MODE) return await realReq('GET', '/reports/stock-history', { query: params });
+      return null;
+    },
     async salesSummary(range: any = {}) {
       if (REAL_MODE) return await realReq('GET', '/reports/sales', { query: range });
       return null;

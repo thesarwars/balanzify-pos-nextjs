@@ -34,7 +34,7 @@ const escCsv = (v: any) => {
 };
 
 export function ReportTable({
-  T, cols, rows, title, subtitle, fileName, extraTotals, empty = 'No data available in table', note,
+  T, cols, rows, title, subtitle, fileName, extraTotals, empty = 'No data available in table', note, rowAction,
 }: {
   T: Theme;
   cols: ReportCol[];
@@ -48,6 +48,9 @@ export function ReportTable({
   extraTotals?: Record<string, string | ((shown: any[]) => string)>;
   empty?: string;
   note?: React.ReactNode;
+  /** Optional leading action cell per row (e.g. a drill-down button). Excluded
+   *  from exports and the printable view, which are data-only. */
+  rowAction?: (row: any) => React.ReactNode;
 }) {
   const [q, setQ] = React.useState('');
   const [hidden, setHidden] = React.useState<Record<string, boolean>>({});
@@ -179,19 +182,24 @@ export function ReportTable({
 
       <div style={{ overflowX: 'auto', border: `1px solid ${T.line}`, borderRadius: T.r }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 640 }}>
-          <thead><tr>{visible.map(c => <th key={c.key} style={th(c)}>{c.label}</th>)}</tr></thead>
+          <thead><tr>
+            {rowAction && <th style={th(cols[0])}>Action</th>}
+            {visible.map(c => <th key={c.key} style={th(c)}>{c.label}</th>)}
+          </tr></thead>
           <tbody>
             {shown.map((r, i) => (
               <tr key={r.id ?? i}>
+                {rowAction && <td style={td(cols[0])}>{rowAction(r)}</td>}
                 {visible.map(c => <td key={c.key} style={td(c)}>{fmt(c, c.value(r))}</td>)}
               </tr>
             ))}
             {!shown.length && (
-              <tr><td colSpan={visible.length} style={{ ...td(cols[0]), textAlign: 'center', color: T.inkMute, padding: 26 }}>{empty}</td></tr>
+              <tr><td colSpan={visible.length + (rowAction ? 1 : 0)} style={{ ...td(cols[0]), textAlign: 'center', color: T.inkMute, padding: 26 }}>{empty}</td></tr>
             )}
           </tbody>
           <tfoot>
             <tr style={{ background: T.paperAlt }}>
+              {rowAction && <td style={{ ...td(cols[0]), borderBottom: 'none' }} />}
               {visible.map((c, i) => (
                 <td key={c.key} style={{ ...td(c), fontWeight: 700, borderBottom: 'none' }}>
                   {footCell(c, i)}
