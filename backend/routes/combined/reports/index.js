@@ -9,6 +9,9 @@ reportsRouter.use('/', require('./profit-loss'));
 reportsRouter.use('/', require('./purchase-sale'));
 reportsRouter.use('/', require('./customer-groups'));
 reportsRouter.use('/', require('./stock'));
+reportsRouter.use('/', require('./stock-adjustment'));
+reportsRouter.use('/', require('./trending-products'));
+reportsRouter.use('/', require('./items'));
 reportsRouter.use('/', require('./contacts'));
 reportsRouter.use('/', require('./tax'));
 

@@ -8,7 +8,7 @@
 // ─────────────────────────────────────────────────────────────────
 import React from 'react';
 import type { Theme } from '@/lib/theme';
-import { money } from '@/lib/theme';
+import { money, qty } from '@/lib/theme';
 import { Btn } from '@/components/kit';
 import { LuPrinter, LuDownload, LuSearch, LuFileSpreadsheet, LuColumns3, LuFileText, LuChevronDown } from 'react-icons/lu';
 
@@ -70,8 +70,11 @@ export function ReportTable({
     const e = extraTotals?.[c.key];
     return typeof e === 'function' ? e(shown) : (e ?? '');
   };
+  // Totals honour the column kind: money columns get the currency, num columns
+  // (counts) stay plain numbers.
+  const fmtTotal = (c: ReportCol) => c.kind === 'money' ? money(totalOf(c)) : qty(totalOf(c));
   const footCell = (c: ReportCol, i: number) =>
-    c.total ? money(totalOf(c)) : (extraOf(c) || (i === 0 ? 'Total:' : ''));
+    c.total ? fmtTotal(c) : (extraOf(c) || (i === 0 ? 'Total:' : ''));
   const fmt = (c: ReportCol, v: any) => c.kind === 'money' ? money(Number(v) || 0) : String(v ?? '');
   const right = (c: ReportCol) => c.kind === 'money' || c.kind === 'num';
 
@@ -81,7 +84,7 @@ export function ReportTable({
       const v = c.value(r);
       return escCsv(c.kind === 'money' ? (Number(v) || 0).toFixed(2) : v);
     }).join(',')).join('\n');
-    const totals = visible.map((c, i) => escCsv(c.total ? totalOf(c).toFixed(2) : (extraOf(c) || (i === 0 ? 'Total' : '')))).join(',');
+    const totals = visible.map((c, i) => escCsv(c.total ? (c.kind === 'money' ? totalOf(c).toFixed(2) : String(totalOf(c))) : (extraOf(c) || (i === 0 ? 'Total' : '')))).join(',');
     const blob = new Blob([head + '\n' + body + '\n' + totals], { type: 'text/csv' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -117,7 +120,7 @@ export function ReportTable({
   <table>
     <thead><tr>${visible.map(c => `<th${right(c) ? ' class="r"' : ''}>${esc(c.label)}</th>`).join('')}</tr></thead>
     <tbody>${shown.map(r => `<tr>${visible.map(c => `<td${right(c) ? ' class="r"' : ''}>${esc(fmt(c, c.value(r)))}</td>`).join('')}</tr>`).join('')}</tbody>
-    <tfoot><tr>${visible.map((c, i) => `<td${right(c) ? ' class="r"' : ''}>${c.total ? esc(money(totalOf(c))) : esc(extraOf(c) || (i === 0 ? 'Total' : ''))}</td>`).join('')}</tr></tfoot>
+    <tfoot><tr>${visible.map((c, i) => `<td${right(c) ? ' class="r"' : ''}>${c.total ? esc(fmtTotal(c)) : esc(extraOf(c) || (i === 0 ? 'Total' : ''))}</td>`).join('')}</tr></tfoot>
   </table>
   <script>window.onload=function(){window.print()}</script>
 </body></html>`;

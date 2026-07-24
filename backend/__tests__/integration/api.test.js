@@ -1483,4 +1483,66 @@ describe('Tax report', () => {
     const crow = res.body.rows.find(r => r.name === 'Credit Refund Cust');
     expect(crow.due).toBeCloseTo(0, 2);
   });
+
+  test('trending products ranks by units sold and honours count', async () => {
+    const res = await request(app).get('/api/v1/reports/trending-products')
+      .set(auth(txToken)).query({ count: 3 });
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body.rows)).toBe(true);
+    expect(res.body.rows.length).toBeLessThanOrEqual(3);
+    // Descending by units sold.
+    for (let i = 1; i < res.body.rows.length; i++) {
+      expect(res.body.rows[i - 1].units_sold).toBeGreaterThanOrEqual(res.body.rows[i].units_sold);
+    }
+    const bad = await request(app).get('/api/v1/reports/trending-products')
+      .set(auth(txToken)).query({ product_type: 'nope' });
+    expect(bad.status).toBe(400);
+  });
+
+  test('trending products nets refunded units out of the ranking', async () => {
+    // Sell 4 units, refund 3 → the product should rank at 1 net unit, not 4.
+    const prod = await createProductWithStock(txToken, { locationId: txLocId, stock: 4, sellingPrice: 10, costPrice: 5 });
+    const sale = await checkout(txToken, {
+      items: [{ product_id: prod.id, quantity: 4 }],
+      payment_method: 'cash', cash_tendered: 100, shift_id: txShift.id, location_id: txLocId,
+    });
+    expect(sale.status).toBe(201);
+    const si = await prisma.saleItem.findFirst({ where: { saleId: sale.body.id }, select: { id: true } });
+    const ref = await request(app).post(`/api/v1/sales/${sale.body.id}/refund`).set(auth(txToken))
+      .send({ items: [{ sale_item_id: si.id, product_id: prod.id, quantity: 3, unit_price: 10 }], refund_method: 'cash' });
+    expect(ref.status).toBe(201);
+    const res = await request(app).get('/api/v1/reports/trending-products')
+      .set(auth(txToken)).query({ count: 50 });
+    const row = res.body.rows.find(r => r.product_id === prod.id);
+    expect(row).toBeTruthy();
+    expect(row.units_sold).toBe(1);       // 4 sold − 3 returned
+    expect(row.revenue).toBeCloseTo(10, 2); // 40 − 30
+  });
+
+  test('items report lists sold line items with totals', async () => {
+    const res = await request(app).get('/api/v1/reports/items').set(auth(txToken));
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body.rows)).toBe(true);
+    expect(res.body.totals).toHaveProperty('subtotal');
+    expect(res.body.totals).toHaveProperty('sell_quantity');
+    if (res.body.rows.length) {
+      const r = res.body.rows[0];
+      expect(r).toHaveProperty('sell_quantity');
+      expect(r).toHaveProperty('selling_price');
+      expect(r).toHaveProperty('purchase_value');
+    }
+  });
+
+  test('stock adjustment report exposes normal/abnormal/recovered totals', async () => {
+    const res = await request(app).get('/api/v1/reports/stock-adjustment').set(auth(txToken));
+    expect(res.status).toBe(200);
+    expect(res.body.summary).toHaveProperty('total_normal');
+    expect(res.body.summary).toHaveProperty('total_abnormal');
+    expect(res.body.summary).toHaveProperty('total_adjustment');
+    expect(res.body.summary).toHaveProperty('total_recovered');
+    expect(Array.isArray(res.body.rows)).toBe(true);
+    const bad = await request(app).get('/api/v1/reports/stock-adjustment')
+      .set(auth(txToken)).query({ from: '2026-13-40' });
+    expect(bad.status).toBe(400);
+  });
 });
