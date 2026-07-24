@@ -20,6 +20,7 @@ import { StockReport } from '@/app/(app)/reports/components/stock-report';
 import { StockAdjustmentReport } from '@/app/(app)/reports/components/stock-adjustment-report';
 import { TrendingProductsReport } from '@/app/(app)/reports/components/trending-products';
 import { ItemsReport } from '@/app/(app)/reports/components/items-report';
+import { ProductPurchaseReport } from '@/app/(app)/reports/components/product-purchase-report';
 
 const { useState: useStateD } = React;
 
@@ -311,7 +312,7 @@ export function Reports({ T, tab: tabProp, onTab }: { T: Theme; tab?: string; on
       <div style={{ flex: 1, overflowY: 'auto', padding: 28 }}>
         <div style={{ maxWidth: 1280, margin: '0 auto' }}>
           <div style={{ display: 'flex', gap: 4, marginBottom: 18, background: T.paper, padding: 4, borderRadius: 10, width: 'fit-content', border: `1px solid ${T.line}` }}>
-            {[['overview', 'Overview'], ['profit-loss', 'Profit / Loss'], ['purchase-sale', 'Purchase & Sale'], ['tax', 'Tax Report'], ['contacts', 'Supplier & Customer'], ['customer-groups', 'Customer Groups'], ['stock', 'Stock Report'], ['stock-adjustment', 'Stock Adjustment'], ['trending', 'Trending Products'], ['items', 'Items'], ['commission', 'Sales Representative'], ['register', 'Cash Register']].map(([cid, lbl]) => (
+            {[['overview', 'Overview'], ['profit-loss', 'Profit / Loss'], ['purchase-sale', 'Purchase & Sale'], ['tax', 'Tax Report'], ['contacts', 'Supplier & Customer'], ['customer-groups', 'Customer Groups'], ['stock', 'Stock Report'], ['stock-adjustment', 'Stock Adjustment'], ['trending', 'Trending Products'], ['items', 'Items'], ['product-purchase', 'Product Purchase'], ['commission', 'Sales Representative'], ['register', 'Cash Register']].map(([cid, lbl]) => (
               <button key={cid} onClick={() => setTab(cid)} style={{ padding: '8px 18px', borderRadius: 7, border: 'none', cursor: 'pointer', fontFamily: T.fBody, fontSize: 13, fontWeight: tab === cid ? 700 : 500, background: tab === cid ? T.accent.base : 'transparent', color: tab === cid ? T.accent.on : T.inkMid }}>{lbl}</button>
             ))}
           </div>
@@ -360,6 +361,7 @@ export function Reports({ T, tab: tabProp, onTab }: { T: Theme; tab?: string; on
           {tab === 'stock-adjustment' && <StockAdjustmentReport T={T} />}
           {tab === 'trending' && <TrendingProductsReport T={T} />}
           {tab === 'items' && <ItemsReport T={T} />}
+          {tab === 'product-purchase' && <ProductPurchaseReport T={T} />}
           {tab === 'commission' && <CommissionReport T={T} />}
           {tab === 'register' && <RegisterReport T={T} />}
         </div>

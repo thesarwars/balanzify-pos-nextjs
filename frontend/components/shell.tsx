@@ -155,6 +155,7 @@ export const NAV = [
           { key: 'stock-adjustment-report', activeId: 'reports', activeParams: { tab: 'stock-adjustment' }, label: 'Stock Adjustment', route: '/reports?tab=stock-adjustment' },
           { key: 'trending-products', activeId: 'reports', activeParams: { tab: 'trending' }, label: 'Trending Products', route: '/reports?tab=trending' },
           { key: 'items-report', activeId: 'reports', activeParams: { tab: 'items' }, label: 'Items Report', route: '/reports?tab=items' },
+          { key: 'product-purchase-report', activeId: 'reports', activeParams: { tab: 'product-purchase' }, label: 'Product Purchase', route: '/reports?tab=product-purchase' },
           { key: 'reports-overview', activeId: 'reports', label: 'Overview', route: '/reports' },
           { key: 'reports-commission', activeId: 'reports', activeParams: { tab: 'commission' }, label: 'Sales Representative', route: '/reports?tab=commission' },
           { key: 'reports-register', activeId: 'reports', activeParams: { tab: 'register' }, label: 'Cash Register', route: '/reports?tab=register' },

@@ -1533,6 +1533,22 @@ describe('Tax report', () => {
     }
   });
 
+  test('product purchase report lists received PO lines with totals', async () => {
+    const res = await request(app).get('/api/v1/reports/product-purchase').set(auth(txToken));
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body.rows)).toBe(true);
+    // The tax describe received a PO of 10 units @ 10 for its product.
+    const row = res.body.rows.find(r => Math.abs(r.subtotal - 100) < 0.01 && r.quantity === 10);
+    expect(row).toBeTruthy();
+    expect(row.unit_purchase_price).toBeCloseTo(10, 2);
+    expect(row.supplier).toContain('Tax Supplier');
+    expect(res.body.totals.quantity).toBeGreaterThanOrEqual(10);
+    expect(res.body.totals.subtotal).toBeGreaterThanOrEqual(100);
+    const bad = await request(app).get('/api/v1/reports/product-purchase')
+      .set(auth(txToken)).query({ supplier_id: 'not-a-uuid' });
+    expect(bad.status).toBe(400);
+  });
+
   test('stock adjustment report exposes normal/abnormal/recovered totals', async () => {
     const res = await request(app).get('/api/v1/reports/stock-adjustment').set(auth(txToken));
     expect(res.status).toBe(200);
