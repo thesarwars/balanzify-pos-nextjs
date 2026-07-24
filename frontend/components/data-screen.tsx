@@ -279,12 +279,22 @@ export function DataScreen({ T, id }: { T: Theme; id: any }) {
 }
 
 // ── Reports ─────────────────────────────────────────────────────
+// The report shown for each ?tab= value — the sidebar's Reports children set
+// the tab, so the in-page pill bar is redundant; the active name shows in the
+// Topbar subtitle instead.
+const REPORT_LABELS: Record<string, string> = {
+  overview: 'Overview', 'profit-loss': 'Profit / Loss', 'purchase-sale': 'Purchase & Sale',
+  tax: 'Tax Report', contacts: 'Supplier & Customer', 'customer-groups': 'Customer Groups',
+  stock: 'Stock Report', 'stock-adjustment': 'Stock Adjustment', trending: 'Trending Products',
+  items: 'Items', 'product-purchase': 'Product Purchase', commission: 'Sales Representative',
+  register: 'Cash Register',
+};
+
 export function Reports({ T, tab: tabProp, onTab }: { T: Theme; tab?: string; onTab?: (t: string) => void }) {
   // Controlled by the page when it passes tab/onTab (URL-driven); falls back to
   // local state so the component still works standalone.
-  const [tabLocal, setTabLocal] = useStateD('overview');
+  const [tabLocal] = useStateD('overview');
   const tab = tabProp ?? tabLocal;
-  const setTab = onTab ?? setTabLocal;
   // Deterministic per-category value (not Math.random) to avoid SSR/client hydration mismatch.
   const seedByCat = React.useMemo(() => CATEGORIES.filter((c: any) => c.id !== 'all').map((c: any, i: number) => ({ name: c.name, val: Math.round(200 + (((i * 2654435761) % 100) / 100) * 1400) })), []);
   const [byCat, setByCat] = useStateD<any[]>(seedByCat);
@@ -307,16 +317,9 @@ export function Reports({ T, tab: tabProp, onTab }: { T: Theme; tab?: string; on
   const ovTop: any[] = (ov && Array.isArray(ov.top) && ov.top.length) ? ov.top : DASH.topProducts;
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: T.paperAlt }}>
-      <Topbar T={T} title="Reports" subtitle="Performance overview · This month"
-        right={<><Btn T={T} kind="ghost">📅 This month ▾</Btn><Btn T={T} kind="ghost">⤓ Export</Btn></>} />
+      <Topbar T={T} title="Reports" subtitle={REPORT_LABELS[tab] || 'Overview'} />
       <div style={{ flex: 1, overflowY: 'auto', padding: 28 }}>
         <div style={{ maxWidth: 1280, margin: '0 auto' }}>
-          <div style={{ display: 'flex', gap: 4, marginBottom: 18, background: T.paper, padding: 4, borderRadius: 10, width: 'fit-content', border: `1px solid ${T.line}` }}>
-            {[['overview', 'Overview'], ['profit-loss', 'Profit / Loss'], ['purchase-sale', 'Purchase & Sale'], ['tax', 'Tax Report'], ['contacts', 'Supplier & Customer'], ['customer-groups', 'Customer Groups'], ['stock', 'Stock Report'], ['stock-adjustment', 'Stock Adjustment'], ['trending', 'Trending Products'], ['items', 'Items'], ['product-purchase', 'Product Purchase'], ['commission', 'Sales Representative'], ['register', 'Cash Register']].map(([cid, lbl]) => (
-              <button key={cid} onClick={() => setTab(cid)} style={{ padding: '8px 18px', borderRadius: 7, border: 'none', cursor: 'pointer', fontFamily: T.fBody, fontSize: 13, fontWeight: tab === cid ? 700 : 500, background: tab === cid ? T.accent.base : 'transparent', color: tab === cid ? T.accent.on : T.inkMid }}>{lbl}</button>
-            ))}
-          </div>
-
           {tab === 'overview' && (
             <>
               <StatStrip T={T} stats={ovStats} />
