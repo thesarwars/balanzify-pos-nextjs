@@ -1348,4 +1348,80 @@ describe('Tax report', () => {
       .set(auth(txToken)).query({ contact_id: 'not-a-uuid' });
     expect(res.status).toBe(400);
   });
+
+  test('supplier & customer report reports both sides with the netting convention', async () => {
+    const res = await request(app).get('/api/v1/reports/contacts').set(auth(txToken));
+    expect(res.status).toBe(200);
+    // The supplier from the purchase test: 10 units @ 10 + 10 tax = 110, unpaid.
+    const sup = res.body.rows.find(r => r.kind === 'supplier');
+    expect(sup).toBeTruthy();
+    expect(sup.name).toBe('Tax Supplier');
+    expect(sup.purchase).toBeCloseTo(110, 2);
+    expect(sup.sale).toBeCloseTo(0, 2);
+    // Nothing paid, so we owe the landed value — a payable reads negative.
+    expect(sup.due).toBeLessThan(0);
+    expect(res.body.totals.purchase).toBeCloseTo(110, 2);
+  });
+
+  test('type and group filters narrow the contact rows', async () => {
+    const onlyCust = await request(app).get('/api/v1/reports/contacts')
+      .set(auth(txToken)).query({ type: 'customer' });
+    expect(onlyCust.status).toBe(200);
+    expect(onlyCust.body.rows.every(r => r.kind === 'customer')).toBe(true);
+
+    const onlySup = await request(app).get('/api/v1/reports/contacts')
+      .set(auth(txToken)).query({ type: 'supplier' });
+    expect(onlySup.body.rows.every(r => r.kind === 'supplier')).toBe(true);
+    expect(onlySup.body.rows.length).toBe(1);
+
+    const bad = await request(app).get('/api/v1/reports/contacts')
+      .set(auth(txToken)).query({ type: 'nope' });
+    expect(bad.status).toBe(400);
+    const badGroup = await request(app).get('/api/v1/reports/contacts')
+      .set(auth(txToken)).query({ group_id: 'not-a-uuid' });
+    expect(badGroup.status).toBe(400);
+    // A customer group cannot describe suppliers — say so rather than
+    // returning a silently empty table.
+    const clash = await request(app).get('/api/v1/reports/contacts')
+      .set(auth(txToken)).query({ type: 'supplier', group_id: '11111111-1111-4111-8111-111111111111' });
+    expect(clash.status).toBe(400);
+  });
+
+  test('both money columns are signed the same way for a supplier', async () => {
+    const sup = await request(app).post('/api/v1/suppliers').set(auth(txToken))
+      .send({ name: 'Opening Balance Supplier', opening_balance: 500 });
+    expect(sup.status).toBe(201);
+    const res = await request(app).get('/api/v1/reports/contacts').set(auth(txToken));
+    const row = res.body.rows.find(r => r.name === 'Opening Balance Supplier');
+    expect(row).toBeTruthy();
+    // A seeded payable reads negative, like `due`, so the column total means
+    // something when customers and suppliers are listed together.
+    expect(row.opening_balance).toBeCloseTo(-500, 2);
+  });
+
+  test('refunding a credit sale clears the receivable it created', async () => {
+    const cust = await request(app).post('/api/v1/customers').set(auth(txToken))
+      .send({ name: 'Credit Refund Cust', credit_limit: 1000 });
+    const prod = await createProductWithStock(txToken, { locationId: txLocId, stock: 5, sellingPrice: 50, costPrice: 20 });
+    const shift = await openShift(txToken, txLocId);
+    const sale = await checkout(txToken, {
+      items: [{ product_id: prod.id, quantity: 1 }],
+      payment_method: 'credit', customer_id: cust.body.id,
+      shift_id: shift.id, location_id: txLocId,
+    });
+    expect(sale.status).toBe(201);
+    const si = await prisma.saleItem.findFirst({ where: { saleId: sale.body.id }, select: { id: true } });
+    const ref = await request(app).post(`/api/v1/sales/${sale.body.id}/refund`).set(auth(txToken))
+      .send({ items: [{ sale_item_id: si.id, product_id: prod.id, quantity: 1, unit_price: 50 }], refund_method: 'cash' });
+    expect(ref.status).toBe(201);
+    // The goods came back, so the debt they created goes with them — otherwise
+    // the balance stays outstanding forever and the report overstates Due.
+    const row = await prisma.sale.findUnique({ where: { id: sale.body.id }, select: { amountDue: true } });
+    expect(parseFloat(row.amountDue)).toBeCloseTo(0, 2);
+    const c = await prisma.customer.findUnique({ where: { id: cust.body.id }, select: { outstandingBalance: true } });
+    expect(parseFloat(c.outstandingBalance)).toBeCloseTo(0, 2);
+    const res = await request(app).get('/api/v1/reports/contacts').set(auth(txToken));
+    const crow = res.body.rows.find(r => r.name === 'Credit Refund Cust');
+    expect(crow.due).toBeCloseTo(0, 2);
+  });
 });

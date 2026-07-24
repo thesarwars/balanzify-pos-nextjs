@@ -149,6 +149,7 @@ export const NAV = [
           { key: 'profit-loss', activeId: 'reports', activeParams: { tab: 'profit-loss' }, label: 'Profit / Loss', route: '/reports?tab=profit-loss' },
           { key: 'purchase-sale', activeId: 'reports', activeParams: { tab: 'purchase-sale' }, label: 'Purchase & Sale', route: '/reports?tab=purchase-sale' },
           { key: 'tax-report', activeId: 'reports', activeParams: { tab: 'tax' }, label: 'Tax Report', route: '/reports?tab=tax' },
+          { key: 'contacts-report', activeId: 'reports', activeParams: { tab: 'contacts' }, label: 'Supplier & Customer', route: '/reports?tab=contacts' },
           { key: 'reports-overview', activeId: 'reports', label: 'Overview', route: '/reports' },
           { key: 'reports-commission', activeId: 'reports', activeParams: { tab: 'commission' }, label: 'Sales Representative', route: '/reports?tab=commission' },
           { key: 'reports-register', activeId: 'reports', activeParams: { tab: 'register' }, label: 'Cash Register', route: '/reports?tab=register' },

@@ -1492,7 +1492,7 @@ router.post('/:id/refund', auth, requireRole('owner', 'manager'), validate(Refun
       where: { id: req.params.id },
       select: {
         id: true, businessId: true, locationId: true, totalAmount: true, taxAmount: true,
-        loyaltyPointsEarned: true, customerId: true,
+        loyaltyPointsEarned: true, customerId: true, amountDue: true,
         items: { select: { id: true, productId: true, quantity: true, unitPrice: true, costPrice: true, product: { select: { enableStock: true, sellByUnit: true, packSize: true } } } },
       },
     });
@@ -1651,10 +1651,26 @@ router.post('/:id/refund', auth, requireRole('owner', 'manager'), validate(Refun
       }
 
       const saleTotal = parseFloat(sale.totalAmount);
+      // Refunding an unpaid (credit) sale cancels the receivable it created —
+      // otherwise the balance stays outstanding forever, since a repayment
+      // would have to be collected on goods that came back. Relieve the due
+      // first, and only the remainder is money actually handed back.
+      const dueBefore = parseFloat(sale.amountDue || 0);
+      const dueRelieved = Math.min(dueBefore, totalRefunded);
       await tx.sale.update({
         where: { id: req.params.id },
-        data: { status: totalRefunded >= saleTotal ? 'refunded' : 'partially_refunded' },
+        data: {
+          status: totalRefunded >= saleTotal ? 'refunded' : 'partially_refunded',
+          ...(dueRelieved > 0 && { amountDue: { decrement: dueRelieved } }),
+        },
       });
+      if (dueRelieved > 0 && sale.customerId) {
+        // Mirror it on the customer's balance so the credit ledger agrees.
+        await tx.customer.update({
+          where: { id: sale.customerId },
+          data: { outstandingBalance: { decrement: dueRelieved } },
+        });
+      }
 
       return refundRecord;
     });

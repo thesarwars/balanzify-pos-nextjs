@@ -4735,6 +4735,10 @@ const API: any = {
       if (REAL_MODE) return await realReq('GET', '/reports/tax', { query: params });
       return null;
     },
+    async contacts(params: any = {}) {
+      if (REAL_MODE) return await realReq('GET', '/reports/contacts', { query: params });
+      return null;
+    },
     async salesSummary(range: any = {}) {
       if (REAL_MODE) return await realReq('GET', '/reports/sales', { query: range });
       return null;
