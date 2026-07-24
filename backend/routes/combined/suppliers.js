@@ -125,6 +125,7 @@ function mapSupplier(b) {
   if (b.blacklist_reason !== undefined) m.blacklistReason = b.blacklist_reason;
   if (b.is_active      !== undefined) m.isActive = b.is_active;
   if (b.contact_kind   !== undefined) m.contactKind = b.contact_kind;
+  if (b.tax_number     !== undefined) m.taxNumber = b.tax_number || null;
   if (b.assigned_to_id !== undefined) m.assignedToId = b.assigned_to_id || null;
   // Explicit null clears the values (empty record); undefined leaves them alone.
   if (b.custom_values  !== undefined) m.customValues = b.custom_values ?? {};

@@ -48,7 +48,7 @@ router.post('/', auth, requireRole('owner', 'manager'), validate(PurchaseOrderSc
   try {
     const {
       supplier_id, location_id, items, expected_delivery, payment_terms, notes, currency,
-      reference_no, order_date, status, discount_amount, tax_amount, shipping_charges, additional_expenses,
+      reference_no, order_date, status, discount_amount, tax_amount, tax_rate_id, shipping_charges, additional_expenses,
       freight_cost, customs_duty, other_charges, shipping_details, document_url, document_key,
     } = req.body;
 
@@ -71,6 +71,11 @@ router.post('/', auth, requireRole('owner', 'manager'), validate(PurchaseOrderSc
     if (unitIds.length && (await prisma.unit.count({ where: { id: { in: unitIds }, businessId: req.user.business_id } })) !== unitIds.length) {
       return res.status(400).json({ title: 'One or more purchase units not found', status: 400 });
     }
+    // The tax rate must belong to this business — an id from elsewhere would
+    // otherwise fail as a raw FK violation.
+    if (tax_rate_id && !(await prisma.taxRate.count({ where: { id: tax_rate_id, businessId: req.user.business_id } }))) {
+      return res.status(400).json({ title: 'Tax rate not found', status: 400 });
+    }
     // Reference number, if given, must be unique.
     if (reference_no && (await prisma.purchaseOrder.count({ where: { poNumber: reference_no } }))) {
       return res.status(409).json({ title: 'That reference number is already in use', status: 409 });
@@ -88,6 +93,8 @@ router.post('/', auth, requireRole('owner', 'manager'), validate(PurchaseOrderSc
         subtotal,
         discountAmount: discount,
         taxAmount: tax,
+        // Which rate produced the tax — the Tax Report splits input tax by it.
+        taxRateId: tax_rate_id || null,
         freightCost: shipping,
         customsDuty: customs_duty || 0,
         otherCharges: expensesTotal,
@@ -201,6 +208,12 @@ router.put('/:id', auth, requireRole('owner', 'manager'), validate(PurchaseOrder
     data.subtotal = subtotal;
     data.discountAmount = discount;
     data.taxAmount = tax;
+    if (b.tax_rate_id !== undefined) {
+      if (b.tax_rate_id && !(await prisma.taxRate.count({ where: { id: b.tax_rate_id, businessId: req.user.business_id } }))) {
+        return res.status(400).json({ title: 'Tax rate not found', status: 400 });
+      }
+      data.taxRateId = b.tax_rate_id || null;
+    }
     data.freightCost = shipping;
     data.otherCharges = expensesTotal;
     data.totalAmount = totalAmount;

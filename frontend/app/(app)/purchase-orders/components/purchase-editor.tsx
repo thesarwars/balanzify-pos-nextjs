@@ -37,7 +37,7 @@ export function PurchaseEditor({ T, suppliers, locs, existing, onClose, onSaved 
   const [lines, setLines] = useStatePu<any[]>(exLines);
   const [discType, setDiscType] = useStatePu(ex && ex.discount > 0 ? 'fixed' : 'none');   // none | fixed | percent
   const [discVal, setDiscVal] = useStatePu(ex && ex.discount > 0 ? String(ex.discount) : '');
-  const [taxRateId, setTaxRateId] = useStatePu('');      // purchase tax = a defined tax rate
+  const [taxRateId, setTaxRateId] = useStatePu(ex && ex.tax_rate_id ? String(ex.tax_rate_id) : '');  // purchase tax = a defined tax rate
   const [taxTouched, setTaxTouched] = useStatePu(false);
   const [taxRates, setTaxRates] = useStatePu<any[]>([]);
   const [shipping, setShipping] = useStatePu(ex && ex.shipping ? String(ex.shipping) : '');
@@ -67,7 +67,8 @@ export function PurchaseEditor({ T, suppliers, locs, existing, onClose, onSaved 
       API.taxRate.groups().catch(() => []),
     ]).then(([rs, gs]: any[]) => setTaxRates([...(rs || []), ...(gs || [])]));
   }, []);
-  // Editing: once tax rates load, pre-select the one that reproduces the stored tax.
+  // Editing a purchase saved before the rate was persisted: once tax rates
+  // load, pre-select the one that reproduces the stored tax amount.
   useEffectPu(() => {
     if (!ex || taxTouched || taxRateId || !(ex.tax > 0) || !taxRates.length) return;
     const base = (ex.subtotal || 0) - (ex.discount || 0);
@@ -155,7 +156,7 @@ export function PurchaseEditor({ T, suppliers, locs, existing, onClose, onSaved 
           if (!valid.length) { setErr('Add at least one product line.'); setBusy(false); return; }
           Object.assign(body, {
             supplier_id, location_id, status,
-            discount_amount: discountAmt, tax_amount: taxAmt, shipping: shipAmt,
+            discount_amount: discountAmt, tax_amount: taxAmt, tax_rate_id: taxRateId || null, shipping: shipAmt,
             expenses: expenses.filter((e: any) => e.name && Number(e.amount) > 0),
             lines: valid,
           });
@@ -175,7 +176,7 @@ export function PurchaseEditor({ T, suppliers, locs, existing, onClose, onSaved 
       const created = await API.purchaseOrder.create({
         supplier_id, location_id, date, reference_no: reference.trim() || undefined, status,
         pay_term: payTerm, notes,
-        discount_amount: discountAmt, tax_amount: taxAmt, shipping: shipAmt,
+        discount_amount: discountAmt, tax_amount: taxAmt, tax_rate_id: taxRateId || null, shipping: shipAmt,
         shipping_details: shipDetails.trim() || undefined,
         document_url: (doc && doc.url) || undefined, document_key: (doc && doc.key) || undefined,
         expenses: expenses.filter((e: any) => e.name && Number(e.amount) > 0),

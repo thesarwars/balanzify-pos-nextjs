@@ -2201,6 +2201,7 @@ function adaptRealPO(o: any): any {
     subtotal: Number(o.subtotal || 0),
     discount: Number(o.discountAmount || 0),
     tax: Number(o.taxAmount || 0),
+    tax_rate_id: o.taxRateId || '',
     shipping: Number(o.freightCost || 0),
     expenses_total: Number(o.otherCharges || 0),
     expenses,
@@ -2230,6 +2231,7 @@ function toRealPOBody(b: any): any {
     payment_terms: b.pay_term ? Number(b.pay_term) : undefined,
     discount_amount: b.discount_amount ? Number(b.discount_amount) : 0,
     tax_amount: b.tax_amount ? Number(b.tax_amount) : 0,
+    tax_rate_id: isUuid(b.tax_rate_id) ? b.tax_rate_id : null,
     shipping_charges: b.shipping ? Number(b.shipping) : 0,
     shipping_details: b.shipping_details || undefined,
     document_url: b.document_url || undefined,
@@ -2417,6 +2419,7 @@ function adaptRealCustomer(c: any): any {
     id: c.id, name: c.name, type: 'customer',
     contact_id: 'CUS-' + String(c.id || '').replace(/-/g, '').slice(0, 6).toUpperCase(),
     mobile: c.phone || '', email: c.email || '', address: c.address || '',
+    tax_number: c.taxNumber || '',
     loyalty_points: c.loyaltyPoints || 0,
     credit_limit: Number(c.creditLimit || 0),
     due: Number(c.outstandingBalance || 0),
@@ -2437,6 +2440,7 @@ function toRealCustomerBody(f: any): any {
     phone: f.mobile || undefined,
     email: f.email || undefined,
     address: f.address || undefined,
+    tax_number: f.tax_number || null,
     credit_limit: f.credit_limit ? Number(f.credit_limit) : 0,
     customer_group_id: isUuid(f.customer_group_id) ? f.customer_group_id : null,  // '1'/Retail → no group
     contact_kind: f.contact_kind === 'business' ? 'business' : 'individual',
@@ -2451,7 +2455,7 @@ function adaptRealSupplier(s: any): any {
     id: s.id, name: s.name, type: 'supplier',
     contact_id: 'SUP-' + String(s.id || '').replace(/-/g, '').slice(0, 6).toUpperCase(),
     mobile: s.phone || s.whatsapp || '', email: s.email || '', address: s.address || '',
-    tax_number: '',
+    tax_number: s.taxNumber || '',
     pay_term_number: s.paymentTerms || '', pay_term_type: 'days',
     credit_limit: Number(s.creditLimit || 0),
     due: Number(s.outstandingBalance || 0),
@@ -2471,6 +2475,7 @@ function toRealSupplierBody(f: any): any {
     phone: f.mobile || undefined,
     email: f.email || undefined,
     address: f.address || undefined,
+    tax_number: f.tax_number || null,
     payment_terms: f.pay_term_number ? Number(f.pay_term_number) : 0,
     credit_limit: f.credit_limit ? Number(f.credit_limit) : 0,
     contact_kind: f.contact_kind === 'individual' ? 'individual' : 'business',
@@ -4724,6 +4729,10 @@ const API: any = {
     },
     async purchaseSale(params: any = {}) {
       if (REAL_MODE) return await realReq('GET', '/reports/purchase-sale', { query: params });
+      return null;
+    },
+    async tax(params: any = {}) {
+      if (REAL_MODE) return await realReq('GET', '/reports/tax', { query: params });
       return null;
     },
     async salesSummary(range: any = {}) {

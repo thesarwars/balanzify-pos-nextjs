@@ -1231,3 +1231,121 @@ describe('Profit / Loss report', () => {
     expect(after.body.sales.due).toBeCloseTo(0, 2);
   });
 });
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TAX REPORT
+// ══════════════════════════════════════════════════════════════════════════════
+
+describe('Tax report', () => {
+  let txToken, txBizId, txLocId, cgstId, sgstId, groupId, vatId;
+
+  beforeAll(async () => {
+    const reg = await registerBusiness(`tax_${RUN}`);
+    txToken = reg.access_token;
+    txBizId = reg.business.id;
+    await request(app).post('/api/v1/locations').set(auth(txToken)).send({ name: 'Tax Main', type: 'store' });
+    const locRes = await request(app).get('/api/v1/locations').set(auth(txToken));
+    txLocId = locRes.body.locations[0].id;
+
+    // A plain rate plus a group built from two components (the reference's
+    // GST@18% = CGST@10% + SGST@8%).
+    const mk = (name, rate, extra = {}) => request(app).post('/api/v1/tax/rates')
+      .set(auth(txToken)).send({ name, rate, ...extra });
+    vatId = (await mk('VAT@10%', 0.1)).body.id;
+    cgstId = (await mk('CGST@10%', 0.1, { for_tax_group_only: true })).body.id;
+    sgstId = (await mk('SGST@8%', 0.08, { for_tax_group_only: true })).body.id;
+    const grp = await request(app).post('/api/v1/tax/groups').set(auth(txToken))
+      .send({ name: 'GST@18%', tax_rate_ids: [cgstId, sgstId] });
+    expect(grp.status).toBe(201);
+    groupId = grp.body.id;
+  }, 30000);
+
+  afterAll(async () => {
+    if (txBizId) {
+      await prisma.refund.deleteMany({ where: { sale: { businessId: txBizId } } }).catch(() => {});
+      await prisma.sale.deleteMany({ where: { businessId: txBizId } }).catch(() => {});
+      await prisma.business.deleteMany({ where: { id: txBizId } }).catch(() => {});
+    }
+  });
+
+  test('empty period returns the rate columns and a zero position', async () => {
+    const res = await request(app).get('/api/v1/reports/tax').set(auth(txToken));
+    expect(res.status).toBe(200);
+    const names = res.body.rates.map(r => r.name);
+    expect(names).toEqual(expect.arrayContaining(['VAT@10%', 'CGST@10%', 'SGST@8%', 'GST@18%']));
+    expect(res.body.input).toEqual([]);
+    expect(res.body.output).toEqual([]);
+    expect(res.body.expense).toEqual([]);
+    expect(res.body.overall.net_tax).toBeCloseTo(0, 2);
+  });
+
+  test('expense tax lands in its rate column and in the overall position', async () => {
+    // Expense tax is computed server-side as amount x rate: 100 @ 10% = 10.
+    const exp = await request(app).post('/api/v1/expenses').set(auth(txToken)).send({
+      location_id: txLocId, amount: 100, tax_rate_id: vatId,
+      date: new Date().toISOString().slice(0, 10), payment_status: 'paid',
+    });
+    expect([200, 201]).toContain(exp.status);
+    const res = await request(app).get('/api/v1/reports/tax').set(auth(txToken));
+    expect(res.body.expense.length).toBe(1);
+    const row = res.body.expense[0];
+    expect(row.tax).toBeCloseTo(10, 2);
+    expect(row.by_rate[vatId]).toBeCloseTo(10, 2);
+    expect(res.body.totals.expense.by_rate[vatId]).toBeCloseTo(10, 2);
+    // Output − input − expense.
+    expect(res.body.overall.net_tax).toBeCloseTo(-10, 2);
+  });
+
+  test('a tax-group document splits across its component columns, never the group', async () => {
+    // 100 @ GST 18% = 18 tax, which must split 10:8 across CGST/SGST.
+    const exp = await request(app).post('/api/v1/expenses').set(auth(txToken)).send({
+      location_id: txLocId, amount: 100, tax_rate_id: groupId,
+      date: new Date().toISOString().slice(0, 10), payment_status: 'paid',
+    });
+    expect([200, 201]).toContain(exp.status);
+    const res = await request(app).get('/api/v1/reports/tax').set(auth(txToken));
+    const row = res.body.expense.find(r => Math.abs(r.tax - 18) < 0.01);
+    expect(row).toBeTruthy();
+    // 18 split 10:8 → CGST 10, SGST 8; the group's own column stays empty.
+    expect(row.by_rate[cgstId]).toBeCloseTo(10, 2);
+    expect(row.by_rate[sgstId]).toBeCloseTo(8, 2);
+    expect(row.by_rate[groupId]).toBeUndefined();
+    // Components always sum back to the row's tax — no double counting.
+    const summed = Object.values(row.by_rate).reduce((s, v) => s + v, 0);
+    expect(summed).toBeCloseTo(row.tax, 2);
+  });
+
+  test('purchase tax lands in its rate column (rate is persisted on the PO)', async () => {
+    const sup = await request(app).post('/api/v1/suppliers').set(auth(txToken))
+      .send({ name: 'Tax Supplier', tax_number: 'TX-99887' });
+    expect(sup.status).toBe(201);
+    const prod = await createProductWithStock(txToken, { locationId: txLocId, stock: 0, sellingPrice: 20, costPrice: 10 });
+    const po = await request(app).post('/api/v1/purchase-orders').set(auth(txToken)).send({
+      supplier_id: sup.body.id, location_id: txLocId,
+      items: [{ product_id: prod.id, ordered_qty: 10, unit_price: 10 }],
+      tax_amount: 10, tax_rate_id: vatId,
+    });
+    expect(po.status).toBe(201);
+    // Input tax counts once the goods actually arrive — the same basis the P&L
+    // and Purchase & Sale reports use.
+    const recv = await request(app).put(`/api/v1/purchase-orders/${po.body.id}/status`).set(auth(txToken))
+      .send({ status: 'received', received_items: [{ id: po.body.items[0].id, product_id: prod.id, qty: 10, unit_price: 10 }] });
+    expect(recv.status).toBe(200);
+    const res = await request(app).get('/api/v1/reports/tax').set(auth(txToken));
+    const row = res.body.input.find(r => Math.abs(r.tax - 10) < 0.01);
+    expect(row).toBeTruthy();
+    // The whole point of the register: tax sits under its own rate, not 'untaxed'.
+    expect(row.by_rate[vatId]).toBeCloseTo(10, 2);
+    expect(row.by_rate.untaxed).toBeUndefined();
+    expect(row.tax_number).toBe('TX-99887');
+    expect(res.body.totals.input.by_rate[vatId]).toBeCloseTo(10, 2);
+    // Overall = output - input - expense = 0 - 10 - 28.
+    expect(res.body.overall.net_tax).toBeCloseTo(-38, 2);
+  });
+
+  test('rejects a malformed contact_id', async () => {
+    const res = await request(app).get('/api/v1/reports/tax')
+      .set(auth(txToken)).query({ contact_id: 'not-a-uuid' });
+    expect(res.status).toBe(400);
+  });
+});

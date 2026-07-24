@@ -165,6 +165,7 @@ const PurchaseOrderSchema = z.object({
   expected_delivery: isoDate,
   discount_amount: money.default(0),      // order-level discount
   tax_amount: money.default(0),           // purchase tax
+  tax_rate_id: uuid.optional().nullable(),// which rate produced it (Tax Report)
   shipping_charges: money.default(0),
   shipping_details: optStr(500),          // carrier / tracking / handling notes
   document_url: optStr(500),              // attached document (invoice scan) — uploaded file URL
@@ -190,6 +191,7 @@ const PurchaseOrderUpdateSchema = z.object({
   expected_delivery: isoDate,
   discount_amount: money.optional(),
   tax_amount: money.optional(),
+  tax_rate_id: uuid.optional().nullable(),
   shipping_charges: money.optional(),
   shipping_details: optStr(500),
   document_url: optStr(500),
@@ -261,6 +263,7 @@ const SupplierSchema = z.object({
   phone,
   whatsapp: phone,
   email: email.optional().nullable(),
+  tax_number: optStr(100),
   country: optStr(100),
   city: optStr(100),
   address: optStr(500),
@@ -764,6 +767,7 @@ const CustomerSchema = z.object({
   phone,
   whatsapp: phone,
   email: email.optional().nullable(),
+  tax_number: optStr(100),
   address: optStr(500),
   credit_limit: money.default(0),
   customer_group_id: uuid.optional().nullable(),

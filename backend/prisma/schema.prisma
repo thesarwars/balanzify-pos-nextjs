@@ -1924,6 +1924,8 @@ model Supplier {
   phone              String?  @db.VarChar(50)
   whatsapp           String?  @db.VarChar(50)
   email              String?  @db.VarChar(255)
+  // Tax registration number — reported on the Tax Report's input-tax rows.
+  taxNumber          String?  @map("tax_number") @db.VarChar(100)
   country            String?  @db.VarChar(100)
   city               String?  @db.VarChar(100)
   address            String?
@@ -2236,6 +2238,8 @@ model Customer {
   phone              String?  @db.VarChar(50)
   whatsapp           String?  @db.VarChar(50)
   email              String?  @db.VarChar(255)
+  // Tax registration number — reported on the Tax Report's output-tax rows.
+  taxNumber          String?  @map("tax_number") @db.VarChar(100)
   address            String?
   creditLimit        Decimal  @default(0) @map("credit_limit") @db.Decimal(12, 2)
   outstandingBalance Decimal  @default(0) @map("outstanding_balance") @db.Decimal(12, 2)
