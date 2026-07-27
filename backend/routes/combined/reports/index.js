@@ -13,6 +13,7 @@ reportsRouter.use('/', require('./stock-adjustment'));
 reportsRouter.use('/', require('./trending-products'));
 reportsRouter.use('/', require('./items'));
 reportsRouter.use('/', require('./product-purchase'));
+reportsRouter.use('/', require('./product-sell'));
 reportsRouter.use('/', require('./contacts'));
 reportsRouter.use('/', require('./tax'));
 

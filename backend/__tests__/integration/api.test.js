@@ -1533,6 +1533,41 @@ describe('Tax report', () => {
     }
   });
 
+  test('product sell report renders all five views', async () => {
+    for (const view of ['detailed', 'detailed_purchase', 'grouped_date', 'by_category', 'by_brand']) {
+      const res = await request(app).get('/api/v1/reports/product-sell').set(auth(txToken)).query({ view });
+      expect(res.status).toBe(200);
+      expect(res.body.view).toBe(view);
+      expect(Array.isArray(res.body.rows)).toBe(true);
+      expect(res.body.totals).toBeTruthy();
+    }
+    const bad = await request(app).get('/api/v1/reports/product-sell').set(auth(txToken)).query({ view: 'nope' });
+    expect(bad.status).toBe(400);
+    const badTime = await request(app).get('/api/v1/reports/product-sell').set(auth(txToken)).query({ time_from: '99:99' });
+    expect(badTime.status).toBe(400);
+  });
+
+  test('product sell detailed view nets refunds and computes tax-inclusive total', async () => {
+    // Sell 2 units @ 50 with no tax; refund 1 → net qty 1, total 50.
+    const prod = await createProductWithStock(txToken, { locationId: txLocId, stock: 2, sellingPrice: 50, costPrice: 20 });
+    const cust = await request(app).post('/api/v1/customers').set(auth(txToken)).send({ name: 'Sell Report Cust' });
+    const sale = await checkout(txToken, {
+      items: [{ product_id: prod.id, quantity: 2 }],
+      payment_method: 'cash', cash_tendered: 200, customer_id: cust.body.id,
+      shift_id: txShift.id, location_id: txLocId,
+    });
+    expect(sale.status).toBe(201);
+    const si = await prisma.saleItem.findFirst({ where: { saleId: sale.body.id }, select: { id: true } });
+    await request(app).post(`/api/v1/sales/${sale.body.id}/refund`).set(auth(txToken))
+      .send({ items: [{ sale_item_id: si.id, product_id: prod.id, quantity: 1, unit_price: 50 }], refund_method: 'cash' });
+    const res = await request(app).get('/api/v1/reports/product-sell').set(auth(txToken)).query({ view: 'detailed', customer_id: cust.body.id });
+    const row = res.body.rows.find(r => r.product === prod.name);
+    expect(row).toBeTruthy();
+    expect(row.quantity).toBe(1);          // 2 sold − 1 refunded
+    expect(row.total).toBeCloseTo(50, 2);  // net qty × price inc tax
+    expect(row.payment_method).toBe('cash');
+  });
+
   test('product purchase report lists received PO lines with totals', async () => {
     const res = await request(app).get('/api/v1/reports/product-purchase').set(auth(txToken));
     expect(res.status).toBe(200);

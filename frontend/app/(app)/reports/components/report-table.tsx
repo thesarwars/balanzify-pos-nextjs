@@ -23,6 +23,10 @@ export type ReportCol = {
   fixed?: boolean;
   /** Sum this column into the totals row. */
   total?: boolean;
+  /** Optional presentation override for the on-screen cell (e.g. a unit suffix
+   *  or a rate label). Exports/search/totals still use `value`, so the data
+   *  stays clean while the screen shows the richer text. */
+  display?: (row: any) => React.ReactNode;
 };
 
 const esc = (v: any) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -193,7 +197,7 @@ export function ReportTable({
             {shown.map((r, i) => (
               <tr key={r.id ?? i}>
                 {rowAction && <td style={td(cols[0])}>{rowAction(r)}</td>}
-                {visible.map(c => <td key={c.key} style={td(c)}>{fmt(c, c.value(r))}</td>)}
+                {visible.map(c => <td key={c.key} style={td(c)}>{c.display ? c.display(r) : fmt(c, c.value(r))}</td>)}
               </tr>
             ))}
             {!shown.length && (
