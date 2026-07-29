@@ -1645,6 +1645,80 @@ describe('Tax report', () => {
     if (row) expect(row.sales).toBeCloseTo(0, 2);   // fully refunded → nothing left
   });
 
+  test('payment reports list settled money with an age bucket', async () => {
+    // The tax business has cash sales; every completed tender should appear.
+    const sell = await request(app).get('/api/v1/reports/sell-payments').set(auth(txToken));
+    expect(sell.status).toBe(200);
+    expect(Array.isArray(sell.body.rows)).toBe(true);
+    expect(sell.body.rows.length).toBeGreaterThan(0);
+    const r0 = sell.body.rows[0];
+    expect(r0).toHaveProperty('amount');
+    expect(r0).toHaveProperty('age_days');
+    // Paid at the till → age 0 days, which is the first bucket.
+    expect(r0.age_days).toBeGreaterThanOrEqual(0);
+    expect(sell.body.age_buckets).toContain('1-15');
+    expect(sell.body.totals.amount).toBeCloseTo(
+      sell.body.rows.reduce((s, r) => s + r.amount, 0), 1);
+
+    // The age pivot totals must equal the flat list's total for the same window.
+    const pivot = await request(app).get('/api/v1/reports/payment-by-age').set(auth(txToken));
+    expect(pivot.status).toBe(200);
+    expect(pivot.body.totals.total).toBeCloseTo(sell.body.totals.amount, 1);
+    // Each row's buckets sum to its own total.
+    for (const row of pivot.body.rows) {
+      const summed = pivot.body.age_buckets.reduce((s, b) => s + (row[b] || 0), 0);
+      expect(summed).toBeCloseTo(row.total, 1);
+    }
+
+    // Purchase payments: none recorded for this business yet, but the shape holds.
+    const pur = await request(app).get('/api/v1/reports/purchase-payments').set(auth(txToken));
+    expect(pur.status).toBe(200);
+    expect(Array.isArray(pur.body.rows)).toBe(true);
+    expect(pur.body.totals).toHaveProperty('amount');
+  });
+
+  test('a credit sale is not counted as money received until it is collected', async () => {
+    const cust = await request(app).post('/api/v1/customers').set(auth(txToken))
+      .send({ name: 'Payment Age Cust', credit_limit: 1000 });
+    const prod = await createProductWithStock(txToken, { locationId: txLocId, stock: 3, sellingPrice: 60, costPrice: 20 });
+    const before = await request(app).get('/api/v1/reports/sell-payments').set(auth(txToken));
+    const baseline = before.body.totals.amount;
+
+    // On-account sale: the till records a `credit` tender of the full total,
+    // but nothing was actually collected.
+    const sale = await checkout(txToken, {
+      items: [{ product_id: prod.id, quantity: 1 }],
+      payment_method: 'credit', customer_id: cust.body.id,
+      shift_id: txShift.id, location_id: txLocId,
+    });
+    expect(sale.status).toBe(201);
+    const afterSale = await request(app).get('/api/v1/reports/sell-payments').set(auth(txToken));
+    expect(afterSale.body.totals.amount).toBeCloseTo(baseline, 2);   // no cash yet
+    expect(afterSale.body.rows.some(r => r.payment_method === 'credit')).toBe(false);
+
+    // Collecting it is what shows up as money received.
+    const pay = await request(app).post('/api/v1/sales/customer-payment').set(auth(txToken))
+      .send({ customer_id: cust.body.id, amount: 60, payment_method: 'cash' });
+    expect(pay.status).toBe(200);
+    const afterPay = await request(app).get('/api/v1/reports/sell-payments').set(auth(txToken));
+    expect(afterPay.body.totals.amount).toBeCloseTo(baseline + 60, 2);
+    const row = afterPay.body.rows.find(r => r.customer === 'Payment Age Cust');
+    expect(row).toBeTruthy();
+    expect(row.amount).toBeCloseTo(60, 2);
+  });
+
+  test('payment reports reject bad age buckets and filter ids', async () => {
+    const badAge = await request(app).get('/api/v1/reports/sell-payments')
+      .set(auth(txToken)).query({ age: 'yesterday' });
+    expect(badAge.status).toBe(400);
+    const badId = await request(app).get('/api/v1/reports/payment-by-age')
+      .set(auth(txToken)).query({ customer_id: 'not-a-uuid' });
+    expect(badId.status).toBe(400);
+    const badSup = await request(app).get('/api/v1/reports/purchase-payments')
+      .set(auth(txToken)).query({ supplier_id: 'nope' });
+    expect(badSup.status).toBe(400);
+  });
+
   test('purchase & sale product rejects a bad group and filter id', async () => {
     const bad = await request(app).get('/api/v1/reports/purchase-sale-product')
       .set(auth(txToken)).query({ group: 'nope' });

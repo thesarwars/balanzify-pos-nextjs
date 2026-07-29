@@ -4775,6 +4775,18 @@ const API: any = {
       if (REAL_MODE) return await realReq('GET', '/reports/purchase-sale-product', { query: params });
       return null;
     },
+    async purchasePayments(params: any = {}) {
+      if (REAL_MODE) return await realReq('GET', '/reports/purchase-payments', { query: params });
+      return null;
+    },
+    async sellPayments(params: any = {}) {
+      if (REAL_MODE) return await realReq('GET', '/reports/sell-payments', { query: params });
+      return null;
+    },
+    async paymentByAge(params: any = {}) {
+      if (REAL_MODE) return await realReq('GET', '/reports/payment-by-age', { query: params });
+      return null;
+    },
     async salesSummary(range: any = {}) {
       if (REAL_MODE) return await realReq('GET', '/reports/sales', { query: range });
       return null;
