@@ -1707,6 +1707,44 @@ describe('Tax report', () => {
     expect(row.amount).toBeCloseTo(60, 2);
   });
 
+  test('expense report groups by category and totals', async () => {
+    const res = await request(app).get('/api/v1/reports/expenses').set(auth(txToken));
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body.rows)).toBe(true);
+    // The tax suite booked two expenses (100 @ VAT and 100 @ GST) with no category.
+    expect(res.body.totals.total).toBeCloseTo(
+      res.body.rows.reduce((s, r) => s + r.total, 0), 1);
+    expect(res.body.totals.count).toBe(res.body.rows.reduce((s, r) => s + r.count, 0));
+    const bad = await request(app).get('/api/v1/reports/expenses')
+      .set(auth(txToken)).query({ category_id: 'not-a-uuid' });
+    expect(bad.status).toBe(400);
+  });
+
+  test('register report breaks each session down by payment method', async () => {
+    const res = await request(app).get('/api/v1/reports/register-report').set(auth(txToken));
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body.rows)).toBe(true);
+    expect(res.body.rows.length).toBeGreaterThan(0);   // the suite opened a shift
+    expect(Array.isArray(res.body.methods)).toBe(true);
+    expect(res.body.methods).toContain('cash');        // cash sales were rung up
+    expect(res.body.methods).not.toContain('credit');  // on-account is not till money
+    const row = res.body.rows[0];
+    // Each row's per-method amounts sum to its own total.
+    const summed = Object.values(row.by_method).reduce((s, v) => s + v, 0);
+    expect(summed).toBeCloseTo(row.total_taken, 2);
+    // And the grand total ties out across rows.
+    expect(res.body.totals.total_taken).toBeCloseTo(
+      res.body.rows.reduce((s, r) => s + r.total_taken, 0), 1);
+
+    const open = await request(app).get('/api/v1/reports/register-report')
+      .set(auth(txToken)).query({ status: 'open' });
+    expect(open.status).toBe(200);
+    expect(open.body.rows.every(r => r.status === 'open')).toBe(true);
+    const bad = await request(app).get('/api/v1/reports/register-report')
+      .set(auth(txToken)).query({ status: 'sideways' });
+    expect(bad.status).toBe(400);
+  });
+
   test('payment reports reject bad age buckets and filter ids', async () => {
     const badAge = await request(app).get('/api/v1/reports/sell-payments')
       .set(auth(txToken)).query({ age: 'yesterday' });

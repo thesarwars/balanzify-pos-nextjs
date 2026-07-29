@@ -24,6 +24,9 @@ import { ProductPurchaseReport } from '@/app/(app)/reports/components/product-pu
 import { ProductSellReport } from '@/app/(app)/reports/components/product-sell-report';
 import { PurchaseSaleProductReport } from '@/app/(app)/reports/components/purchase-sale-product-report';
 import { PurchasePaymentReport, SellPaymentReport, PaymentByAgeReport } from '@/app/(app)/reports/components/payment-reports';
+import { ExpenseReport } from '@/app/(app)/reports/components/expense-report';
+// Aliased: this file already has a legacy RegisterReport (the Cash Register tab).
+import { RegisterReport as RegisterSessionsReport } from '@/app/(app)/reports/components/register-report';
 
 const { useState: useStateD } = React;
 
@@ -289,7 +292,7 @@ const REPORT_LABELS: Record<string, string> = {
   overview: 'Overview', 'profit-loss': 'Profit / Loss', 'purchase-sale': 'Purchase & Sale',
   tax: 'Tax Report', contacts: 'Supplier & Customer', 'customer-groups': 'Customer Groups',
   stock: 'Stock Report', 'stock-adjustment': 'Stock Adjustment', trending: 'Trending Products',
-  items: 'Items', 'product-purchase': 'Product Purchase', 'product-sell': 'Product Sell', 'purchase-sale-product': 'Purchase & Sale Product', 'purchase-payments': 'Purchase Payment', 'sell-payments': 'Sell Payment', 'payment-by-age': 'Payment by Age', commission: 'Sales Representative',
+  items: 'Items', 'product-purchase': 'Product Purchase', 'product-sell': 'Product Sell', 'purchase-sale-product': 'Purchase & Sale Product', 'purchase-payments': 'Purchase Payment', 'sell-payments': 'Sell Payment', 'payment-by-age': 'Payment by Age', expenses: 'Expense Report', 'register-report': 'Register Report', commission: 'Sales Representative',
   register: 'Cash Register',
 };
 
@@ -373,6 +376,8 @@ export function Reports({ T, tab: tabProp, onTab }: { T: Theme; tab?: string; on
           {tab === 'purchase-payments' && <PurchasePaymentReport T={T} />}
           {tab === 'sell-payments' && <SellPaymentReport T={T} />}
           {tab === 'payment-by-age' && <PaymentByAgeReport T={T} />}
+          {tab === 'expenses' && <ExpenseReport T={T} />}
+          {tab === 'register-report' && <RegisterSessionsReport T={T} />}
           {tab === 'commission' && <CommissionReport T={T} />}
           {tab === 'register' && <RegisterReport T={T} />}
         </div>

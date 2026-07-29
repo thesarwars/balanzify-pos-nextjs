@@ -161,6 +161,8 @@ export const NAV = [
           { key: 'purchase-payment-report', activeId: 'reports', activeParams: { tab: 'purchase-payments' }, label: 'Purchase Payment', route: '/reports?tab=purchase-payments' },
           { key: 'sell-payment-report', activeId: 'reports', activeParams: { tab: 'sell-payments' }, label: 'Sell Payment', route: '/reports?tab=sell-payments' },
           { key: 'payment-by-age-report', activeId: 'reports', activeParams: { tab: 'payment-by-age' }, label: 'Payment by Age', route: '/reports?tab=payment-by-age' },
+          { key: 'expense-report', activeId: 'reports', activeParams: { tab: 'expenses' }, label: 'Expense Report', route: '/reports?tab=expenses' },
+          { key: 'register-report', activeId: 'reports', activeParams: { tab: 'register-report' }, label: 'Register Report', route: '/reports?tab=register-report' },
           { key: 'reports-overview', activeId: 'reports', label: 'Overview', route: '/reports' },
           { key: 'reports-commission', activeId: 'reports', activeParams: { tab: 'commission' }, label: 'Sales Representative', route: '/reports?tab=commission' },
           { key: 'reports-register', activeId: 'reports', activeParams: { tab: 'register' }, label: 'Cash Register', route: '/reports?tab=register' },

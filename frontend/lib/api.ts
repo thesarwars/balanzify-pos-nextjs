@@ -4787,6 +4787,14 @@ const API: any = {
       if (REAL_MODE) return await realReq('GET', '/reports/payment-by-age', { query: params });
       return null;
     },
+    async expenses(params: any = {}) {
+      if (REAL_MODE) return await realReq('GET', '/reports/expenses', { query: params });
+      return null;
+    },
+    async registerReport(params: any = {}) {
+      if (REAL_MODE) return await realReq('GET', '/reports/register-report', { query: params });
+      return null;
+    },
     async salesSummary(range: any = {}) {
       if (REAL_MODE) return await realReq('GET', '/reports/sales', { query: range });
       return null;
