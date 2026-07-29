@@ -27,6 +27,7 @@ import { PurchasePaymentReport, SellPaymentReport, PaymentByAgeReport } from '@/
 import { ExpenseReport } from '@/app/(app)/reports/components/expense-report';
 // Aliased: this file already has a legacy RegisterReport (the Cash Register tab).
 import { RegisterReport as RegisterSessionsReport } from '@/app/(app)/reports/components/register-report';
+import { SalesRepReport } from '@/app/(app)/reports/components/sales-rep-report';
 
 const { useState: useStateD } = React;
 
@@ -378,7 +379,7 @@ export function Reports({ T, tab: tabProp, onTab }: { T: Theme; tab?: string; on
           {tab === 'payment-by-age' && <PaymentByAgeReport T={T} />}
           {tab === 'expenses' && <ExpenseReport T={T} />}
           {tab === 'register-report' && <RegisterSessionsReport T={T} />}
-          {tab === 'commission' && <CommissionReport T={T} />}
+          {tab === 'commission' && <SalesRepReport T={T} agentsView={<CommissionReport T={T} />} />}
           {tab === 'register' && <RegisterReport T={T} />}
         </div>
       </div>

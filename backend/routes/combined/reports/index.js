@@ -18,6 +18,7 @@ reportsRouter.use('/', require('./purchase-sale-product'));
 reportsRouter.use('/', require('./payments'));
 reportsRouter.use('/', require('./expenses'));
 reportsRouter.use('/', require('./registers'));
+reportsRouter.use('/', require('./sales-rep'));
 reportsRouter.use('/', require('./contacts'));
 reportsRouter.use('/', require('./tax'));
 

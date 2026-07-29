@@ -1707,6 +1707,47 @@ describe('Tax report', () => {
     expect(row.amount).toBeCloseTo(60, 2);
   });
 
+  test('sales rep report summarises net sale and lists the three views', async () => {
+    const res = await request(app).get('/api/v1/reports/sales-rep').set(auth(txToken));
+    expect(res.status).toBe(200);
+    // Summary: net = sale - returns, and it is identical on every view.
+    expect(res.body.summary.net_sale).toBeCloseTo(
+      res.body.summary.total_sale - res.body.summary.total_sales_return, 1);
+    expect(res.body.summary.total_sale).toBeGreaterThan(0);
+    // Sales Added rows tie out to the totals.
+    expect(res.body.totals.total).toBeCloseTo(
+      res.body.rows.reduce((s, r) => s + r.total, 0), 1);
+    const r0 = res.body.rows[0];
+    expect(['paid', 'partial', 'due']).toContain(r0.payment_status);
+    expect(r0.total).toBeCloseTo(r0.paid + r0.remaining, 1);
+
+    // The commission view is a subset of sales added (reps earning a %).
+    const comm = await request(app).get('/api/v1/reports/sales-rep')
+      .set(auth(txToken)).query({ view: 'sales_commission' });
+    expect(comm.status).toBe(200);
+    expect(comm.body.rows.length).toBeLessThanOrEqual(res.body.rows.length);
+    expect(comm.body.summary.net_sale).toBeCloseTo(res.body.summary.net_sale, 1);
+    for (const r of comm.body.rows) {
+      expect(r.commission_percent).toBeGreaterThan(0);
+      expect(r.commission).toBeCloseTo(r.total * r.commission_percent / 100, 1);
+    }
+
+    // Expenses view is scoped to expenses booked FOR a user.
+    const exp = await request(app).get('/api/v1/reports/sales-rep')
+      .set(auth(txToken)).query({ view: 'expenses' });
+    expect(exp.status).toBe(200);
+    expect(Array.isArray(exp.body.rows)).toBe(true);
+    expect(exp.body.totals.total).toBeCloseTo(
+      exp.body.rows.reduce((s, r) => s + r.total, 0), 1);
+
+    const bad = await request(app).get('/api/v1/reports/sales-rep')
+      .set(auth(txToken)).query({ view: 'nope' });
+    expect(bad.status).toBe(400);
+    const badUser = await request(app).get('/api/v1/reports/sales-rep')
+      .set(auth(txToken)).query({ user_id: 'not-a-uuid' });
+    expect(badUser.status).toBe(400);
+  });
+
   test('expense report groups by category and totals', async () => {
     const res = await request(app).get('/api/v1/reports/expenses').set(auth(txToken));
     expect(res.status).toBe(200);
