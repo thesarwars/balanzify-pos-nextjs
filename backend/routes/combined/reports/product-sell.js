@@ -198,7 +198,9 @@ router.get('/product-sell', auth, requireRole('owner', 'manager'), async (req, r
       const raw = await prisma.$queryRaw(Prisma.sql`
         SELECT ${selectHead}${stockAgg},
                SUM(si.quantity - COALESCE(rf.qty, 0))::float AS units,
-               SUM(si.total_price - COALESCE(rf.amount, 0))::float AS total
+               -- Refunded units valued at the line's effective (post-discount) price;
+               -- refund_items carry the original price, gross of the line discount.
+               SUM(si.total_price - COALESCE(rf.qty, 0) * (si.total_price / NULLIF(si.quantity, 0)))::float AS total
         ${joins}
         LEFT JOIN categories c ON c.id = p.category_id
         LEFT JOIN brands b ON b.id = p.brand_id

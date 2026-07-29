@@ -61,7 +61,8 @@ router.get('/trending-products', auth, requireRole('owner', 'manager'), async (r
       )
       SELECT p.id, p.name, p.sku, p.unit_of_measure AS unit,
              SUM(si.quantity - COALESCE(rf.qty, 0))::int AS units_sold,
-             SUM(si.total_price - COALESCE(rf.amount, 0))::float AS revenue
+             -- Refunded units valued at the line's effective (post-discount) price.
+             SUM(si.total_price - COALESCE(rf.qty, 0) * (si.total_price / NULLIF(si.quantity, 0)))::float AS revenue
       FROM sale_items si
       JOIN sales s ON s.id = si.sale_id
       JOIN products p ON p.id = si.product_id

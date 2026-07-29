@@ -22,6 +22,7 @@ import { TrendingProductsReport } from '@/app/(app)/reports/components/trending-
 import { ItemsReport } from '@/app/(app)/reports/components/items-report';
 import { ProductPurchaseReport } from '@/app/(app)/reports/components/product-purchase-report';
 import { ProductSellReport } from '@/app/(app)/reports/components/product-sell-report';
+import { PurchaseSaleProductReport } from '@/app/(app)/reports/components/purchase-sale-product-report';
 
 const { useState: useStateD } = React;
 
@@ -287,7 +288,7 @@ const REPORT_LABELS: Record<string, string> = {
   overview: 'Overview', 'profit-loss': 'Profit / Loss', 'purchase-sale': 'Purchase & Sale',
   tax: 'Tax Report', contacts: 'Supplier & Customer', 'customer-groups': 'Customer Groups',
   stock: 'Stock Report', 'stock-adjustment': 'Stock Adjustment', trending: 'Trending Products',
-  items: 'Items', 'product-purchase': 'Product Purchase', 'product-sell': 'Product Sell', commission: 'Sales Representative',
+  items: 'Items', 'product-purchase': 'Product Purchase', 'product-sell': 'Product Sell', 'purchase-sale-product': 'Purchase & Sale Product', commission: 'Sales Representative',
   register: 'Cash Register',
 };
 
@@ -367,6 +368,7 @@ export function Reports({ T, tab: tabProp, onTab }: { T: Theme; tab?: string; on
           {tab === 'items' && <ItemsReport T={T} />}
           {tab === 'product-purchase' && <ProductPurchaseReport T={T} />}
           {tab === 'product-sell' && <ProductSellReport T={T} />}
+          {tab === 'purchase-sale-product' && <PurchaseSaleProductReport T={T} />}
           {tab === 'commission' && <CommissionReport T={T} />}
           {tab === 'register' && <RegisterReport T={T} />}
         </div>

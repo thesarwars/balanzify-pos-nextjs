@@ -428,8 +428,10 @@ router.get('/profit-loss/by', auth, requireRole('owner', 'manager'), async (req,
       u AS (
         SELECT ${Prisma.raw(g.gkey)} AS gkey, ${Prisma.raw(g.select)}, ${Prisma.raw(g.ord)} AS ord,
                (si.quantity - COALESCE(rf.qty, 0))::float AS qty,
-               (si.total_price - COALESCE(rf.amount, 0))::float AS sales,
-               ((si.total_price - COALESCE(rf.amount, 0)) - si.cost_price * (si.quantity - COALESCE(rf.qty_restocked, 0)))::float AS profit
+               -- Refunded units valued at the line's effective (post-discount)
+               -- price; refund_items carry the original, pre-discount price.
+               (si.total_price - COALESCE(rf.qty, 0) * (si.total_price / NULLIF(si.quantity, 0)))::float AS sales,
+               ((si.total_price - COALESCE(rf.qty, 0) * (si.total_price / NULLIF(si.quantity, 0))) - si.cost_price * (si.quantity - COALESCE(rf.qty_restocked, 0)))::float AS profit
         FROM sale_items si
         JOIN sales s ON s.id = si.sale_id
         JOIN products p ON p.id = si.product_id

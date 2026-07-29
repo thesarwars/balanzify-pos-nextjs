@@ -1584,6 +1584,76 @@ describe('Tax report', () => {
     expect(bad.status).toBe(400);
   });
 
+  test('purchase & sale product pairs bought against sold per group', async () => {
+    for (const group of ['category', 'brand', 'supplier']) {
+      const res = await request(app).get('/api/v1/reports/purchase-sale-product')
+        .set(auth(txToken)).query({ group });
+      expect(res.status).toBe(200);
+      expect(Array.isArray(res.body.rows)).toBe(true);
+      // Row totals tie out to the reported totals.
+      const sumP = res.body.rows.reduce((s, r) => s + r.purchase_value, 0);
+      const sumS = res.body.rows.reduce((s, r) => s + r.sale_value, 0);
+      expect(res.body.totals.purchase_value).toBeCloseTo(sumP, 1);
+      expect(res.body.totals.sale_value).toBeCloseTo(sumS, 1);
+      // Difference is sale − purchase on every row.
+      for (const r of res.body.rows) {
+        expect(r.difference).toBeCloseTo(r.sale_value - r.purchase_value, 1);
+      }
+    }
+    // The received PO (10 @ 10 = 100) shows on the purchase side; the supplier
+    // grouping finds it under its supplier.
+    const bySup = await request(app).get('/api/v1/reports/purchase-sale-product')
+      .set(auth(txToken)).query({ group: 'supplier' });
+    const row = bySup.body.rows.find(r => r.label === 'Tax Supplier');
+    expect(row).toBeTruthy();
+    expect(row.purchase_value).toBeCloseTo(100, 2);
+    expect(row.purchase_quantity).toBeCloseTo(10, 2);
+  });
+
+  test('a discounted line refunded does not over-credit the sale value', async () => {
+    // Sell 2 @ 50 with a 20 line discount → line net 80. Refund both units:
+    // refund_items are priced at the ORIGINAL 50 each (gross of the discount),
+    // so naive netting would give 80 − 100 = −20 instead of 0.
+    const prod = await createProductWithStock(txToken, { locationId: txLocId, stock: 4, sellingPrice: 50, costPrice: 20 });
+    const sale = await checkout(txToken, {
+      items: [{ product_id: prod.id, quantity: 2 }],
+      payment_method: 'cash', cash_tendered: 200, shift_id: txShift.id, location_id: txLocId,
+    });
+    expect(sale.status).toBe(201);
+    // Apply a line discount directly (the till computes it from price rules).
+    const si = await prisma.saleItem.findFirst({ where: { saleId: sale.body.id }, select: { id: true, totalPrice: true } });
+    await prisma.saleItem.update({ where: { id: si.id }, data: { discount: 20, totalPrice: 80 } });
+    const ref = await request(app).post(`/api/v1/sales/${sale.body.id}/refund`).set(auth(txToken))
+      .send({ items: [{ sale_item_id: si.id, product_id: prod.id, quantity: 2, unit_price: 50 }], refund_method: 'cash' });
+    expect(ref.status).toBe(201);
+
+    // Every report that nets refunds must land on 0 for this line, never negative.
+    const psp = await request(app).get('/api/v1/reports/purchase-sale-product')
+      .set(auth(txToken)).query({ group: 'brand' });
+    expect(psp.status).toBe(200);
+    for (const r of psp.body.rows) expect(r.sale_value).toBeGreaterThanOrEqual(-0.01);
+
+    const sell = await request(app).get('/api/v1/reports/product-sell')
+      .set(auth(txToken)).query({ view: 'by_brand' });
+    expect(sell.status).toBe(200);
+    for (const r of sell.body.rows) expect(r.total).toBeGreaterThanOrEqual(-0.01);
+
+    const by = await request(app).get('/api/v1/reports/profit-loss/by')
+      .set(auth(txToken)).query({ group: 'product' });
+    expect(by.status).toBe(200);
+    const row = by.body.rows.find(r => r.label === prod.name);
+    if (row) expect(row.sales).toBeCloseTo(0, 2);   // fully refunded → nothing left
+  });
+
+  test('purchase & sale product rejects a bad group and filter id', async () => {
+    const bad = await request(app).get('/api/v1/reports/purchase-sale-product')
+      .set(auth(txToken)).query({ group: 'nope' });
+    expect(bad.status).toBe(400);
+    const badId = await request(app).get('/api/v1/reports/purchase-sale-product')
+      .set(auth(txToken)).query({ group: 'brand', brand_id: 'not-a-uuid' });
+    expect(badId.status).toBe(400);
+  });
+
   test('stock adjustment report exposes normal/abnormal/recovered totals', async () => {
     const res = await request(app).get('/api/v1/reports/stock-adjustment').set(auth(txToken));
     expect(res.status).toBe(200);

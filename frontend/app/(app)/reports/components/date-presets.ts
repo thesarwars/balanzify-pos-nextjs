@@ -6,6 +6,7 @@ import { toLocalYmd } from '@/lib/business-settings';
 export const DATE_PRESETS: [string, string][] = [
   ['today', 'Today'], ['yesterday', 'Yesterday'],
   ['last7', 'Last 7 Days'], ['last30', 'Last 30 Days'],
+  ['last3m', 'Last 3 months'], ['last6m', 'Last 6 months'], ['last12m', 'Last 12 months'],
   ['this_month', 'This Month'], ['last_month', 'Last Month'],
   ['this_month_ly', 'This month last year'],
   ['this_year', 'This Year'], ['last_year', 'Last Year'],
@@ -19,11 +20,23 @@ export function presetRange(key: string, fyStart: number): [string, string] | nu
   const first = (yy: number, mm: number) => toLocalYmd(new Date(yy, mm, 1));
   const last = (yy: number, mm: number) => toLocalYmd(new Date(yy, mm + 1, 0));
   const shift = (days: number) => toLocalYmd(new Date(y, m, now.getDate() + days));
+  // N months back, clamped to the target month's last day — otherwise JS rolls
+  // 31 May − 3 months over into 3 March and silently widens the window.
+  const monthsBack = (n: number) => {
+    const t = new Date(y, m - n, 1);
+    const lastDay = new Date(t.getFullYear(), t.getMonth() + 1, 0).getDate();
+    t.setDate(Math.min(now.getDate(), lastDay));
+    return toLocalYmd(t);
+  };
   switch (key) {
     case 'today': return [toLocalYmd(now), toLocalYmd(now)];
     case 'yesterday': return [shift(-1), shift(-1)];
     case 'last7': return [shift(-6), toLocalYmd(now)];
     case 'last30': return [shift(-29), toLocalYmd(now)];
+    // Rolling month windows ending today (the reference's Period options).
+    case 'last3m': return [monthsBack(3), toLocalYmd(now)];
+    case 'last6m': return [monthsBack(6), toLocalYmd(now)];
+    case 'last12m': return [monthsBack(12), toLocalYmd(now)];
     case 'this_month': return [first(y, m), last(y, m)];
     case 'last_month': return [first(y, m - 1), last(y, m - 1)];
     case 'this_month_ly': return [first(y - 1, m), last(y - 1, m)];
