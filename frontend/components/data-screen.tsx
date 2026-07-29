@@ -28,6 +28,7 @@ import { ExpenseReport } from '@/app/(app)/reports/components/expense-report';
 // Aliased: this file already has a legacy RegisterReport (the Cash Register tab).
 import { RegisterReport as RegisterSessionsReport } from '@/app/(app)/reports/components/register-report';
 import { SalesRepReport } from '@/app/(app)/reports/components/sales-rep-report';
+import { ActivityLogReport } from '@/app/(app)/reports/components/activity-log-report';
 
 const { useState: useStateD } = React;
 
@@ -293,7 +294,7 @@ const REPORT_LABELS: Record<string, string> = {
   overview: 'Overview', 'profit-loss': 'Profit / Loss', 'purchase-sale': 'Purchase & Sale',
   tax: 'Tax Report', contacts: 'Supplier & Customer', 'customer-groups': 'Customer Groups',
   stock: 'Stock Report', 'stock-adjustment': 'Stock Adjustment', trending: 'Trending Products',
-  items: 'Items', 'product-purchase': 'Product Purchase', 'product-sell': 'Product Sell', 'purchase-sale-product': 'Purchase & Sale Product', 'purchase-payments': 'Purchase Payment', 'sell-payments': 'Sell Payment', 'payment-by-age': 'Payment by Age', expenses: 'Expense Report', 'register-report': 'Register Report', commission: 'Sales Representative',
+  items: 'Items', 'product-purchase': 'Product Purchase', 'product-sell': 'Product Sell', 'purchase-sale-product': 'Purchase & Sale Product', 'purchase-payments': 'Purchase Payment', 'sell-payments': 'Sell Payment', 'payment-by-age': 'Payment by Age', expenses: 'Expense Report', 'register-report': 'Register Report', commission: 'Sales Representative', 'activity-log': 'Activity Log',
   register: 'Cash Register',
 };
 
@@ -380,6 +381,7 @@ export function Reports({ T, tab: tabProp, onTab }: { T: Theme; tab?: string; on
           {tab === 'expenses' && <ExpenseReport T={T} />}
           {tab === 'register-report' && <RegisterSessionsReport T={T} />}
           {tab === 'commission' && <SalesRepReport T={T} agentsView={<CommissionReport T={T} />} />}
+          {tab === 'activity-log' && <ActivityLogReport T={T} />}
           {tab === 'register' && <RegisterReport T={T} />}
         </div>
       </div>

@@ -165,6 +165,7 @@ export const NAV = [
           { key: 'register-report', activeId: 'reports', activeParams: { tab: 'register-report' }, label: 'Register Report', route: '/reports?tab=register-report' },
           { key: 'reports-overview', activeId: 'reports', label: 'Overview', route: '/reports' },
           { key: 'reports-commission', activeId: 'reports', activeParams: { tab: 'commission' }, label: 'Sales Representative', route: '/reports?tab=commission' },
+          { key: 'reports-activity-log', activeId: 'reports', activeParams: { tab: 'activity-log' }, label: 'Activity Log', route: '/reports?tab=activity-log' },
           { key: 'reports-register', activeId: 'reports', activeParams: { tab: 'register' }, label: 'Cash Register', route: '/reports?tab=register' },
         ]
       },

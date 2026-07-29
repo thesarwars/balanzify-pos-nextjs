@@ -19,6 +19,22 @@ const {
 const { z } = require('zod');
 const router = express.Router();
 
+// Record a sign-in/out in the activity log the Activity Log report reads.
+// Fire and forget on purpose: an audit write must never be able to fail a
+// login. Every path that issues tokens calls this, so the trail has no holes.
+function logAuthActivity(user, action, details) {
+  prisma.activityLog.create({
+    data: {
+      businessId: user.businessId || null,
+      userId: user.id,
+      action,
+      entityType: 'user',
+      entityId: user.id,
+      ...(details && { details }),
+    },
+  }).catch(() => {});
+}
+
 // POST /api/v1/auth/register
 router.post('/register', validate(RegisterSchema), async (req, res, next) => {
   try {
@@ -121,6 +137,7 @@ router.post('/login', validate(LoginSchema), async (req, res, next) => {
     const tokens = await issueTokens(user, ip, req.get('user-agent'));
     trackLogin(user.role);
     audit('login', { user_id: user.id });
+    logAuthActivity(user, 'login', { ip, method: 'password' });
     res.json({
       user: { id: user.id, email: user.email, role: user.role, name: user.name, business_id: user.businessId },
       token_type: 'Bearer',
@@ -150,6 +167,7 @@ router.post('/mfa/verify', validate(VerifyMfaSchema), async (req, res, next) => 
 
     await prisma.user.update({ where: { id: user.id }, data: { lastLogin: new Date() } });
     const tokens = await issueTokens(user, req.ip, req.get('user-agent'));
+    logAuthActivity(user, 'login', { ip: req.ip, method: 'mfa' });
     res.json({ user: { id: user.id, email: user.email, role: user.role, name: user.name }, ...tokens });
   } catch (err) { next(err); }
 });
@@ -206,6 +224,7 @@ router.post('/refresh', validate(RefreshTokenSchema), async (req, res, next) => 
 router.post('/logout', auth, async (req, res, next) => {
   try {
     await revokeAllSessions(req.user.id);
+    logAuthActivity({ id: req.user.id, businessId: req.user.business_id }, 'logout');
     res.json({ message: 'Logged out from all sessions.' });
   } catch (err) { next(err); }
 });
@@ -273,6 +292,7 @@ router.post('/pin-login', validate(PinLoginSchema), async (req, res, next) => {
 
     await prisma.user.update({ where: { id: user.id }, data: { lastLogin: new Date() } });
     const tokens = await issueTokens(user, ip, req.get('user-agent'));
+    logAuthActivity(user, 'login', { ip, method: 'pin' });
     res.json({ user: { id: user.id, name: user.name, role: user.role }, ...tokens });
   } catch (err) { next(err); }
 });

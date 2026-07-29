@@ -19,6 +19,7 @@ reportsRouter.use('/', require('./payments'));
 reportsRouter.use('/', require('./expenses'));
 reportsRouter.use('/', require('./registers'));
 reportsRouter.use('/', require('./sales-rep'));
+reportsRouter.use('/', require('./activity-log'));
 reportsRouter.use('/', require('./contacts'));
 reportsRouter.use('/', require('./tax'));
 

@@ -1748,6 +1748,84 @@ describe('Tax report', () => {
     expect(badUser.status).toBe(400);
   });
 
+  test('activity log records logins and filters by user, subject and date', async () => {
+    // Its own business: logging out revokes every session for that user, which
+    // would 401 the shared token the rest of this suite runs on.
+    const email = `act_${RUN}@balanzify.test`;
+    const reg = await registerBusiness(email);
+    const regToken = reg.access_token;
+
+    // A fresh business has no activity until someone actually logs in —
+    // registration hands back a token without going through /auth/login.
+    const empty = await request(app).get('/api/v1/reports/activity-log').set(auth(regToken));
+    expect(empty.status).toBe(200);
+    expect(empty.body.rows).toEqual([]);
+
+    const login = await request(app).post('/api/v1/auth/login')
+      .send({ email, password: 'SecureTestPass123!' });
+    expect(login.status).toBe(200);
+    // The write is fire-and-forget, so give it a moment to land.
+    await new Promise(r => setTimeout(r, 400));
+
+    const res = await request(app).get('/api/v1/reports/activity-log').set(auth(regToken));
+    expect(res.status).toBe(200);
+    expect(res.body.rows.length).toBe(1);
+    const row = res.body.rows[0];
+    expect(row.action).toBe('Login');
+    expect(row.subject_type).toBe('User');
+    expect(row.by).toBeTruthy();
+    expect(row.note).toContain('method: password');
+    expect(res.body.totals.count).toBe(1);
+    // Subject types are data-driven from what this business has produced.
+    expect(res.body.subject_types).toEqual(['user']);
+
+    // Logging out is recorded too — it kills this user's sessions, so read the
+    // report on a fresh login.
+    const out = await request(app).post('/api/v1/auth/logout').set(auth(login.body.access_token));
+    expect(out.status).toBe(200);
+    await new Promise(r => setTimeout(r, 400));
+    const relogin = await request(app).post('/api/v1/auth/login')
+      .send({ email, password: 'SecureTestPass123!' });
+    const token = relogin.body.access_token;
+    const after = await request(app).get('/api/v1/reports/activity-log').set(auth(token));
+    expect(after.body.rows.some(r => r.action === 'Logout')).toBe(true);
+    // Newest first.
+    expect(new Date(after.body.rows[0].date).getTime())
+      .toBeGreaterThanOrEqual(new Date(after.body.rows[1].date).getTime());
+
+    // The till's PIN unlock issues real tokens, so it is logged as a login too.
+    const staff = await request(app).post('/api/v1/users').set(auth(token))
+      .send({ name: 'Pin Cashier', email: `pin_${RUN}@balanzify.test`, password: 'SecurePass123!', role: 'cashier', pin: '4321' });
+    expect(staff.status).toBe(201);
+    const pinLogin = await request(app).post('/api/v1/auth/pin-login')
+      .send({ business_id: reg.business.id, pin: '4321' });
+    expect(pinLogin.status).toBe(200);
+    await new Promise(r => setTimeout(r, 400));
+    const withPin = await request(app).get('/api/v1/reports/activity-log').set(auth(token));
+    const pinRow = withPin.body.rows.find(r => r.by === 'Pin Cashier');
+    expect(pinRow).toBeTruthy();
+    expect(pinRow.action).toBe('Login');
+    expect(pinRow.note).toContain('method: pin');
+
+    // Filters narrow it; a subject nobody has touched yields nothing.
+    const byUser = await request(app).get('/api/v1/reports/activity-log')
+      .set(auth(token)).query({ user_id: reg.user.id });
+    expect(byUser.body.rows.length).toBe(withPin.body.rows.length - 1);
+    expect(byUser.body.rows.every(r => r.by !== 'Pin Cashier')).toBe(true);
+    const none = await request(app).get('/api/v1/reports/activity-log')
+      .set(auth(token)).query({ subject_type: 'no_such_subject' });
+    expect(none.body.rows).toEqual([]);
+
+    const badUser = await request(app).get('/api/v1/reports/activity-log')
+      .set(auth(token)).query({ user_id: 'not-a-uuid' });
+    expect(badUser.status).toBe(400);
+    const badDate = await request(app).get('/api/v1/reports/activity-log')
+      .set(auth(token)).query({ from: '13-13-2026' });
+    expect(badDate.status).toBe(400);
+
+    await prisma.business.deleteMany({ where: { id: reg.business.id } }).catch(() => {});
+  });
+
   test('expense report groups by category and totals', async () => {
     const res = await request(app).get('/api/v1/reports/expenses').set(auth(txToken));
     expect(res.status).toBe(200);
