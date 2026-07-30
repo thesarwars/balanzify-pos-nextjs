@@ -9,6 +9,7 @@ import { money, money0 } from '@/lib/theme';
 import { Btn, Badge, Panel, Modal, Field, TextField, SelectField, FormGrid, useToast } from '@/components/kit';
 import { Topbar, useSession } from '@/components/shell';
 import { API } from '@/lib/api';
+import { LuUsers, LuPrinter, LuSettings, LuTriangleAlert, LuSearch, LuCheck, LuClock, LuHourglass, LuBanknote, LuListTodo, LuX, LuPlay } from 'react-icons/lu';
 import { BUSINESS } from '@/lib/data';
 import { todayLocal } from '@/lib/business-settings';
 
@@ -82,7 +83,7 @@ export function HRM({ T }: { T: any }) {
         <Topbar T={T} title="HRM / Essentials" subtitle="Add-on module" />
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
           <div style={{ textAlign: 'center', maxWidth: 400 }}>
-            <div style={{ width: 76, height: 76, borderRadius: 20, background: T.accent.soft, color: T.accent.base, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 34, margin: '0 auto 20px' }}>⚇</div>
+            <div style={{ width: 76, height: 76, borderRadius: 20, background: T.accent.soft, color: T.accent.base, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 34, margin: '0 auto 20px' }}><LuUsers /></div>
             <div style={{ fontFamily: T.fDisplay, fontSize: 24, fontWeight: T.dispWeight, color: T.ink, marginBottom: 8 }}>HRM / Essentials</div>
             <div style={{ fontSize: 13.5, color: T.inkSub, lineHeight: 1.6, marginBottom: 22 }}>Manage employees, attendance, leave, payroll and team tasks. Paid add-on ($18/mo) — enable it to start.</div>
             <Btn T={T} kind="accent" onClick={enableModule}>Enable HRM · $18/mo</Btn>
@@ -150,15 +151,15 @@ export function HRM({ T }: { T: any }) {
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: T.paperAlt }}>
       <Topbar T={T} title="HRM / Essentials" subtitle="People, time & payroll"
         right={<span style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          {tab !== 'overview' && <><Btn T={T} kind="ghost" onClick={exportCSV}>⤓ Export</Btn><Btn T={T} kind="ghost" onClick={printTable}>⎙ Print</Btn></>}
+          {tab !== 'overview' && <><Btn T={T} kind="ghost" onClick={exportCSV}>⤓ Export</Btn><Btn T={T} kind="ghost" onClick={printTable}><LuPrinter size={13} style={{ verticalAlign: -2, marginRight: 5 }} />Print</Btn></>}
           {tab === 'employees' ? <Btn T={T} kind="accent" onClick={() => setModal('employee')}>+ Add Employee</Btn>
           : tab === 'org' ? <Btn T={T} kind="accent" onClick={() => setModal('org')}>+ Add</Btn>
-          : tab === 'leave' ? <><Btn T={T} kind="ghost" onClick={() => setModal('leavetypes')}>⚙ Leave Types</Btn><Btn T={T} kind="accent" onClick={() => setModal('leave')}>+ Apply Leave</Btn></>
-          : tab === 'payroll' ? <><Btn T={T} kind="ghost" onClick={() => setModal('payslipsettings')}>⚙ Payslip</Btn><Btn T={T} kind="accent" onClick={() => setModal('payroll')}>⏵ Run Payroll</Btn></>
+          : tab === 'leave' ? <><Btn T={T} kind="ghost" onClick={() => setModal('leavetypes')}><LuSettings size={13} style={{ verticalAlign: -2, marginRight: 5 }} />Leave Types</Btn><Btn T={T} kind="accent" onClick={() => setModal('leave')}>+ Apply Leave</Btn></>
+          : tab === 'payroll' ? <><Btn T={T} kind="ghost" onClick={() => setModal('payslipsettings')}><LuSettings size={13} style={{ verticalAlign: -2, marginRight: 5 }} />Payslip</Btn><Btn T={T} kind="accent" onClick={() => setModal('payroll')}><LuPlay size={12} style={{ verticalAlign: -2, marginRight: 5 }} />Run Payroll</Btn></>
           : tab === 'shifts' ? <Btn T={T} kind="accent" onClick={() => setModal('shift')}>+ Add Shift</Btn>
           : tab === 'advances' ? <Btn T={T} kind="accent" onClick={() => setModal('advance')}>+ Give Advance</Btn>
-          : tab === 'attendance' ? <Btn T={T} kind="ghost" onClick={() => setModal('attsettings')}>⚙ Attendance Settings</Btn>
-          : tab === 'report' ? <Btn T={T} kind="ghost" onClick={() => API.hrm.autoAbsent().then((r: any) => { show(r.added ? `Marked ${r.added} absent` : 'No one to mark absent'); API.hrm.attendanceSummary(reportMonth).then(setReport); })}>⚠ Mark absentees</Btn>
+          : tab === 'attendance' ? <Btn T={T} kind="ghost" onClick={() => setModal('attsettings')}><LuSettings size={13} style={{ verticalAlign: -2, marginRight: 5 }} />Attendance Settings</Btn>
+          : tab === 'report' ? <Btn T={T} kind="ghost" onClick={() => API.hrm.autoAbsent().then((r: any) => { show(r.added ? `Marked ${r.added} absent` : 'No one to mark absent'); API.hrm.attendanceSummary(reportMonth).then(setReport); })}><LuTriangleAlert size={13} style={{ verticalAlign: -2, marginRight: 5 }} />Mark absentees</Btn>
           : tab === 'todos' ? <Btn T={T} kind="accent" onClick={() => setModal('todo')}>+ Add Task</Btn> : null}
         </span>} />
       <div style={{ flex: 1, overflowY: 'auto', padding: 28 }}>
@@ -182,7 +183,7 @@ export function HRM({ T }: { T: any }) {
             return (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16, alignItems: 'center' }}>
                 <div style={{ position: 'relative', flex: '1 1 200px', maxWidth: 280 }}>
-                  <span style={{ position: 'absolute', left: 11, top: '50%', transform: 'translateY(-50%)', color: T.inkMute, fontSize: 13 }}>⌕</span>
+                  <span style={{ position: 'absolute', left: 11, top: '50%', transform: 'translateY(-50%)', color: T.inkMute, fontSize: 13, lineHeight: 0 }}><LuSearch size={14} /></span>
                   <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search…" style={{ width: '100%', padding: '8px 11px 8px 30px', fontSize: 12.5, fontFamily: T.fBody, color: T.ink, background: T.paper, border: `1.5px solid ${T.line}`, borderRadius: T.r, outline: 'none', boxSizing: 'border-box' }} />
                 </div>
                 {tab !== 'todos' && <select value={fDept} onChange={e => setFDept(e.target.value)} style={hrFilterSel(T)}><option value="">All departments</option>{depts.map((d: any) => <option key={d} value={d}>{d}</option>)}</select>}
@@ -195,9 +196,9 @@ export function HRM({ T }: { T: any }) {
           })()}
           {tab === 'overview' && summary && (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 14 }}>
-              {[['Employees', summary.employees, '⚇'], ['Present today', summary.present, '✓'], ['On leave', summary.on_leave, '◷'], ['Pending leave', summary.pending_leave, '◔'], ['Payroll (paid)', money0(summary.payroll), '▤'], ['Open tasks', summary.open_todos, '◳']].map(([k, v, ic]: any) => (
+              {[['Employees', summary.employees, LuUsers], ['Present today', summary.present, LuCheck], ['On leave', summary.on_leave, LuClock], ['Pending leave', summary.pending_leave, LuHourglass], ['Payroll (paid)', money0(summary.payroll), LuBanknote], ['Open tasks', summary.open_todos, LuListTodo]].map(([k, v, Ic]: any) => (
                 <div key={k} style={{ background: T.card, border: `1px solid ${T.line}`, borderRadius: T.rLg, padding: 18, boxShadow: T.sh1 }}>
-                  <div style={{ fontSize: 18, color: T.accent.base, marginBottom: 10 }}>{ic}</div>
+                  <div style={{ fontSize: 18, color: T.accent.base, marginBottom: 10, lineHeight: 0 }}><Ic /></div>
                   <div style={{ fontFamily: T.fMono, fontSize: 26, fontWeight: 600, color: T.ink, letterSpacing: '-1px' }}>{v}</div>
                   <div style={{ fontSize: 12, color: T.inkSub, marginTop: 2 }}>{k}</div>
                 </div>
@@ -246,7 +247,7 @@ export function HRM({ T }: { T: any }) {
                       <div key={d.name} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', border: `1px solid ${T.line}`, borderRadius: T.r, background: T.paper }}>
                         <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: T.ink }}>{d.name}</span>
                         <Badge T={T} tone="gray">{d.count} staff</Badge>
-                        <button onClick={() => API.hrm.removeOrg(kind, d.name).then(() => API.hrm.org().then(setOrg)).catch((e: any) => show(e.message))} disabled={d.count > 0} style={{ width: 26, height: 26, borderRadius: 6, border: `1px solid ${T.line}`, background: T.paper, color: d.count > 0 ? T.inkMute : T.redText, cursor: d.count > 0 ? 'not-allowed' : 'pointer', fontSize: 12, opacity: d.count > 0 ? 0.4 : 1 }}>✕</button>
+                        <button onClick={() => API.hrm.removeOrg(kind, d.name).then(() => API.hrm.org().then(setOrg)).catch((e: any) => show(e.message))} disabled={d.count > 0} style={{ width: 26, height: 26, borderRadius: 6, border: `1px solid ${T.line}`, background: T.paper, color: d.count > 0 ? T.inkMute : T.redText, cursor: d.count > 0 ? 'not-allowed' : 'pointer', fontSize: 12, opacity: d.count > 0 ? 0.4 : 1, lineHeight: 0 }}><LuX size={12} /></button>
                       </div>
                     ))}
                     {list.length === 0 && <div style={{ padding: 14, textAlign: 'center', fontSize: 12.5, color: T.inkMute }}>None yet.</div>}
@@ -274,7 +275,7 @@ export function HRM({ T }: { T: any }) {
                         <div style={{ fontSize: 10.5, fontFamily: T.fMono, color: T.inkSub }}>{rec ? (rec.clock_out ? `${rec.clock_in}–${rec.clock_out}` : `in ${rec.clock_in}`) : 'not clocked in'}</div>
                       </div>
                       {state === 'done'
-                        ? <span style={{ fontSize: 11, fontWeight: 700, color: T.greenText, flexShrink: 0 }}>✓ Done</span>
+                        ? <span style={{ fontSize: 11, fontWeight: 700, color: T.greenText, flexShrink: 0 }}><LuCheck size={12} style={{ verticalAlign: -2, marginRight: 3 }} />Done</span>
                         : <span style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
                             {state === 'in' && <button onClick={() => API.hrm.breakToggle(e.id).then(() => { reload(); show((rec && rec.on_break ? 'Back from break · ' : 'On break · ') + e.name.split(' ')[0]); })} style={{ padding: '7px 11px', borderRadius: 8, border: `1px solid ${T.line}`, cursor: 'pointer', fontFamily: T.fBody, fontSize: 12, fontWeight: 700, color: rec && rec.on_break ? T.amberText : T.inkMid, background: rec && rec.on_break ? T.amberSoft : T.paper }}>{rec && rec.on_break ? 'End break' : 'Break'}</button>}
                             <button onClick={() => API.hrm.clock(e.id).then(() => { reload(); show((state === 'in' ? 'Clocked out ' : 'Clocked in ') + e.name.split(' ')[0]); })} style={{ padding: '7px 13px', borderRadius: 8, border: 'none', cursor: 'pointer', fontFamily: T.fBody, fontSize: 12, fontWeight: 700, color: '#fff', background: state === 'in' ? T.red : T.green }}>{state === 'in' ? 'Clock out' : 'Clock in'}</button>
@@ -373,7 +374,7 @@ export function HRM({ T }: { T: any }) {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {fTodos.map((t: any) => (
                 <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '13px 16px', background: T.card, border: `1px solid ${T.line}`, borderRadius: T.r, boxShadow: T.sh1 }}>
-                  <button onClick={() => API.hrm.setTodo(t.id, t.status === 'done' ? 'pending' : 'done').then(reload)} style={{ width: 22, height: 22, borderRadius: 6, border: `1.5px solid ${t.status === 'done' ? T.green : T.lineMid}`, background: t.status === 'done' ? T.green : 'transparent', color: '#fff', cursor: 'pointer', fontSize: 12, flexShrink: 0 }}>{t.status === 'done' ? '✓' : ''}</button>
+                  <button onClick={() => API.hrm.setTodo(t.id, t.status === 'done' ? 'pending' : 'done').then(reload)} style={{ width: 22, height: 22, borderRadius: 6, border: `1.5px solid ${t.status === 'done' ? T.green : T.lineMid}`, background: t.status === 'done' ? T.green : 'transparent', color: '#fff', cursor: 'pointer', fontSize: 12, flexShrink: 0, lineHeight: 0 }}>{t.status === 'done' ? <LuCheck size={12} /> : ''}</button>
                   <div style={{ flex: 1 }}>
                     <div style={{ fontSize: 13.5, fontWeight: 600, color: t.status === 'done' ? T.inkMute : T.ink, textDecoration: t.status === 'done' ? 'line-through' : 'none' }}>{t.title}</div>
                     <div style={{ fontSize: 11.5, color: T.inkSub, marginTop: 2 }}>{t.assigned_name} · due {t.due}</div>
@@ -539,7 +540,7 @@ function EmployeeModal({ T, meta, locs, employee, onClose, onSaved }: { T: any; 
         <Field T={T} label="Joined"><TextField T={T} type="date" value={f.joined} onChange={v => set('joined', v)} /></Field>
         <Field T={T} label="Commission %"><TextField T={T} type="number" value={f.commission_percent} onChange={v => set('commission_percent', v)} placeholder="0" /></Field>
       </FormGrid>
-      {err && <div style={{ marginTop: 14, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}>⚠ {err}</div>}
+      {err && <div style={{ marginTop: 14, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}><LuTriangleAlert size={13} style={{ verticalAlign: -2, marginRight: 5 }} />{err}</div>}
     </Modal>
   );
 }
@@ -591,15 +592,15 @@ function LeaveTypesManager({ T, emps, onClose, onSaved }: { T: any; emps: any[];
               onBlur={e => commitDays(t, e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
               disabled={!t.paid} style={{ width: 60, padding: '5px 7px', fontSize: 12.5, fontFamily: T.fMono, textAlign: 'right', color: T.ink, background: t.paid ? T.paper : T.paperAlt, border: `1px solid ${T.line}`, borderRadius: 6, outline: 'none' }} />
-            <button onClick={() => del(t)} style={{ width: 26, height: 26, borderRadius: 6, border: `1px solid ${T.line}`, background: T.paper, color: T.redText, cursor: 'pointer', fontSize: 12 }}>✕</button>
+            <button onClick={() => del(t)} style={{ width: 26, height: 26, borderRadius: 6, border: `1px solid ${T.line}`, background: T.paper, color: T.redText, cursor: 'pointer', fontSize: 12, lineHeight: 0 }}><LuX size={12} /></button>
           </div>
         ))}
       </div>
       <div style={{ borderTop: `1px solid ${T.line}`, paddingTop: 14, display: 'flex', alignItems: 'flex-end', gap: 8, flexWrap: 'wrap' }}>
         <div style={{ flex: 1, minWidth: 120 }}><div style={{ fontSize: 11, fontWeight: 600, color: T.inkSub, marginBottom: 5 }}>New type</div><TextField T={T} value={name} onChange={setName} placeholder="e.g. Maternity" /></div>
         <div style={{ width: 80 }}><div style={{ fontSize: 11, fontWeight: 600, color: T.inkSub, marginBottom: 5 }}>Days/yr</div><TextField T={T} type="number" value={days} onChange={setDays} placeholder="0" /></div>
-        <button onClick={() => setPaid(p => !p)} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '9px 11px', borderRadius: T.r, border: `1px solid ${T.line}`, background: T.paper, cursor: 'pointer', fontFamily: T.fBody, fontSize: 12, color: T.inkMid }}>{paid ? '✓ Paid' : 'Unpaid'}</button>
-        <button onClick={() => setAccrues(a => !a)} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '9px 11px', borderRadius: T.r, border: `1px solid ${accrues ? T.accent.base : T.line}`, background: accrues ? T.accent.soft : T.paper, cursor: 'pointer', fontFamily: T.fBody, fontSize: 12, color: accrues ? T.accent.text : T.inkMid }}>{accrues ? '✓ Accrues' : 'Accrues'}</button>
+        <button onClick={() => setPaid(p => !p)} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '9px 11px', borderRadius: T.r, border: `1px solid ${T.line}`, background: T.paper, cursor: 'pointer', fontFamily: T.fBody, fontSize: 12, color: T.inkMid }}>{paid ? <><LuCheck size={12} style={{ verticalAlign: -2, marginRight: 3 }} />Paid</> : 'Unpaid'}</button>
+        <button onClick={() => setAccrues(a => !a)} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '9px 11px', borderRadius: T.r, border: `1px solid ${accrues ? T.accent.base : T.line}`, background: accrues ? T.accent.soft : T.paper, cursor: 'pointer', fontFamily: T.fBody, fontSize: 12, color: accrues ? T.accent.text : T.inkMid }}>{accrues ? <><LuCheck size={12} style={{ verticalAlign: -2, marginRight: 3 }} />Accrues</> : 'Accrues'}</button>
         <Btn T={T} kind="accent" onClick={add}>Add</Btn>
       </div>
       <div style={{ borderTop: `1px solid ${T.line}`, marginTop: 16, paddingTop: 14 }}>
@@ -652,7 +653,7 @@ function LeaveModal({ T, emps, leaveTypes, onClose, onSaved }: { T: any; emps: a
         <Field T={T} label="Reason" full><TextField T={T} value={f.reason} onChange={v => set('reason', v)} placeholder="Reason for leave" /></Field>
       </FormGrid>
       {typeBal && paidType && <div style={{ marginTop: 12, padding: '9px 13px', borderRadius: T.r, background: typeBal.balance > 0 ? T.accent.soft : T.amberSoft, color: typeBal.balance > 0 ? T.accent.text : T.amberText, fontSize: 12, lineHeight: 1.5 }}><b>{typeBal.balance}</b> of {typeBal.entitled} {f.type} day(s) available{typeBal.pending ? ` · ${typeBal.pending} pending` : ''}.</div>}
-      {err && <div style={{ marginTop: 14, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}>⚠ {err}</div>}
+      {err && <div style={{ marginTop: 14, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}><LuTriangleAlert size={13} style={{ verticalAlign: -2, marginRight: 5 }} />{err}</div>}
     </Modal>
   );
 }
@@ -736,7 +737,7 @@ function SwapModal({ T, shifts, emps, onClose, onSaved }: { T: any; shifts: any[
         <Field T={T} label="Swap to" full><SelectField T={T} value={String(f.to_id)} options={['', ...others.map((e: any) => String(e.id))]} onChange={v => set('to_id', v ? (/^\d+$/.test(String(v)) ? Number(v) : v) : '')} render={v => v ? (others.find((e: any) => String(e.id) === v) || {}).name : 'Select colleague…'} /></Field>
         <Field T={T} label="Reason" full><TextField T={T} value={f.reason} onChange={v => set('reason', v)} placeholder="Why the swap?" /></Field>
       </FormGrid>
-      {err && <div style={{ marginTop: 14, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}>⚠ {err}</div>}
+      {err && <div style={{ marginTop: 14, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}><LuTriangleAlert size={13} style={{ verticalAlign: -2, marginRight: 5 }} />{err}</div>}
     </Modal>
   );
 }
@@ -842,7 +843,7 @@ function EmployeeProfile({ T, profile: p, onClose }: { T: any; profile: any; onC
               <div style={{ fontSize: 12.5, color: T.inkSub, marginTop: 3 }}>{p.designation} · {p.department} · {p.location_name}</div>
             </div>
           </div>
-          <button onClick={onClose} style={{ width: 32, height: 32, flexShrink: 0, borderRadius: 8, border: `1px solid ${T.line}`, background: T.paper, color: T.inkMid, cursor: 'pointer', fontSize: 15 }}>✕</button>
+          <button onClick={onClose} style={{ width: 32, height: 32, flexShrink: 0, borderRadius: 8, border: `1px solid ${T.line}`, background: T.paper, color: T.inkMid, cursor: 'pointer', fontSize: 15, lineHeight: 0 }}><LuX size={14} /></button>
         </div>
         <div style={{ flex: 1, overflowY: 'auto', padding: 24 }}>
       {/* POS link + sales */}
@@ -864,7 +865,7 @@ function EmployeeProfile({ T, profile: p, onClose }: { T: any; profile: any; onC
         {p.payroll.map((row: any, i: number) => (
           <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 13px', borderTop: i ? `1px solid ${T.line}` : 'none' }}>
             <div><span style={{ fontFamily: T.fMono, fontSize: 12.5, fontWeight: 600, color: T.ink }}>{row.month}</span> <Badge T={T} tone="green" style={{ marginLeft: 6 }}>{row.status}</Badge></div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}><span style={{ fontFamily: T.fMono, fontSize: 13, fontWeight: 700, color: T.ink }}>{money(row.net)}</span><button onClick={() => printPayslip(row)} style={hrMini(T)}>⎙ Payslip</button></div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}><span style={{ fontFamily: T.fMono, fontSize: 13, fontWeight: 700, color: T.ink }}>{money(row.net)}</span><button onClick={() => printPayslip(row)} style={hrMini(T)}><LuPrinter size={12} style={{ verticalAlign: -2, marginRight: 4 }} />Payslip</button></div>
           </div>
         ))}
       </div>
@@ -904,7 +905,7 @@ function AdvanceModal({ T, emps, onClose, onSaved }: { T: any; emps: any[]; onCl
         <Field T={T} label="Note" full><TextField T={T} value={f.note} onChange={v => set('note', v)} placeholder="Reason / terms" /></Field>
       </FormGrid>
       <div style={{ fontSize: 11.5, color: T.inkMute, marginTop: 12, lineHeight: 1.5 }}>The amount is drawn from the selected account now, and recovers automatically from the employee's next payroll deduction.</div>
-      {err && <div style={{ marginTop: 14, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}>⚠ {err}</div>}
+      {err && <div style={{ marginTop: 14, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}><LuTriangleAlert size={13} style={{ verticalAlign: -2, marginRight: 5 }} />{err}</div>}
     </Modal>
   );
 }
@@ -981,7 +982,7 @@ function OrgModal({ T, onClose, onSaved }: { T: any; onClose: () => void; onSave
         <Field T={T} label="Type"><SelectField T={T} value={kind} options={['department', 'designation']} onChange={setKind} render={v => v === 'department' ? 'Department' : 'Designation'} /></Field>
         <Field T={T} label="Name"><TextField T={T} value={name} onChange={setName} placeholder={kind === 'department' ? 'e.g. Logistics' : 'e.g. Supervisor'} /></Field>
       </FormGrid>
-      {err && <div style={{ marginTop: 14, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}>⚠ {err}</div>}
+      {err && <div style={{ marginTop: 14, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}><LuTriangleAlert size={13} style={{ verticalAlign: -2, marginRight: 5 }} />{err}</div>}
     </Modal>
   );
 }
