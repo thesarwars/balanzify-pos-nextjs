@@ -623,6 +623,8 @@ model Business {
   orgUnits           OrgUnit[]
   hrmSettings        HrmSettings?
   holidays           Holiday[]
+  shiftTemplates     ShiftTemplate[]
+  shiftAssignments   ShiftAssignment[]
   serviceTypes       ServiceType[]
   subscription         Subscription?
   subscriptionPayments SubscriptionPayment[]
@@ -938,7 +940,7 @@ model Employee {
   business        Business                @relation(fields: [businessId], references: [id], onDelete: Cascade)
   location        Location?               @relation(fields: [locationId], references: [id], onDelete: SetNull)
   user            User?                   @relation(fields: [userId], references: [id], onDelete: SetNull)
-  shift           EmployeeShift?
+  shiftAssignments ShiftAssignment[]
   attendance      Attendance[]
   leaves          Leave[]
   leaveOverrides  EmployeeLeaveOverride[]
@@ -1119,10 +1121,17 @@ model Attendance {
   clockOut   String?  @map("clock_out") @db.VarChar(5)
   status     String   @default("present") @db.VarChar(20)
   breaks     Json     @default("[]")
+  // Which shift this record was judged against. Kept on the row so changing an
+  // employee's shift later cannot silently reinterpret their history.
+  shiftId      String? @map("shift_id") @db.Uuid
+  ipAddress    String? @map("ip_address") @db.VarChar(64)
+  clockInNote  String? @map("clock_in_note") @db.VarChar(500)
+  clockOutNote String? @map("clock_out_note") @db.VarChar(500)
   createdAt  DateTime @default(now()) @map("created_at")
 
-  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  business Business       @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  employee Employee       @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  shift    ShiftTemplate? @relation(fields: [shiftId], references: [id], onDelete: SetNull)
 
   @@unique([employeeId, date])
   @@index([businessId, date])
@@ -1162,6 +1171,45 @@ model Holiday {
   @@map("holidays")
 }
 
+// A named, reusable shift: fixed (with times) or flexible (without), plus the
+// weekly days off and whether a forgotten clock-in is closed automatically.
+// This replaces EmployeeShift, which was 1:1 per employee and had no name.
+model ShiftTemplate {
+  id            String   @id @default(uuid()) @db.Uuid
+  businessId    String   @map("business_id") @db.Uuid
+  name          String   @db.VarChar(100)
+  type          String   @default("fixed") @db.VarChar(20)   // fixed | flexible
+  startTime     String?  @map("start_time") @db.VarChar(5)   // null on a flexible shift
+  endTime       String?  @map("end_time") @db.VarChar(5)
+  weeklyOffDays Int[]    @map("weekly_off_days")             // 0 = Sunday … 6 = Saturday
+  autoClockOut  Boolean  @default(false) @map("auto_clock_out")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  business    Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  assignments ShiftAssignment[]
+  attendance  Attendance[]
+
+  @@unique([businessId, name])
+  @@map("shift_templates")
+}
+
+// Who works a shift. Many-to-many, so a shift is defined once and shared.
+model ShiftAssignment {
+  id         String   @id @default(uuid()) @db.Uuid
+  businessId String   @map("business_id") @db.Uuid
+  shiftId    String   @map("shift_id") @db.Uuid
+  employeeId String   @map("employee_id") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  business Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  shift    ShiftTemplate @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+  employee Employee      @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@unique([shiftId, employeeId])
+  @@index([businessId, employeeId])
+  @@map("shift_assignments")
+}
+
 model HrmSettings {
   id                     String  @id @default(uuid()) @db.Uuid
   businessId             String  @unique @map("business_id") @db.Uuid
@@ -1189,18 +1237,6 @@ model HrmSettings {
   business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
 
   @@map("hrm_settings")
-}
-
-model EmployeeShift {
-  id         String @id @default(uuid()) @db.Uuid
-  employeeId String @unique @map("employee_id") @db.Uuid
-  type       String @default("fixed") @db.VarChar(20)
-  start      String @default("08:00") @db.VarChar(5)
-  end        String @default("16:00") @db.VarChar(5)
-
-  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
-
-  @@map("employee_shifts")
 }
 
 model InvoiceLayout {

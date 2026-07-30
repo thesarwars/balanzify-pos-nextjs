@@ -10,7 +10,7 @@ const statutory = require('../lib/statutory');
 const wa = require('../lib/whatsapp');
 const { auth, requireRole } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
-const { EmployeeSchema, EmployeeUpdateSchema, OrgUnitSchema, HrmSettingsSchema, HolidaySchema, EmployeeShiftSchema, AttendanceClockSchema,
+const { EmployeeSchema, EmployeeUpdateSchema, OrgUnitSchema, HrmSettingsSchema, HolidaySchema, ShiftTemplateSchema, ShiftAssignSchema, AttendanceClockSchema,
   LeaveTypeSchema, LeaveTypeUpdateSchema, LeaveSchema, LeaveStatusSchema, LeaveOverrideSchema,
   RosterShiftSchema, RosterSwapSchema, HrAdvanceSchema, HrTodoSchema, StatusSchema,
   PayrollSchema, PayslipSettingsSchema } = require('../validation/schemas');
@@ -109,7 +109,7 @@ router.get('/employee/:id', auth, async (req, res, next) => {
   try {
     const e = await prisma.employee.findFirst({
       where: { id: req.params.id, businessId: req.user.business_id },
-      include: { location: { select: { name: true } }, user: { select: { name: true } }, shift: true },
+      include: { location: { select: { name: true } }, user: { select: { name: true } } },
     });
     if (!e) return res.status(404).json({ title: 'Not found', status: 404 });
     const businessId = req.user.business_id;
@@ -130,7 +130,7 @@ router.get('/employee/:id', auth, async (req, res, next) => {
     res.json({
       ...serializeEmployee(e),
       user_name: e.user?.name || null,
-      shift: e.shift ? { type: e.shift.type, start: e.shift.start, end: e.shift.end } : null,
+      shift: (await empShiftMap(businessId))[e.id] || null,
       attendance: attendance.map(a => decorateAtt(a, e.name, nowHM)),
       leaves: leaves.map(l => serializeLeave(l, e.name)),
       payroll: payroll.map(serializePayroll),
@@ -399,11 +399,31 @@ function serializeSettings(s, empShift) {
     },
   };
 }
+// employeeId -> the shift they work. An employee can hold more than one
+// assignment; the first by name wins for the purposes of "their shift".
 async function empShiftMap(businessId) {
-  const shifts = await prisma.employeeShift.findMany({ where: { employee: { businessId } } });
+  const rows = await prisma.shiftAssignment.findMany({
+    where: { businessId },
+    include: { shift: true },
+    orderBy: { shift: { name: 'asc' } },
+  });
   const map = {};
-  shifts.forEach(sh => { map[sh.employeeId] = { type: sh.type, start: sh.start, end: sh.end }; });
+  for (const a of rows) {
+    if (map[a.employeeId]) continue;
+    map[a.employeeId] = {
+      shift_id: a.shiftId, name: a.shift.name, type: a.shift.type,
+      start: a.shift.startTime, end: a.shift.endTime,
+      weekly_off_days: a.shift.weeklyOffDays, auto_clock_out: a.shift.autoClockOut,
+    };
+  }
   return map;
+}
+
+async function shiftForEmployee(businessId, employeeId) {
+  const a = await prisma.shiftAssignment.findFirst({
+    where: { businessId, employeeId }, include: { shift: true }, orderBy: { shift: { name: 'asc' } },
+  });
+  return a?.shift || null;
 }
 
 router.get('/settings', auth, async (req, res, next) => {
@@ -435,17 +455,117 @@ router.put('/settings', auth, requireRole('owner', 'manager'), validate(HrmSetti
   } catch (err) { next(err); }
 });
 
-router.put('/employee/:id/shift', auth, requireRole('owner', 'manager'), validate(EmployeeShiftSchema), async (req, res, next) => {
+// ── Shift templates ─────────────────────────────────────────────────────────
+// Named, reusable shifts that employees are assigned to. Distinct from the
+// per-date RosterShift, which schedules a specific person on a specific day.
+function serializeShiftTemplate(t) {
+  return {
+    id: t.id, name: t.name, type: t.type,
+    start_time: t.startTime, end_time: t.endTime,
+    weekly_off_days: t.weeklyOffDays || [],
+    auto_clock_out: t.autoClockOut,
+    employee_ids: (t.assignments || []).map(a => a.employeeId),
+    employees: (t.assignments || []).map(a => ({ id: a.employeeId, name: a.employee?.name || '' })),
+    employee_count: (t.assignments || []).length,
+  };
+}
+const templateInclude = { assignments: { include: { employee: { select: { name: true } } } } };
+
+// A flexible shift keeps no times, so switching to it must clear them rather
+// than leave stale values behind.
+const shiftData = (b) => ({
+  name: b.name, type: b.type,
+  startTime: b.type === 'flexible' ? null : b.start_time,
+  endTime: b.type === 'flexible' ? null : b.end_time,
+  weeklyOffDays: b.weekly_off_days || [],
+  autoClockOut: !!b.auto_clock_out,
+});
+
+router.get('/shift-template', auth, async (req, res, next) => {
   try {
-    const emp = await prisma.employee.findFirst({ where: { id: req.params.id, businessId: req.user.business_id } });
-    if (!emp) return res.status(404).json({ title: 'Not found', status: 404 });
-    const { type, start, end } = req.body;
-    const sh = await prisma.employeeShift.upsert({
-      where: { employeeId: req.params.id },
-      create: { employeeId: req.params.id, type: type || 'fixed', start: start || '08:00', end: end || '16:00' },
-      update: { ...(type && { type }), ...(start && { start }), ...(end && { end }) },
+    const rows = await prisma.shiftTemplate.findMany({
+      where: { businessId: req.user.business_id },
+      include: templateInclude, orderBy: { name: 'asc' },
     });
-    res.json({ employee_id: sh.employeeId, type: sh.type, start: sh.start, end: sh.end });
+    res.json(rows.map(serializeShiftTemplate));
+  } catch (err) { next(err); }
+});
+
+router.post('/shift-template', auth, requireRole('owner', 'manager'), validate(ShiftTemplateSchema), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const clash = await prisma.shiftTemplate.findUnique({
+      where: { businessId_name: { businessId, name: req.body.name } }, select: { id: true },
+    });
+    if (clash) {
+      return res.status(409).json({
+        title: `A shift called "${req.body.name}" already exists.`,
+        status: 409, code: 'SHIFT_EXISTS', shift_id: clash.id,
+      });
+    }
+    const created = await prisma.shiftTemplate.create({
+      data: { businessId, ...shiftData(req.body) }, include: templateInclude,
+    });
+    res.status(201).json(serializeShiftTemplate(created));
+  } catch (err) { next(err); }
+});
+
+router.put('/shift-template/:id', auth, requireRole('owner', 'manager'), validate(ShiftTemplateSchema), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const existing = await prisma.shiftTemplate.findFirst({ where: { id: req.params.id, businessId }, select: { id: true } });
+    if (!existing) return res.status(404).json({ title: 'Not found', status: 404 });
+    const clash = await prisma.shiftTemplate.findUnique({
+      where: { businessId_name: { businessId, name: req.body.name } }, select: { id: true },
+    });
+    if (clash && clash.id !== req.params.id) {
+      return res.status(409).json({ title: `A shift called "${req.body.name}" already exists.`, status: 409, code: 'SHIFT_EXISTS' });
+    }
+    const updated = await prisma.shiftTemplate.update({
+      where: { id: req.params.id }, data: shiftData(req.body), include: templateInclude,
+    });
+    res.json(serializeShiftTemplate(updated));
+  } catch (err) { next(err); }
+});
+
+router.delete('/shift-template/:id', auth, requireRole('owner', 'manager'), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const t = await prisma.shiftTemplate.findFirst({ where: { id: req.params.id, businessId }, select: { id: true } });
+    if (!t) return res.status(404).json({ title: 'Not found', status: 404 });
+    const assigned = await prisma.shiftAssignment.count({ where: { shiftId: req.params.id } });
+    if (assigned > 0) {
+      return res.status(422).json({
+        title: `In use by ${assigned} employee(s). Unassign them first.`,
+        status: 422, code: 'SHIFT_IN_USE', assigned,
+      });
+    }
+    // Attendance keeps its shift_id as a historical record; ON DELETE SET NULL.
+    await prisma.shiftTemplate.delete({ where: { id: req.params.id } });
+    res.json({ deleted: true });
+  } catch (err) { next(err); }
+});
+
+// Assign Users — the whole roster for this shift, replacing what was there.
+router.put('/shift-template/:id/assign', auth, requireRole('owner', 'manager'), validate(ShiftAssignSchema), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const t = await prisma.shiftTemplate.findFirst({ where: { id: req.params.id, businessId }, select: { id: true } });
+    if (!t) return res.status(404).json({ title: 'Not found', status: 404 });
+    const ids = [...new Set(req.body.employee_ids)];
+    if (ids.length) {
+      const valid = await prisma.employee.count({ where: { businessId, id: { in: ids } } });
+      if (valid !== ids.length) return res.status(404).json({ title: 'One or more employees were not found.', status: 404 });
+    }
+    await prisma.$transaction([
+      prisma.shiftAssignment.deleteMany({ where: { shiftId: req.params.id } }),
+      ...(ids.length ? [prisma.shiftAssignment.createMany({
+        data: ids.map(employeeId => ({ businessId, shiftId: req.params.id, employeeId })),
+        skipDuplicates: true,
+      })] : []),
+    ]);
+    const fresh = await prisma.shiftTemplate.findUnique({ where: { id: req.params.id }, include: templateInclude });
+    res.json(serializeShiftTemplate(fresh));
   } catch (err) { next(err); }
 });
 
@@ -498,11 +618,14 @@ function decorateAtt(rec, empName, nowHM) {
   };
 }
 
-async function clockStatusFor(businessId, employeeId, at, settings) {
-  const sh = await prisma.employeeShift.findUnique({ where: { employeeId } });
+async function clockStatusFor(businessId, employeeId, at, settings, shift) {
+  const sh = shift !== undefined ? shift : await shiftForEmployee(businessId, employeeId);
   if (sh && sh.type === 'flexible') return 'present';
   const s = settings || await loadSettings(businessId);
-  return hm2min(at) > hm2min(s.workStart) + s.graceMinutes ? 'late' : 'present';
+  // The shift's own start wins over the business default — it used to be read
+  // and then ignored, so everyone was measured against one company-wide time.
+  const start = sh?.startTime || s.workStart;
+  return hm2min(at) > hm2min(start) + s.graceMinutes ? 'late' : 'present';
 }
 
 router.get('/attendance', auth, async (req, res, next) => {
@@ -528,14 +651,18 @@ router.post('/attendance/clock', auth, validate(AttendanceClockSchema), async (r
     const at = req.body.at || tp.hm;
     const date = new Date(req.body.date || tp.date);
     const existing = await prisma.attendance.findUnique({ where: { employeeId_date: { employeeId: emp.id, date } } });
+    const shift = await shiftForEmployee(businessId, emp.id);
     let rec;
     if (!existing || (!existing.clockIn)) {
-      const status = await clockStatusFor(businessId, emp.id, at, settings);
+      const status = await clockStatusFor(businessId, emp.id, at, settings, shift);
+      // shiftId is recorded so a later reassignment cannot reinterpret history.
+      const data = { clockIn: at, status, shiftId: shift?.id || null, ipAddress: req.ip || null,
+        ...(req.body.note && { clockInNote: req.body.note }) };
       rec = existing
-        ? await prisma.attendance.update({ where: { id: existing.id }, data: { clockIn: at, status } })
-        : await prisma.attendance.create({ data: { businessId, employeeId: emp.id, date, clockIn: at, status } });
+        ? await prisma.attendance.update({ where: { id: existing.id }, data })
+        : await prisma.attendance.create({ data: { businessId, employeeId: emp.id, date, ...data } });
     } else if (!existing.clockOut) {
-      rec = await prisma.attendance.update({ where: { id: existing.id }, data: { clockOut: at } });
+      rec = await prisma.attendance.update({ where: { id: existing.id }, data: { clockOut: at, ...(req.body.note && { clockOutNote: req.body.note }) } });
     } else {
       rec = existing;
     }
@@ -573,7 +700,7 @@ router.post('/attendance/auto-absent', auth, requireRole('owner', 'manager'),
     const [emps, present, shifts, onLeave, holiday] = await Promise.all([
       prisma.employee.findMany({ where: { businessId, status: 'active' }, select: { id: true, locationId: true } }),
       prisma.attendance.findMany({ where: { businessId, date }, select: { employeeId: true } }),
-      prisma.employeeShift.findMany({ where: { employee: { businessId } }, select: { employeeId: true, type: true } }),
+      prisma.shiftAssignment.findMany({ where: { businessId }, include: { shift: { select: { type: true, weeklyOffDays: true } } } }),
       // Someone on approved leave is not absent — we already know why they are out.
       onLeaveOn(businessId, date),
       // Nor is anyone absent on a company holiday, or on their branch's.
@@ -583,9 +710,12 @@ router.post('/attendance/auto-absent', auth, requireRole('owner', 'manager'),
       return res.json({ added: 0, skipped_on_leave: 0, skipped_holiday: emps.length, holiday: true });
     }
     const has = new Set(present.map(p => p.employeeId));
-    const flexible = new Set(shifts.filter(s => s.type === 'flexible').map(s => s.employeeId));
+    const flexible = new Set(shifts.filter(a => a.shift.type === 'flexible').map(a => a.employeeId));
+    // The shift's weekly day off — a Sunday is not an absence. 0 = Sunday.
+    const dow = date.getUTCDay();
+    const weeklyOff = new Set(shifts.filter(a => (a.shift.weeklyOffDays || []).includes(dow)).map(a => a.employeeId));
     const onHoliday = (e) => e.locationId && holiday.locations.has(e.locationId);
-    const toAdd = emps.filter(e => !has.has(e.id) && !flexible.has(e.id) && !onLeave.has(e.id) && !onHoliday(e));
+    const toAdd = emps.filter(e => !has.has(e.id) && !flexible.has(e.id) && !weeklyOff.has(e.id) && !onLeave.has(e.id) && !onHoliday(e));
     if (toAdd.length) {
       await prisma.attendance.createMany({ data: toAdd.map(e => ({ businessId, employeeId: e.id, date, status: 'absent' })), skipDuplicates: true });
     }
@@ -593,6 +723,7 @@ router.post('/attendance/auto-absent', auth, requireRole('owner', 'manager'),
       added: toAdd.length,
       skipped_on_leave: emps.filter(e => onLeave.has(e.id) && !has.has(e.id)).length,
       skipped_holiday: emps.filter(e => onHoliday(e) && !has.has(e.id)).length,
+      skipped_weekly_off: emps.filter(e => weeklyOff.has(e.id) && !has.has(e.id)).length,
     });
   } catch (err) { next(err); }
 });

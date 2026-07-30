@@ -470,15 +470,26 @@ const HolidaySchema = z.object({
 }).refine(v => v.end_date >= v.start_date, {
   message: 'End date cannot be before the start date.', path: ['end_date'],
 });
-const EmployeeShiftSchema = z.object({
-  type:  z.enum(['fixed', 'flexible']).default('fixed'),
-  start: hhmm.optional(),
-  end:   hhmm.optional(),
+// A named, shareable shift. A flexible shift has no fixed start/end, so times
+// are optional; weekly_off_days is 0=Sunday … 6=Saturday.
+const ShiftTemplateSchema = z.object({
+  name:            shortStr(100),
+  type:            z.enum(['fixed', 'flexible']).default('fixed'),
+  start_time:      hhmm.optional().nullable(),
+  end_time:        hhmm.optional().nullable(),
+  weekly_off_days: z.array(z.coerce.number().int().min(0).max(6)).max(7).optional(),
+  auto_clock_out:  z.coerce.boolean().optional(),
+}).refine(v => v.type !== 'fixed' || (v.start_time && v.end_time), {
+  message: 'A fixed shift needs a start and end time.', path: ['start_time'],
+});
+const ShiftAssignSchema = z.object({
+  employee_ids: z.array(uuid).max(500),
 });
 const AttendanceClockSchema = z.object({
   employee_id: uuid,
   at:          hhmm.optional(),
   date:        isoDate,
+  note:        optStr(500),
 });
 const LeaveTypeSchema = z.object({
   name:         shortStr(100),
@@ -1373,7 +1384,7 @@ module.exports = {
   CustomerGroupSchema, UnitSchema, BrandSchema, VariationTemplateSchema, DiscountSchema,
   CommissionAgentSchema,
   PriceGroupSchema, InvoiceLayoutSchema, InvoiceSchemeSchema, CommissionSettingsSchema,
-  EmployeeSchema, EmployeeUpdateSchema, OrgUnitSchema, HrmSettingsSchema, HolidaySchema, EmployeeShiftSchema, AttendanceClockSchema,
+  EmployeeSchema, EmployeeUpdateSchema, OrgUnitSchema, HrmSettingsSchema, HolidaySchema, ShiftTemplateSchema, ShiftAssignSchema, AttendanceClockSchema,
   LeaveTypeSchema, LeaveTypeUpdateSchema, LeaveSchema, LeaveStatusSchema, LeaveOverrideSchema,
   RosterShiftSchema, RosterSwapSchema, HrAdvanceSchema, HrTodoSchema, StatusSchema,
   PayrollSchema, PayslipSettingsSchema, PackageSchema, ServiceTypeSchema,

@@ -4501,9 +4501,26 @@ const API: any = {
       if (REAL_MODE) return await realReq('PUT', '/hrm/settings', { body });
       return (await transport('PUT', '/connector/api/hrm/settings', { body })).data;
     },
-    async setEmpShift(id: any, body: any) {
-      if (REAL_MODE) return await realReq('PUT', '/hrm/employee/' + id + '/shift', { body });
-      return (await transport('PUT', '/connector/api/hrm/employee/' + id + '/shift', { body })).data;
+    // Shift templates: named, shareable shifts with weekly off days.
+    async shiftTemplates() {
+      if (REAL_MODE) return await realReq('GET', '/hrm/shift-template');
+      return [];
+    },
+    async addShiftTemplate(body: any) {
+      if (REAL_MODE) return await realReq('POST', '/hrm/shift-template', { body });
+      return null;
+    },
+    async updateShiftTemplate(id: any, body: any) {
+      if (REAL_MODE) return await realReq('PUT', '/hrm/shift-template/' + id, { body });
+      return null;
+    },
+    async removeShiftTemplate(id: any) {
+      if (REAL_MODE) return await realReq('DELETE', '/hrm/shift-template/' + id);
+      return null;
+    },
+    async assignShiftTemplate(id: any, employeeIds: any[]) {
+      if (REAL_MODE) return await realReq('PUT', '/hrm/shift-template/' + id + '/assign', { body: { employee_ids: employeeIds } });
+      return null;
     },
     // ── Phases 2–5 (attendance, leave, payroll, shifts, advances, todos):
     //    not wired yet — return empty in real mode so the tabs render cleanly. ──

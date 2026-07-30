@@ -43,6 +43,9 @@ export function HRM({ T }: { T: any }) {
   const [modal, setModal] = useStateHr<any>(null);
   const [editEmp, setEditEmp] = useStateHr<any>(null);
   const [holidays, setHolidays] = useStateHr<any[]>([]);
+  const [templates, setTemplates] = useStateHr<any[]>([]);
+  const [editTpl, setEditTpl] = useStateHr<any>(null);
+  const [assignTpl, setAssignTpl] = useStateHr<any>(null);
   const [editHol, setEditHol] = useStateHr<any>(null);
   const [q, setQ] = useStateHr('');
   const [fDept, setFDept] = useStateHr('');
@@ -67,6 +70,7 @@ export function HRM({ T }: { T: any }) {
     API.hrm.leaveBalances().then(setLeaveBal).catch(() => {});
     API.hrm.leaveTypes().then(setLeaveTypes).catch(() => {});
     API.hrm.holidays().then(setHolidays).catch(() => {});
+    API.hrm.shiftTemplates().then(setTemplates).catch(() => {});
     API.hrm.advances().then(setAdvances).catch(() => {});
   }, [leaveFrom, leaveTo]);
   useEffectHr(() => { API.module.list().then((ms: any[]) => setEnabled(!!(ms.find((m: any) => m.key === 'hrm') || {}).enabled)).catch(() => setEnabled(false)); }, []);
@@ -164,7 +168,7 @@ export function HRM({ T }: { T: any }) {
           : tab === 'holidays' ? <Btn T={T} kind="accent" onClick={() => setModal('holiday')}>+ Add Holiday</Btn>
           : tab === 'shifts' ? <Btn T={T} kind="accent" onClick={() => setModal('shift')}>+ Add Shift</Btn>
           : tab === 'advances' ? <Btn T={T} kind="accent" onClick={() => setModal('advance')}>+ Give Advance</Btn>
-          : tab === 'attendance' ? <Btn T={T} kind="ghost" onClick={() => setModal('attsettings')}><LuSettings size={13} style={{ verticalAlign: -2, marginRight: 5 }} />Attendance Settings</Btn>
+          : tab === 'attendance' ? <><Btn T={T} kind="ghost" onClick={() => setModal('shifttemplate')}>+ Add Shift</Btn><Btn T={T} kind="ghost" onClick={() => setModal('attsettings')}><LuSettings size={13} style={{ verticalAlign: -2, marginRight: 5 }} />Attendance Settings</Btn></>
           : tab === 'report' ? <Btn T={T} kind="ghost" onClick={() => API.hrm.autoAbsent().then((r: any) => { show(r.added ? `Marked ${r.added} absent` : 'No one to mark absent'); API.hrm.attendanceSummary(reportMonth).then(setReport); })}><LuTriangleAlert size={13} style={{ verticalAlign: -2, marginRight: 5 }} />Mark absentees</Btn>
           : tab === 'todos' ? <Btn T={T} kind="accent" onClick={() => setModal('todo')}>+ Add Task</Btn> : null}
         </span>} />
@@ -292,6 +296,37 @@ export function HRM({ T }: { T: any }) {
           )}
 
           {/* ATTENDANCE */}
+          {tab === 'attendance' && (
+            <div style={{ marginBottom: 16 }}>
+              <Panel T={T} title="Shifts" pad={false}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead><tr style={{ background: T.paperAlt }}>
+                    {['Name', 'Shift type', 'Start time', 'End time', 'Weekly off', 'Assigned', ''].map((h, i) => (
+                      <th key={h} style={{ padding: '10px 18px', textAlign: i === 6 ? 'right' : 'left', fontSize: 11, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', color: T.inkSub, borderBottom: `1px solid ${T.line}` }}>{h}</th>
+                    ))}
+                  </tr></thead>
+                  <tbody>
+                    {templates.length === 0 && <tr><td colSpan={7} style={{ padding: 24, textAlign: 'center', fontSize: 12.5, color: T.inkMute }}>No shifts defined yet.</td></tr>}
+                    {templates.map((t: any) => (
+                      <tr key={t.id}>
+                        <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 13, fontWeight: 600, color: T.ink }}>{t.name}</td>
+                        <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 12.5, color: T.inkSub }}>{t.type === 'flexible' ? 'Flexible shift' : 'Fixed shift'}{t.auto_clock_out ? <Badge T={T} tone="blue" style={{ marginLeft: 6 }}>auto clock out</Badge> : null}</td>
+                        <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 12.5, color: T.inkSub, fontFamily: T.fMono }}>{t.start_time || '—'}</td>
+                        <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 12.5, color: T.inkSub, fontFamily: T.fMono }}>{t.end_time || '—'}</td>
+                        <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 12.5, color: T.inkSub }}>{(t.weekly_off_days || []).map((d: number) => DOW[d]).join(', ') || '—'}</td>
+                        <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 12.5, color: T.inkSub }}>{t.employee_count}</td>
+                        <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right' }}>
+                          <button onClick={() => setEditTpl(t)} style={hrMini(T)}>Edit</button>
+                          <button onClick={() => setAssignTpl(t)} style={{ ...hrMini(T), marginLeft: 6 }}>Assign Users</button>
+                          <button onClick={() => API.hrm.removeShiftTemplate(t.id).then(reload).catch((e: any) => show(e.message))} style={{ ...hrMini(T, true), marginLeft: 6 }}>Remove</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </Panel>
+            </div>
+          )}
           {tab === 'attendance' && (() => {
             const today = todayLocal();
             const todayRec = (id: any) => att.find((a: any) => a.employee_id === id && a.date === today);
@@ -533,6 +568,9 @@ export function HRM({ T }: { T: any }) {
       </div>
 
       {modal === 'employee' && <EmployeeModal T={T} meta={meta} locs={locs} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Employee added'); reload(); }} />}
+      {modal === 'shifttemplate' && <ShiftTemplateModal T={T} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Shift added'); reload(); }} />}
+      {editTpl && <ShiftTemplateModal T={T} template={editTpl} onClose={() => setEditTpl(null)} onSaved={() => { setEditTpl(null); show('Shift updated'); reload(); }} />}
+      {assignTpl && <ShiftAssignModal T={T} emps={emps} template={assignTpl} onClose={() => setAssignTpl(null)} onSaved={() => { setAssignTpl(null); show('Employees assigned'); reload(); }} />}
       {modal === 'holiday' && <HolidayModal T={T} locs={locs} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Holiday added'); reload(); }} />}
       {editHol && <HolidayModal T={T} locs={locs} holiday={editHol} onClose={() => setEditHol(null)} onSaved={() => { setEditHol(null); show('Holiday updated'); reload(); }} />}
       {editEmp && <EmployeeModal T={T} meta={meta} locs={locs} employee={editEmp} onClose={() => setEditEmp(null)} onSaved={() => { setEditEmp(null); show('Employee updated'); reload(); }} />}
@@ -543,7 +581,7 @@ export function HRM({ T }: { T: any }) {
       {modal === 'todo' && <TodoModal T={T} emps={emps} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Task added'); reload(); }} />}
       {modal === 'shift' && <ShiftModal T={T} emps={emps} locs={locs} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Shift added'); API.hrm.shifts().then(setShifts); }} />}
       {modal === 'advance' && <AdvanceModal T={T} emps={emps} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Advance given'); API.hrm.advances().then(setAdvances); }} />}
-      {modal === 'attsettings' && <AttendanceSettings T={T} emps={emps} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Attendance settings saved'); reload(); }} />}
+      {modal === 'attsettings' && <AttendanceSettings T={T} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Attendance settings saved'); reload(); }} />}
       {modal === 'payslipsettings' && <PayslipSettings T={T} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Payslip settings saved'); }} />}
       {modal === 'swap' && <SwapModal T={T} shifts={shifts} emps={emps} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Swap requested'); API.hrm.shiftSwaps().then(setSwaps); }} />}
       {profile && <EmployeeProfile T={T} profile={profile} onClose={() => setProfile(null)} />}
@@ -553,6 +591,90 @@ export function HRM({ T }: { T: any }) {
 }
 
 // Doubles as the edit form: pass `employee` to load it and PUT instead of POST.
+const DOW = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+// A named, reusable shift. A flexible shift keeps no fixed times, so the time
+// inputs disappear rather than sitting there holding stale values.
+function ShiftTemplateModal({ T, template, onClose, onSaved }: { T: any; template?: any; onClose: () => void; onSaved: () => void }) {
+  const editing = !!template;
+  const [f, setF] = useStateHr<any>(editing
+    ? { name: template.name, type: template.type, start_time: template.start_time || '', end_time: template.end_time || '', weekly_off_days: template.weekly_off_days || [], auto_clock_out: !!template.auto_clock_out }
+    : { name: '', type: 'fixed', start_time: '09:00', end_time: '18:00', weekly_off_days: [], auto_clock_out: false });
+  const [busy, setBusy] = useStateHr(false); const [err, setErr] = useStateHr<any>(null);
+  const set = (k: string, v: any) => setF((s: any) => ({ ...s, [k]: v }));
+  const toggleDay = (d: number) => setF((s: any) => ({
+    ...s, weekly_off_days: s.weekly_off_days.includes(d) ? s.weekly_off_days.filter((x: number) => x !== d) : [...s.weekly_off_days, d].sort(),
+  }));
+  return (
+    <Modal T={T} title={editing ? `Edit ${template.name}` : 'Add shift'} width={560} onClose={onClose}
+      footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Cancel</Btn><Btn T={T} kind="accent" onClick={async () => {
+        if (!f.name.trim()) { setErr('Name is required.'); return; }
+        if (f.type === 'fixed' && (!f.start_time || !f.end_time)) { setErr('A fixed shift needs a start and end time.'); return; }
+        setBusy(true); setErr(null);
+        try { if (editing) await API.hrm.updateShiftTemplate(template.id, f); else await API.hrm.addShiftTemplate(f); onSaved(); }
+        catch (e: any) { setErr(e.message); } finally { setBusy(false); }
+      }} disabled={busy}>{busy ? 'Saving…' : editing ? 'Save changes' : 'Add shift'}</Btn></>}>
+      <FormGrid>
+        <Field T={T} label="Name" full><TextField T={T} value={f.name} onChange={v => set('name', v)} placeholder="e.g. Morning Shift" /></Field>
+        <Field T={T} label="Shift type" full>
+          <SelectField T={T} value={f.type} options={['fixed', 'flexible']} onChange={v => set('type', v)}
+            render={(v: any) => v === 'fixed' ? 'Fixed shift' : 'Flexible shift — no set hours'} />
+        </Field>
+        {f.type === 'fixed' && <>
+          <Field T={T} label="Start time"><TextField T={T} type="time" value={f.start_time} onChange={v => set('start_time', v)} /></Field>
+          <Field T={T} label="End time"><TextField T={T} type="time" value={f.end_time} onChange={v => set('end_time', v)} /></Field>
+        </>}
+      </FormGrid>
+      <div style={{ marginTop: 14 }}>
+        <div style={{ fontSize: 11, fontWeight: 600, color: T.inkSub, marginBottom: 6 }}>Weekly off days</div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {DOW.map((d, i) => {
+            const on = f.weekly_off_days.includes(i);
+            return <button key={d} onClick={() => toggleDay(i)} style={{ padding: '6px 11px', borderRadius: T.r, cursor: 'pointer', fontFamily: T.fBody, fontSize: 12, fontWeight: on ? 700 : 500, border: `1px solid ${on ? T.accent.base : T.line}`, background: on ? T.accent.soft : T.paper, color: on ? T.accent.text : T.inkMid }}>{d.slice(0, 3)}</button>;
+          })}
+        </div>
+        <div style={{ fontSize: 11, color: T.inkMute, marginTop: 7 }}>Nobody on this shift is marked absent on these days.</div>
+      </div>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 14, fontSize: 12.5, color: T.inkMid, cursor: 'pointer' }}>
+        <input type="checkbox" checked={!!f.auto_clock_out} onChange={e => set('auto_clock_out', e.target.checked)} />
+        Do auto clock out — close a forgotten clock-in at the shift end
+      </label>
+      {err && <div style={{ marginTop: 14, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}><LuTriangleAlert size={13} style={{ verticalAlign: -2, marginRight: 5 }} />{err}</div>}
+    </Modal>
+  );
+}
+
+// Assign Users — the selection replaces the shift's whole roster.
+function ShiftAssignModal({ T, emps, template, onClose, onSaved }: { T: any; emps: any[]; template: any; onClose: () => void; onSaved: () => void }) {
+  const [sel, setSel] = useStateHr<any[]>(template.employee_ids || []);
+  const [busy, setBusy] = useStateHr(false); const [err, setErr] = useStateHr<any>(null);
+  const toggle = (id: any) => setSel((s: any[]) => s.includes(id) ? s.filter(x => x !== id) : [...s, id]);
+  return (
+    <Modal T={T} title={`Assign users — ${template.name}`} width={520} onClose={onClose}
+      footer={<><div style={{ flex: 1, fontSize: 12.5, color: T.inkSub }}>{sel.length} selected</div><Btn T={T} kind="ghost" onClick={onClose}>Cancel</Btn><Btn T={T} kind="accent" onClick={async () => {
+        setBusy(true); setErr(null);
+        try { await API.hrm.assignShiftTemplate(template.id, sel); onSaved(); }
+        catch (e: any) { setErr(e.message); } finally { setBusy(false); }
+      }} disabled={busy}>{busy ? 'Saving…' : 'Save'}</Btn></>}>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+        <Btn T={T} kind="ghost" onClick={() => setSel(emps.map((e: any) => e.id))}>Select all</Btn>
+        <Btn T={T} kind="ghost" onClick={() => setSel([])}>Deselect all</Btn>
+      </div>
+      <div style={{ maxHeight: 320, overflowY: 'auto', border: `1px solid ${T.line}`, borderRadius: T.r }}>
+        {emps.length === 0 && <div style={{ padding: 20, textAlign: 'center', fontSize: 12.5, color: T.inkMute }}>No employees yet.</div>}
+        {emps.map((e: any, i: number) => (
+          <label key={e.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 13px', borderTop: i ? `1px solid ${T.line}` : 'none', cursor: 'pointer' }}>
+            <input type="checkbox" checked={sel.includes(e.id)} onChange={() => toggle(e.id)} />
+            <span style={{ flex: 1, fontSize: 13, color: T.ink }}>{e.name}</span>
+            <span style={{ fontSize: 11.5, color: T.inkSub }}>{e.department}</span>
+          </label>
+        ))}
+      </div>
+      {err && <div style={{ marginTop: 14, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}><LuTriangleAlert size={13} style={{ verticalAlign: -2, marginRight: 5 }} />{err}</div>}
+    </Modal>
+  );
+}
+
 // Add / edit a holiday. A holiday spans a date range and is either company-wide
 // or scoped to one location.
 function HolidayModal({ T, locs, holiday, onClose, onSaved }: { T: any; locs: any[]; holiday?: any; onClose: () => void; onSaved: () => void }) {
@@ -1003,45 +1125,37 @@ function AdvanceModal({ T, emps, onClose, onSaved }: { T: any; emps: any[]; onCl
   );
 }
 
-function AttendanceSettings({ T, emps, onClose, onSaved }: { T: any; emps: any[]; onClose: () => void; onSaved: () => void }) {
+function AttendanceSettings({ T, onClose, onSaved }: { T: any; onClose: () => void; onSaved: () => void }) {
   const [s, setS] = useStateHr<any>(null);
-  const [empShift, setEmpShift] = useStateHr<any>({});
-  const [busy, setBusy] = useStateHr(false);
-  React.useEffect(() => { API.hrm.settings().then((d: any) => { setS({ work_start: d.work_start, grace_minutes: d.grace_minutes, standard_hours: d.standard_hours, half_day_hours: d.half_day_hours }); setEmpShift(d.emp_shift || {}); }).catch(() => {}); }, []);
+  const [busy, setBusy] = useStateHr(false); const [err, setErr] = useStateHr<any>(null);
+  React.useEffect(() => { API.hrm.settings().then(setS).catch(() => {}); }, []);
   if (!s) return null;
   const set = (k: string, v: any) => setS((p: any) => ({ ...p, [k]: v }));
-  const setShift = (id: any, patch: any) => setEmpShift((m: any) => ({ ...m, [id]: { ...(m[id] || { type: 'fixed', start: '', end: '' }), ...patch } }));
   async function save() {
-    setBusy(true);
+    setBusy(true); setErr(null);
     try {
-      await API.hrm.saveSettings({ work_start: s.work_start, grace_minutes: Number(s.grace_minutes), standard_hours: Number(s.standard_hours), half_day_hours: Number(s.half_day_hours) });
-      for (const e of emps) { const sh = empShift[e.id]; if (sh) await API.hrm.setEmpShift(e.id, sh); }
+      await API.hrm.saveSettings({
+        work_start: s.work_start, grace_minutes: Number(s.grace_minutes),
+        standard_hours: Number(s.standard_hours), half_day_hours: Number(s.half_day_hours),
+      });
       onSaved();
-    } finally { setBusy(false); }
+    } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
   }
   return (
-    <Modal T={T} title="Attendance settings" subtitle="Grace time & employee shift assignment" width={640} onClose={onClose}
+    <Modal T={T} title="Attendance settings" subtitle="Work start and grace time" width={560} onClose={onClose}
       footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Cancel</Btn><Btn T={T} kind="accent" onClick={save} disabled={busy}>{busy ? 'Saving…' : 'Save settings'}</Btn></>}>
       <FormGrid>
-        <Field T={T} label="Work start time"><TextField T={T} type="time" value={s.work_start} onChange={v => set('work_start', v)} /></Field>
+        <Field T={T} label="Work start time" hint="Default for shifts that set no start of their own"><TextField T={T} type="time" value={s.work_start} onChange={v => set('work_start', v)} /></Field>
         <Field T={T} label="Grace minutes" hint="Late only after this many minutes past start"><TextField T={T} type="number" value={s.grace_minutes} onChange={v => set('grace_minutes', v)} /></Field>
         <Field T={T} label="Standard hours / day"><TextField T={T} type="number" value={s.standard_hours} onChange={v => set('standard_hours', v)} /></Field>
         <Field T={T} label="Half-day hours"><TextField T={T} type="number" value={s.half_day_hours} onChange={v => set('half_day_hours', v)} /></Field>
       </FormGrid>
-      <div style={{ marginTop: 18, marginBottom: 9, fontSize: 12, fontWeight: 700, color: T.inkSub }}>EMPLOYEE SHIFTS</div>
-      <div style={{ fontSize: 11.5, color: T.inkMute, marginBottom: 10, lineHeight: 1.5 }}>Fixed = set hours with late tracking. Flexible = sales/profit-based staff — clocked time is logged but no late penalty.</div>
-      <div style={{ border: `1px solid ${T.line}`, borderRadius: T.r, overflow: 'hidden' }}>
-        {emps.map((e: any, i: number) => { const sh = empShift[e.id] || { type: 'fixed', start: '', end: '' }; return (
-          <div key={e.id} style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr 0.9fr 0.9fr', gap: 10, alignItems: 'center', padding: '9px 13px', borderTop: i ? `1px solid ${T.line}` : 'none' }}>
-            <span style={{ fontSize: 12.5, fontWeight: 600, color: T.ink }}>{e.name}</span>
-            <select value={sh.type} onChange={ev => setShift(e.id, { type: ev.target.value })} style={{ padding: '7px 9px', fontSize: 12, fontFamily: T.fBody, color: T.ink, background: T.paper, border: `1px solid ${T.line}`, borderRadius: 7, outline: 'none' }}>
-              <option value="fixed">Fixed</option><option value="flexible">Flexible</option>
-            </select>
-            <input type="time" value={sh.start} disabled={sh.type === 'flexible'} onChange={ev => setShift(e.id, { start: ev.target.value })} style={{ padding: '6px 8px', fontSize: 12, fontFamily: T.fMono, color: T.ink, background: sh.type === 'flexible' ? T.paperAlt : T.paper, border: `1px solid ${T.line}`, borderRadius: 7, outline: 'none', opacity: sh.type === 'flexible' ? 0.5 : 1 }} />
-            <input type="time" value={sh.end} disabled={sh.type === 'flexible'} onChange={ev => setShift(e.id, { end: ev.target.value })} style={{ padding: '6px 8px', fontSize: 12, fontFamily: T.fMono, color: T.ink, background: sh.type === 'flexible' ? T.paperAlt : T.paper, border: `1px solid ${T.line}`, borderRadius: 7, outline: 'none', opacity: sh.type === 'flexible' ? 0.5 : 1 }} />
-          </div>
-        ); })}
+      {/* Shifts are named templates now, managed from the Attendance tab, so
+          fixed/flexible and the hours live there rather than per employee. */}
+      <div style={{ marginTop: 16, padding: '10px 13px', borderRadius: T.r, background: T.paperAlt, border: `1px solid ${T.line}`, fontSize: 12, color: T.inkMid, lineHeight: 1.5 }}>
+        Shift hours, weekly off days and who works them are set on each shift under <b>Shifts</b> on this tab.
       </div>
+      {err && <div style={{ marginTop: 14, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}><LuTriangleAlert size={13} style={{ verticalAlign: -2, marginRight: 5 }} />{err}</div>}
     </Modal>
   );
 }
