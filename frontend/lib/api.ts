@@ -4498,8 +4498,10 @@ const API: any = {
       if (REAL_MODE) return await realReq('POST', '/hrm/attendance/auto-absent', { body: { date: hrStamp().date } });
       return (await transport('POST', '/connector/api/hrm/attendance/auto-absent', { body: {} })).data;
     },
-    async leaves() {
-      if (REAL_MODE) return await realReq('GET', '/hrm/leave');
+    // Server-side filters: employee_id, status, type, from, to, limit. The list
+    // is capped, so a date range is how you reach older requests.
+    async leaves(params: any = {}) {
+      if (REAL_MODE) return await realReq('GET', '/hrm/leave', { query: params });
       return (await transport('GET', '/connector/api/hrm/leave')).data;
     },
     async addLeave(body: any) {

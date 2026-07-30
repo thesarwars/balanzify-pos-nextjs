@@ -17,6 +17,8 @@ const { EmployeeSchema, EmployeeUpdateSchema, OrgUnitSchema, HrmSettingsSchema, 
 
 const router = express.Router();
 
+const PL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 const DEFAULT_DEPARTMENTS  = ['Sales', 'Inventory', 'Finance', 'Management', 'Kitchen'];
 const DEFAULT_DESIGNATIONS = ['Cashier', 'Store Keeper', 'Accountant', 'Manager', 'Chef', 'Cleaner'];
 
@@ -617,10 +619,36 @@ router.delete('/leave-type/:id', auth, requireRole('owner', 'manager'), async (r
 
 router.get('/leave', auth, async (req, res, next) => {
   try {
+    const businessId = req.user.business_id;
+    const q = req.query;
+    if (q.employee_id && !PL_UUID.test(String(q.employee_id))) {
+      return res.status(400).json({ title: 'employee_id must be a UUID.', status: 400 });
+    }
+    if (q.status && !['pending', 'approved', 'rejected'].includes(String(q.status))) {
+      return res.status(400).json({ title: 'status must be pending, approved or rejected.', status: 400 });
+    }
+    for (const k of ['from', 'to']) {
+      if (q[k] && !/^\d{4}-\d{2}-\d{2}$/.test(String(q[k]))) {
+        return res.status(400).json({ title: `${k} must be YYYY-MM-DD.`, status: 400 });
+      }
+    }
+    // A leave overlaps the window if it starts before the end and ends after
+    // the start — not merely if its start falls inside it.
+    const overlap = {};
+    if (q.to) overlap.fromDate = { lte: new Date(String(q.to)) };
+    if (q.from) overlap.toDate = { gte: new Date(String(q.from)) };
+    const take = Math.min(Math.max(parseInt(q.limit, 10) || 500, 1), 2000);
     const leaves = await prisma.leave.findMany({
-      where: { businessId: req.user.business_id },
+      where: {
+        businessId,
+        ...(q.employee_id && { employeeId: String(q.employee_id) }),
+        ...(q.status && { status: String(q.status) }),
+        ...(q.type && { type: String(q.type) }),
+        ...overlap,
+      },
       include: { employee: { select: { name: true } } },
       orderBy: { createdAt: 'desc' },
+      take,
     });
     res.json(leaves.map(l => serializeLeave(l, l.employee?.name || '—')));
   } catch (err) { next(err); }
@@ -688,7 +716,8 @@ router.get('/leave-balance', auth, async (req, res, next) => {
     const [emps, types, leaves, overrides] = await Promise.all([
       prisma.employee.findMany({ where: { businessId }, select: { id: true, name: true, joinedAt: true } }),
       prisma.leaveType.findMany({ where: { businessId } }),
-      prisma.leave.findMany({ where: { businessId } }),
+      // Only the statuses that move a balance — rejected rows are dead weight.
+      prisma.leave.findMany({ where: { businessId, status: { in: ['approved', 'pending'] } } }),
       prisma.employeeLeaveOverride.findMany({ where: { businessId } }),
     ]);
     const res2 = emps.map(emp => {

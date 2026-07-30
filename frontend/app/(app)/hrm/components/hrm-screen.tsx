@@ -44,6 +44,10 @@ export function HRM({ T }: { T: any }) {
   const [q, setQ] = useStateHr('');
   const [fDept, setFDept] = useStateHr('');
   const [fStatus, setFStatus] = useStateHr('');
+  // The leave list is capped server-side, so a date range is how older requests
+  // are reached rather than silently falling off the end.
+  const [leaveFrom, setLeaveFrom] = useStateHr('');
+  const [leaveTo, setLeaveTo] = useStateHr('');
   const [show, node] = useToast();
   React.useEffect(() => { setQ(''); setFDept(''); setFStatus(''); }, [tab]);
   const matchQ = (s: any) => !q || String(s || '').toLowerCase().includes(q.toLowerCase());
@@ -52,7 +56,7 @@ export function HRM({ T }: { T: any }) {
     API.hrm.summary().then(setSummary).catch(() => {});
     API.hrm.employees().then(setEmps).catch(() => {});
     API.hrm.attendance().then(setAtt).catch(() => {});
-    API.hrm.leaves().then(setLeaves).catch(() => {});
+    API.hrm.leaves({ ...(leaveFrom && { from: leaveFrom }), ...(leaveTo && { to: leaveTo }) }).then(setLeaves).catch(() => {});
     API.hrm.payroll().then(setPay).catch(() => {});
     API.hrm.todos().then(setTodos).catch(() => {});
     API.hrm.shifts().then(setShifts).catch(() => {});
@@ -60,7 +64,7 @@ export function HRM({ T }: { T: any }) {
     API.hrm.leaveBalances().then(setLeaveBal).catch(() => {});
     API.hrm.leaveTypes().then(setLeaveTypes).catch(() => {});
     API.hrm.advances().then(setAdvances).catch(() => {});
-  }, []);
+  }, [leaveFrom, leaveTo]);
   useEffectHr(() => { API.module.list().then((ms: any[]) => setEnabled(!!(ms.find((m: any) => m.key === 'hrm') || {}).enabled)).catch(() => setEnabled(false)); }, []);
   useEffectHr(() => { if (enabled) { reload(); API.hrm.meta().then(setMeta).catch(() => {}); API.location.list().then(setLocs).catch(() => {}); } }, [enabled, reload]);
 
@@ -184,7 +188,8 @@ export function HRM({ T }: { T: any }) {
                 {tab !== 'todos' && <select value={fDept} onChange={e => setFDept(e.target.value)} style={hrFilterSel(T)}><option value="">All departments</option>{depts.map((d: any) => <option key={d} value={d}>{d}</option>)}</select>}
                 {statusOpts.length > 0 && <select value={fStatus} onChange={e => setFStatus(e.target.value)} style={hrFilterSel(T)}><option value="">All statuses</option>{statusOpts.map((s: any) => <option key={s} value={s}>{s}</option>)}</select>}
                 {tab === 'report' && <input type="month" value={reportMonth} onChange={e => setReportMonth(e.target.value)} style={hrFilterSel(T)} />}
-                {(q || fDept || fStatus) && <button onClick={() => { setQ(''); setFDept(''); setFStatus(''); }} style={{ padding: '8px 12px', borderRadius: T.r, border: `1px solid ${T.line}`, background: T.paper, color: T.inkMid, cursor: 'pointer', fontFamily: T.fBody, fontSize: 12, fontWeight: 600 }}>Clear</button>}
+                {tab === 'leave' && <><input type="date" title="Leave from" value={leaveFrom} onChange={e => setLeaveFrom(e.target.value)} style={hrFilterSel(T)} /><input type="date" title="Leave to" value={leaveTo} onChange={e => setLeaveTo(e.target.value)} style={hrFilterSel(T)} /></>}
+                {(q || fDept || fStatus || leaveFrom || leaveTo) && <button onClick={() => { setQ(''); setFDept(''); setFStatus(''); setLeaveFrom(''); setLeaveTo(''); }} style={{ padding: '8px 12px', borderRadius: T.r, border: `1px solid ${T.line}`, background: T.paper, color: T.inkMid, cursor: 'pointer', fontFamily: T.fBody, fontSize: 12, fontWeight: 600 }}>Clear</button>}
               </div>
             );
           })()}
