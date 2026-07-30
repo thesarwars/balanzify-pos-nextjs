@@ -1378,6 +1378,16 @@ router.put('/todo/:id', auth, validate(StatusSchema), async (req, res, next) => 
 });
 
 // ── Payroll & payslip ────────────────────────────────────────────────────────────
+// Gross = the freeform earning buckets plus every earning component the run
+// applied. Defined once: the serializer and the group's pay step both use it,
+// and when they each derived it the pay step forgot the component lines and
+// posted an unbalanced journal.
+function grossOf(p) {
+  const n = (v) => parseFloat(v || 0);
+  return +(n(p.basic) + n(p.allowance) + n(p.overtime) + n(p.bonus) + n(p.incentive)
+    + (p.lines || []).filter(l => l.type === 'earning').reduce((s, l) => s + n(l.amount), 0)).toFixed(2);
+}
+
 function serializePayroll(p) {
   return {
     id: p.id, employee_id: p.employeeId, employee_name: p.employee?.name || '—', month: p.month,
@@ -1388,9 +1398,7 @@ function serializePayroll(p) {
     paye: parseFloat(p.paye || 0), nssf: parseFloat(p.nssf || 0), shif: parseFloat(p.shif || 0),
     housing_levy: parseFloat(p.housingLevy || 0), statutory_total: parseFloat(p.statutoryTotal || 0),
     lines: (p.lines || []).map(l => ({ description: l.description, type: l.type, amount: parseFloat(l.amount || 0) })),
-    gross: +(parseFloat(p.basic || 0) + parseFloat(p.allowance || 0) + parseFloat(p.overtime || 0)
-      + parseFloat(p.bonus || 0) + parseFloat(p.incentive || 0)
-      + (p.lines || []).filter(l => l.type === 'earning').reduce((s, l) => s + parseFloat(l.amount || 0), 0)).toFixed(2),
+    gross: grossOf(p),
     net: parseFloat(p.net || 0), status: p.status,
     reference_no: p.referenceNo || null,
     location_id: p.locationId, location_name: p.location?.name || '',
@@ -1592,6 +1600,7 @@ router.post('/payroll', auth, requireRole('owner', 'manager'), validate(PayrollS
       ? statutory.compute(b.statutory_country, gross)
       : null;
     const statutoryTotal = stat ? stat.total_statutory : 0;
+    const pset = await loadSettings(businessId);
 
     const payroll = await prisma.$transaction(async (tx) => {
       // Recover outstanding advances (oldest first) up to what was asked for.
@@ -1629,7 +1638,7 @@ router.post('/payroll', auth, requireRole('owner', 'manager'), validate(PayrollS
           // drafts and commits them together — see POST /payroll-group.
           status: b.status || 'paid',
           paidAt: (b.status || 'paid') === 'paid' ? new Date() : null,
-          referenceNo: await nextPayrollRef(tx, businessId, b.month, settings.payrollRefPrefix),
+          referenceNo: await nextPayrollRef(tx, businessId, b.month, pset.payrollRefPrefix),
           locationId: emp.locationId || null,
           createdById: req.user.id,
           groupId: b.group_id || null,
@@ -1657,8 +1666,7 @@ function serializeGroup(g) {
   return {
     id: g.id, name: g.name, month: g.month,
     status: g.status, payment_status: g.paymentStatus,
-    total_gross: +rows.reduce((s, p) => s + parseFloat(p.basic || 0) + parseFloat(p.allowance || 0)
-      + parseFloat(p.overtime || 0) + parseFloat(p.bonus || 0) + parseFloat(p.incentive || 0), 0).toFixed(2),
+    total_gross: +rows.reduce((s, p) => s + grossOf(p), 0).toFixed(2),
     total_net: +rows.reduce((s, p) => s + parseFloat(p.net || 0), 0).toFixed(2),
     employees: rows.length,
     added_by: g.createdBy?.name || '',
@@ -1668,7 +1676,7 @@ function serializeGroup(g) {
   };
 }
 const groupInclude = {
-  payrolls: true, createdBy: { select: { name: true } }, location: { select: { name: true } },
+  payrolls: { include: { lines: true } }, createdBy: { select: { name: true } }, location: { select: { name: true } },
 };
 
 router.get('/payroll-group', auth, async (req, res, next) => {
@@ -1721,7 +1729,7 @@ router.post('/payroll-group', auth, requireRole('owner', 'manager'), validate(Pa
             businessId, employeeId: emp.id, month: b.month, basic,
             deduction: comps.deductions, net,
             status: 'draft', groupId: g.id,
-            referenceNo: await nextPayrollRef(tx, businessId, b.month, settings.payrollRefPrefix),
+            referenceNo: await nextPayrollRef(tx, businessId, b.month, gSettings.payrollRefPrefix),
             locationId: emp.locationId || null, createdById: req.user.id,
             ...(comps.lines.length && { lines: { create: comps.lines } }),
           },
@@ -1740,7 +1748,7 @@ router.put('/payroll-group/:id/pay', auth, requireRole('owner', 'manager'), asyn
   try {
     const businessId = req.user.business_id;
     const g = await prisma.payrollGroup.findFirst({
-      where: { id: req.params.id, businessId }, include: { payrolls: true },
+      where: { id: req.params.id, businessId }, include: { payrolls: { include: { lines: true } } },
     });
     if (!g) return res.status(404).json({ title: 'Not found', status: 404 });
     if (g.paymentStatus === 'paid') return res.status(409).json({ title: 'This group has already been paid.', status: 409, code: 'ALREADY_PAID' });
@@ -1751,8 +1759,7 @@ router.put('/payroll-group/:id/pay', auth, requireRole('owner', 'manager'), asyn
     const paidAt = new Date();
     await prisma.$transaction(async (tx) => {
       for (const p of drafts) {
-        const gross = +(parseFloat(p.basic) + parseFloat(p.allowance) + parseFloat(p.overtime)
-          + parseFloat(p.bonus) + parseFloat(p.incentive)).toFixed(2);
+        const gross = grossOf(p);
         await tx.payroll.update({ where: { id: p.id }, data: { status: 'paid', paidAt } });
         await accounting.postPayroll(tx, {
           businessId, gross, net: parseFloat(p.net),

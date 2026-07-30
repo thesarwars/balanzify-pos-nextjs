@@ -2242,13 +2242,144 @@ describe('HRM', () => {
     expect(settled.body.outstanding).toBeCloseTo(0, 2);
   });
 
+  test('pay components apply automatically and itemise on the run', async () => {
+    const all = await request(app).post('/api/v1/hrm/pay-component').set(auth(hrToken))
+      .send({ description: 'Transport', type: 'earning', amount_type: 'fixed', amount: 200 });
+    expect(all.status).toBe(201);
+    expect(all.body.employee_name).toBe('All employees');
+    const pct = await request(app).post('/api/v1/hrm/pay-component').set(auth(hrToken))
+      .send({ description: 'Savings', type: 'deduction', amount_type: 'percentage', amount: 10, employee_id: hrEmpId });
+    expect(pct.status).toBe(201);
+    const tooBig = await request(app).post('/api/v1/hrm/pay-component').set(auth(hrToken))
+      .send({ description: 'Bad', type: 'earning', amount_type: 'percentage', amount: 150 });
+    expect(tooBig.status).toBe(422);
+
+    // basic 1000 + 200 transport = 1200 gross; 10% of basic = 100 deducted.
+    const run = await request(app).post('/api/v1/hrm/payroll').set(auth(hrToken))
+      .send({ employee_id: hrEmpId, month: '2026-04', basic: 1000 });
+    expect(run.status).toBe(201);
+    expect(run.body.gross).toBeCloseTo(1200, 2);
+    expect(run.body.net).toBeCloseTo(1100, 2);
+    // Itemised by name, not folded into an anonymous bucket.
+    const names = run.body.lines.map(l => l.description).sort();
+    expect(names).toEqual(['Savings', 'Transport']);
+    expect(run.body.reference_no).toMatch(/^2026\/\d{4}$/);
+  });
+
+  test('a payroll group builds drafts and posts nothing until it is paid', async () => {
+    const second = await request(app).post('/api/v1/hrm/employee').set(auth(hrToken))
+      .send({ name: 'Group Member', salary: 800, location_id: hrLocId, joined: '2026-01-01' });
+    expect(second.status).toBe(201);
+
+    const group = await request(app).post('/api/v1/hrm/payroll-group').set(auth(hrToken))
+      .send({ name: 'March run', month: '2026-03', employee_ids: [hrEmpId, second.body.id] });
+    expect(group.status).toBe(201);
+    expect(group.body.employees).toBe(2);
+    expect(group.body.payment_status).toBe('unpaid');
+    expect(group.body.added_by).toBeTruthy();
+
+    // Drafts commit no money, so no journal exists yet.
+    const drafts = await request(app).get('/api/v1/hrm/payroll').set(auth(hrToken)).query({ month: '2026-03' });
+    expect(drafts.body.length).toBe(2);
+    expect(drafts.body.every(p => p.status === 'draft' && p.payment_status === 'unpaid')).toBe(true);
+    const before = await prisma.journalEntry.count({ where: { businessId: hrBizId, sourceType: 'payroll' } });
+
+    const paid = await request(app).put(`/api/v1/hrm/payroll-group/${group.body.id}/pay`).set(auth(hrToken));
+    expect(paid.status).toBe(200);
+    expect(paid.body.payment_status).toBe('paid');
+    const after = await prisma.journalEntry.count({ where: { businessId: hrBizId, sourceType: 'payroll' } });
+    expect(after).toBe(before + 2);
+
+    // Paying twice would double the journal.
+    const again = await request(app).put(`/api/v1/hrm/payroll-group/${group.body.id}/pay`).set(auth(hrToken));
+    expect(again.status).toBe(409);
+    // And a paid group cannot be discarded — its entries exist.
+    const del = await request(app).delete(`/api/v1/hrm/payroll-group/${group.body.id}`).set(auth(hrToken));
+    expect(del.status).toBe(422);
+
+    // Anyone already paid for the month cannot be put in another group.
+    const clash = await request(app).post('/api/v1/hrm/payroll-group').set(auth(hrToken))
+      .send({ name: 'Duplicate', month: '2026-03', employee_ids: [hrEmpId] });
+    expect(clash.status).toBe(409);
+  });
+
+  test('sales targets are tiered bands and drive the commission reports', async () => {
+    const list = await request(app).get('/api/v1/hrm/sales-target').set(auth(hrToken));
+    expect(list.status).toBe(200);
+    const me = list.body[0];
+    expect(Array.isArray(me.bands)).toBe(true);
+
+    const overlap = await request(app).put(`/api/v1/hrm/sales-target/${me.user_id}`).set(auth(hrToken))
+      .send({ bands: [{ from_amount: 0, to_amount: 1000, commission_percent: 2 }, { from_amount: 500, to_amount: 2000, commission_percent: 5 }] });
+    expect(overlap.status).toBe(422);
+    expect(overlap.body.code).toBe('BANDS_OVERLAP');
+
+    const reversed = await request(app).put(`/api/v1/hrm/sales-target/${me.user_id}`).set(auth(hrToken))
+      .send({ bands: [{ from_amount: 900, to_amount: 100, commission_percent: 2 }] });
+    expect(reversed.status).toBe(422);
+
+    const ok = await request(app).put(`/api/v1/hrm/sales-target/${me.user_id}`).set(auth(hrToken))
+      .send({ bands: [
+        { from_amount: 0, to_amount: 1000, commission_percent: 2 },
+        { from_amount: 1001, to_amount: null, commission_percent: 8 },
+      ] });
+    expect(ok.status).toBe(200);
+    expect(ok.body.bands.length).toBe(2);
+    expect(ok.body.bands[1].to_amount).toBeNull();
+
+    // The commission report resolves through the same bands.
+    const reps = await request(app).get('/api/v1/reports/commission/reps').set(auth(hrToken));
+    expect(reps.status).toBe(200);
+    const rep = reps.body.find(r => r.user_id === me.user_id);
+    expect(rep).toBeTruthy();
+    expect([2, 8, me.flat_percent]).toContain(rep.commission_percent);
+  });
+
+  test('settings expose every field the Settings tab edits, and refs are prefixed', async () => {
+    const res = await request(app).put('/api/v1/hrm/settings').set(auth(hrToken)).send({
+      leave_ref_prefix: 'LV-', leave_instructions: 'Apply two weeks ahead.',
+      payroll_ref_prefix: 'PR-', payroll_word_format: 'somaliland',
+      location_required: true,
+      grace_before_checkin: 5, grace_after_checkin: 12,
+      grace_before_checkout: 7, grace_after_checkout: 9,
+      commission_excludes_tax: true, todos_id_prefix: 'TD-',
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.payroll_word_format).toBe('somaliland');
+    expect(res.body.grace_after_checkin).toBe(12);
+    expect(res.body.grace_before_checkout).toBe(7);
+    expect(res.body.commission_excludes_tax).toBe(true);
+
+    const back = await request(app).get('/api/v1/hrm/settings').set(auth(hrToken));
+    expect(back.body.leave_ref_prefix).toBe('LV-');
+    expect(back.body.location_required).toBe(true);
+    expect(back.body.todos_id_prefix).toBe('TD-');
+
+    const bad = await request(app).put('/api/v1/hrm/settings').set(auth(hrToken))
+      .send({ payroll_word_format: 'martian' });
+    expect(bad.status).toBe(422);
+
+    // New records pick up the prefixes.
+    const leave = await request(app).post('/api/v1/hrm/leave').set(auth(hrToken))
+      .send({ employee_id: hrEmpId, type: 'Casual', days: 1, from: '2026-10-05', to: '2026-10-05' });
+    expect(leave.status).toBe(201);
+    expect(leave.body.reference_no).toMatch(/^LV-\d{4}$/);
+
+    const todo = await request(app).post('/api/v1/hrm/todo').set(auth(hrToken))
+      .send({ title: 'Order uniforms' });
+    expect(todo.status).toBe(201);
+    expect(todo.body.reference_no).toMatch(/^TD-\d{4}$/);
+  });
+
   test('statutory deductions actually apply when a country is sent', async () => {
     const run = await request(app).post('/api/v1/hrm/payroll').set(auth(hrToken))
       .send({ employee_id: hrEmpId, month: '2026-05', basic: 60000, statutory_country: 'KE' });
     expect(run.status).toBe(201);
     expect(run.body.statutory_total).toBeGreaterThan(0);
     expect(run.body.paye).toBeGreaterThan(0);
-    expect(run.body.net).toBeCloseTo(60000 - run.body.statutory_total, 1);
+    // Pay components apply here too, so net is derived from the run's own
+    // figures rather than the basic that was sent.
+    expect(run.body.net).toBeCloseTo(run.body.gross - run.body.deduction - run.body.statutory_total, 1);
 
     // And the filing report can now see it — it filters on statutoryTotal > 0.
     const rep = await request(app).get('/api/v1/hrm/payroll/statutory-report')
