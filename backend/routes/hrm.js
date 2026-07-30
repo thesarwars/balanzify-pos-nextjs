@@ -12,7 +12,7 @@ const wa = require('../lib/whatsapp');
 const { auth, requireRole } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { getBusinessSettings } = require('../lib/businessSettings');
-const { EmployeeSchema, EmployeeUpdateSchema, OrgUnitSchema, OrgUnitUpdateSchema, HrmSettingsSchema, HolidaySchema, ShiftTemplateSchema, ShiftAssignSchema, AttendanceClockSchema,
+const { EmployeeSchema, EmployeeUpdateSchema, OrgUnitSchema, OrgUnitUpdateSchema, HrmSettingsSchema, HolidaySchema, ShiftTemplateSchema, ShiftAssignSchema, AttendanceClockSchema, AttendanceEntrySchema, AttendanceImportSchema,
   LeaveTypeSchema, LeaveTypeUpdateSchema, LeaveSchema, LeaveStatusSchema, LeaveOverrideSchema,
   RosterShiftSchema, RosterSwapSchema, HrAdvanceSchema, HrTodoSchema, StatusSchema,
   PayrollSchema, PayrollGroupSchema, PayComponentSchema, SalesTargetSchema, PayslipSettingsSchema } = require('../validation/schemas');
@@ -735,6 +735,8 @@ function decorateAtt(rec, empName, nowHM) {
     date: rec.date.toISOString().slice(0, 10),
     clock_in: rec.clockIn || '', clock_out: rec.clockOut || '',
     status, on_break: onBreak, break_min: breakMin,
+    shift_id: rec.shiftId || null, shift_name: rec.shift?.name || '',
+    ip_address: rec.ipAddress || '', clock_in_note: rec.clockInNote || '', clock_out_note: rec.clockOutNote || '',
     hours: +hours.toFixed(2), hours_label: hoursLabel(hours),
   };
 }
@@ -753,10 +755,23 @@ router.get('/attendance', auth, async (req, res, next) => {
   try {
     const settings = await loadSettings(req.user.business_id);
     const nowHM = tzParts(settings.timezone).hm;
+    const q = req.query;
+    const from = q.from ? parseDay(q.from) : null;
+    const to = q.to ? parseDay(q.to) : null;
+    for (const [k, v, p] of [['from', q.from, from], ['to', q.to, to]]) {
+      if (v && !p) return res.status(400).json({ title: `${k} must be a real YYYY-MM-DD date.`, status: 400 });
+    }
+    if (q.employee_id && !PL_UUID.test(String(q.employee_id))) {
+      return res.status(400).json({ title: 'employee_id must be a UUID.', status: 400 });
+    }
     const rows = await prisma.attendance.findMany({
-      where: { businessId: req.user.business_id },
-      include: { employee: { select: { name: true } } },
-      orderBy: { date: 'desc' }, take: 300,
+      where: {
+        businessId: req.user.business_id,
+        ...(q.employee_id && { employeeId: String(q.employee_id) }),
+        ...((from || to) && { date: { ...(from && { gte: from }), ...(to && { lte: to }) } }),
+      },
+      include: { employee: { select: { name: true } }, shift: { select: { name: true } } },
+      orderBy: { date: 'desc' }, take: 1000,
     });
     res.json(rows.map(r => decorateAtt(r, r.employee?.name || '—', nowHM)));
   } catch (err) { next(err); }
@@ -881,6 +896,178 @@ router.post('/attendance/auto-absent', auth, requireRole('owner', 'manager'),
       skipped_holiday: emps.filter(e => onHoliday(e) && !has.has(e.id)).length,
       skipped_weekly_off: emps.filter(e => weeklyOff.has(e.id) && !has.has(e.id)).length,
     });
+  } catch (err) { next(err); }
+});
+
+// Admin-entered attendance — the reference's "Add latest attendance". Upserts
+// on (employee, date), which is what the unique index already enforces.
+router.put('/attendance/entry', auth, requireRole('owner', 'manager'), validate(AttendanceEntrySchema), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id, b = req.body;
+    const emp = await prisma.employee.findFirst({ where: { id: b.employee_id, businessId }, select: { id: true, name: true } });
+    if (!emp) return res.status(404).json({ title: 'Employee not found', status: 404 });
+    if (b.shift_id) {
+      const sh = await prisma.shiftTemplate.findFirst({ where: { id: b.shift_id, businessId }, select: { id: true } });
+      if (!sh) return res.status(404).json({ title: 'Shift not found', status: 404 });
+    }
+    if (b.clock_in && b.clock_out && hm2min(b.clock_out) === hm2min(b.clock_in)) {
+      return res.status(422).json({ title: 'Clock out cannot equal clock in.', status: 422 });
+    }
+    const settings = await loadSettings(businessId);
+    const date = new Date(b.date);
+    const shift = b.shift_id ? await prisma.shiftTemplate.findUnique({ where: { id: b.shift_id } }) : await shiftForEmployee(businessId, emp.id);
+    // Derive the verdict from the entered time unless one was stated outright.
+    const status = b.status || (b.clock_in
+      ? await clockStatusFor(businessId, emp.id, b.clock_in, settings, shift)
+      : 'absent');
+    const data = {
+      clockIn: b.clock_in || null, clockOut: b.clock_out || null, status,
+      shiftId: shift?.id || null, ipAddress: b.ip_address || null,
+      clockInNote: b.clock_in_note || null, clockOutNote: b.clock_out_note || null,
+    };
+    const rec = await prisma.attendance.upsert({
+      where: { employeeId_date: { employeeId: emp.id, date } },
+      create: { businessId, employeeId: emp.id, date, ...data },
+      update: data,
+      include: { shift: { select: { name: true } } },
+    });
+    res.json(decorateAtt(rec, emp.name, tzParts(settings.timezone).hm));
+  } catch (err) { next(err); }
+});
+
+router.delete('/attendance/:id', auth, requireRole('owner', 'manager'), async (req, res, next) => {
+  try {
+    const rec = await prisma.attendance.findFirst({ where: { id: req.params.id, businessId: req.user.business_id }, select: { id: true } });
+    if (!rec) return res.status(404).json({ title: 'Not found', status: 404 });
+    await prisma.attendance.delete({ where: { id: req.params.id } });
+    res.json({ deleted: true });
+  } catch (err) { next(err); }
+});
+
+// Bulk attendance import. Rows are keyed by the user's email, as the reference
+// template is. One row failing (unknown email, unparseable time) is reported
+// and the rest still import.
+const IMPORT_TS = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}):(\d{2})(?::\d{2})?$/;
+
+router.post('/attendance/import', auth, requireRole('owner', 'manager'), validate(AttendanceImportSchema), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const settings = await loadSettings(businessId);
+
+    // Employees are matched through the user they are linked to, then by their
+    // own email — the template says "email id of the user" but a business may
+    // only have set it on the employee record.
+    const emails = [...new Set(req.body.rows.map(r => String(r.email).trim().toLowerCase()))];
+    const [byUser, byEmp] = await Promise.all([
+      prisma.employee.findMany({ where: { businessId, user: { email: { in: emails } } }, select: { id: true, name: true, user: { select: { email: true } } } }),
+      prisma.employee.findMany({ where: { businessId, email: { in: emails } }, select: { id: true, name: true, email: true } }),
+    ]);
+    const lookup = new Map();
+    for (const e of byEmp) if (e.email) lookup.set(e.email.toLowerCase(), e);
+    for (const e of byUser) if (e.user?.email) lookup.set(e.user.email.toLowerCase(), e);
+
+    const imported = [], errors = [];
+    for (const [i, row] of req.body.rows.entries()) {
+      const line = i + 1;
+      const emp = lookup.get(String(row.email).trim().toLowerCase());
+      if (!emp) { errors.push({ line, email: row.email, error: 'No employee with that email.' }); continue; }
+      const mIn = IMPORT_TS.exec(String(row.clock_in_time).trim());
+      if (!mIn) { errors.push({ line, email: row.email, error: 'Clock in time must be "Y-m-d H:i:s".' }); continue; }
+      let clockOut = null;
+      if (row.clock_out_time) {
+        const mOut = IMPORT_TS.exec(String(row.clock_out_time).trim());
+        if (!mOut) { errors.push({ line, email: row.email, error: 'Clock out time must be "Y-m-d H:i:s".' }); continue; }
+        if (mOut[1] !== mIn[1]) { errors.push({ line, email: row.email, error: 'Clock out must fall on the same day as clock in.' }); continue; }
+        clockOut = `${mOut[2]}:${mOut[3]}`;
+      }
+      const day = parseDay(mIn[1]);
+      if (!day) { errors.push({ line, email: row.email, error: `${mIn[1]} is not a real date.` }); continue; }
+      const clockIn = `${mIn[2]}:${mIn[3]}`;
+      try {
+        const shift = await shiftForEmployee(businessId, emp.id);
+        const status = await clockStatusFor(businessId, emp.id, clockIn, settings, shift);
+        const data = {
+          clockIn, clockOut, status, shiftId: shift?.id || null,
+          ipAddress: row.ip_address || null,
+          clockInNote: row.clock_in_note || null, clockOutNote: row.clock_out_note || null,
+        };
+        await prisma.attendance.upsert({
+          where: { employeeId_date: { employeeId: emp.id, date: day } },
+          create: { businessId, employeeId: emp.id, date: day, ...data },
+          update: data,
+        });
+        imported.push({ line, employee: emp.name, date: mIn[1] });
+      } catch (e) {
+        errors.push({ line, email: row.email, error: e.message || 'Could not import this row.' });
+      }
+    }
+    res.json({ imported: imported.length, failed: errors.length, rows: imported, errors });
+  } catch (err) { next(err); }
+});
+
+// Attendance by shift: for one day, how many of each shift's people turned up.
+// Absent is derived from the roster rather than counted from rows, so someone
+// who simply never clocked in is still counted.
+router.get('/attendance/by-shift', auth, async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const settings = await loadSettings(businessId);
+    const day = req.query.date ? parseDay(req.query.date) : new Date(tzParts(settings.timezone).date);
+    if (!day) return res.status(400).json({ title: 'date must be a real YYYY-MM-DD date.', status: 400 });
+    const [templates, assignments, records] = await Promise.all([
+      prisma.shiftTemplate.findMany({ where: { businessId }, orderBy: { name: 'asc' } }),
+      prisma.shiftAssignment.findMany({ where: { businessId }, select: { shiftId: true, employeeId: true } }),
+      prisma.attendance.findMany({ where: { businessId, date: day, clockIn: { not: null } }, select: { employeeId: true } }),
+    ]);
+    const showed = new Set(records.map(r => r.employeeId));
+    const rows = templates.map(t => {
+      const roster = assignments.filter(a => a.shiftId === t.id).map(a => a.employeeId);
+      const present = roster.filter(id => showed.has(id)).length;
+      return { shift_id: t.id, shift: t.name, assigned: roster.length, present, absent: roster.length - present };
+    });
+    // Anyone on no shift at all still belongs somewhere the operator can see.
+    const assigned = new Set(assignments.map(a => a.employeeId));
+    const unassigned = await prisma.employee.count({ where: { businessId, status: 'active', id: { notIn: [...assigned] } } });
+    if (unassigned > 0) {
+      const present = [...showed].filter(id => !assigned.has(id)).length;
+      rows.push({ shift_id: null, shift: 'No shift assigned', assigned: unassigned, present, absent: Math.max(0, unassigned - present) });
+    }
+    res.json({ date: ymd(day), rows });
+  } catch (err) { next(err); }
+});
+
+// Attendance by date: present/absent headcount per day across a range.
+router.get('/attendance/by-date', auth, async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const settings = await loadSettings(businessId);
+    const today = new Date(tzParts(settings.timezone).date);
+    const from = req.query.from ? parseDay(req.query.from) : new Date(today.getTime() - 6 * 86400000);
+    const to = req.query.to ? parseDay(req.query.to) : today;
+    if (!from || !to) return res.status(400).json({ title: 'from and to must be real YYYY-MM-DD dates.', status: 400 });
+    if (to < from) return res.status(400).json({ title: 'to cannot be before from.', status: 400 });
+    const span = Math.round((to - from) / 86400000) + 1;
+    if (span > 366) return res.status(400).json({ title: 'Range cannot exceed 366 days.', status: 400 });
+
+    const [headcount, records, holidays] = await Promise.all([
+      prisma.employee.count({ where: { businessId, status: 'active' } }),
+      prisma.attendance.findMany({ where: { businessId, date: { gte: from, lte: to }, clockIn: { not: null } }, select: { date: true, employeeId: true } }),
+      holidayDays(businessId, from, to, null),
+    ]);
+    const byDay = new Map();
+    for (const r of records) {
+      const k = ymd(r.date);
+      if (!byDay.has(k)) byDay.set(k, new Set());
+      byDay.get(k).add(r.employeeId);
+    }
+    const rows = [];
+    for (let d = new Date(from); d <= to; d.setUTCDate(d.getUTCDate() + 1)) {
+      const k = ymd(d);
+      const present = byDay.get(k)?.size || 0;
+      const holiday = holidays.has(k);
+      rows.push({ date: k, present, absent: holiday ? 0 : Math.max(0, headcount - present), holiday });
+    }
+    res.json({ from: ymd(from), to: ymd(to), headcount, rows: rows.reverse() });
   } catch (err) { next(err); }
 });
 

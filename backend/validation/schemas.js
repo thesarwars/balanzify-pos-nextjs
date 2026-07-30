@@ -518,6 +518,30 @@ const AttendanceClockSchema = z.object({
   date:        isoDate,
   note:        optStr(500),
 });
+// Admin-entered attendance: the reference's "Add latest attendance" row.
+const AttendanceEntrySchema = z.object({
+  employee_id:    uuid,
+  date:           z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD'),
+  clock_in:       hhmm.optional().nullable(),
+  clock_out:      hhmm.optional().nullable(),
+  shift_id:       uuid.optional().nullable(),
+  ip_address:     optStr(64),
+  clock_in_note:  optStr(500),
+  clock_out_note: optStr(500),
+  status:         z.enum(['present', 'late', 'absent', 'half_day']).optional(),
+});
+// Attendance import. The client parses the CSV and posts rows, matching how
+// sale invoices are imported; the server reports per-row failures.
+const AttendanceImportSchema = z.object({
+  rows: z.array(z.object({
+    email:          z.string().trim().min(1).max(255),
+    clock_in_time:  z.string().trim().min(1).max(30),   // "Y-m-d H:i:s"
+    clock_out_time: z.string().trim().max(30).optional().nullable(),
+    clock_in_note:  optStr(500),
+    clock_out_note: optStr(500),
+    ip_address:     optStr(64),
+  })).min(1, 'Nothing to import').max(2000, 'Import at most 2000 rows at a time'),
+});
 const LeaveTypeSchema = z.object({
   name:         shortStr(100),
   default_days: z.coerce.number().int().min(0).default(0),
@@ -1442,7 +1466,7 @@ module.exports = {
   CustomerGroupSchema, UnitSchema, BrandSchema, VariationTemplateSchema, DiscountSchema,
   CommissionAgentSchema,
   PriceGroupSchema, InvoiceLayoutSchema, InvoiceSchemeSchema, CommissionSettingsSchema,
-  EmployeeSchema, EmployeeUpdateSchema, OrgUnitSchema, OrgUnitUpdateSchema, HrmSettingsSchema, HolidaySchema, ShiftTemplateSchema, ShiftAssignSchema, AttendanceClockSchema,
+  EmployeeSchema, EmployeeUpdateSchema, OrgUnitSchema, OrgUnitUpdateSchema, HrmSettingsSchema, HolidaySchema, ShiftTemplateSchema, ShiftAssignSchema, AttendanceClockSchema, AttendanceEntrySchema, AttendanceImportSchema,
   LeaveTypeSchema, LeaveTypeUpdateSchema, LeaveSchema, LeaveStatusSchema, LeaveOverrideSchema,
   RosterShiftSchema, RosterSwapSchema, HrAdvanceSchema, HrTodoSchema, StatusSchema,
   PayrollSchema, PayrollGroupSchema, PayComponentSchema, SalesTargetSchema, PayslipSettingsSchema, PackageSchema, ServiceTypeSchema,

@@ -4537,9 +4537,38 @@ const API: any = {
     },
     // ── Phases 2–5 (attendance, leave, payroll, shifts, advances, todos):
     //    not wired yet — return empty in real mode so the tabs render cleanly. ──
-    async attendance() {
-      if (REAL_MODE) return await realReq('GET', '/hrm/attendance');
+    // Server-side filters: employee_id, from, to.
+    async attendance(params: any = {}) {
+      if (REAL_MODE) return await realReq('GET', '/hrm/attendance', { query: params });
       return (await transport('GET', '/connector/api/hrm/attendance')).data;
+    },
+    // Admin-entered attendance — upserts on (employee, date).
+    async saveAttendanceEntry(body: any) {
+      if (REAL_MODE) return await realReq('PUT', '/hrm/attendance/entry', { body: {
+        employee_id: body.employee_id, date: body.date,
+        clock_in: body.clock_in || undefined, clock_out: body.clock_out || undefined,
+        shift_id: isUuid(body.shift_id) ? body.shift_id : undefined,
+        ip_address: body.ip_address || undefined,
+        clock_in_note: body.clock_in_note || undefined,
+        clock_out_note: body.clock_out_note || undefined,
+      }});
+      return null;
+    },
+    async removeAttendance(id: any) {
+      if (REAL_MODE) return await realReq('DELETE', '/hrm/attendance/' + id);
+      return null;
+    },
+    async attendanceByShift(date?: any) {
+      if (REAL_MODE) return await realReq('GET', '/hrm/attendance/by-shift', { query: date ? { date } : {} });
+      return { rows: [] };
+    },
+    async attendanceByDate(from?: any, to?: any) {
+      if (REAL_MODE) return await realReq('GET', '/hrm/attendance/by-date', { query: { ...(from && { from }), ...(to && { to }) } });
+      return { rows: [] };
+    },
+    async importAttendance(rows: any[]) {
+      if (REAL_MODE) return await realReq('POST', '/hrm/attendance/import', { body: { rows } });
+      return null;
     },
     async clock(employee_id: any) {
       if (REAL_MODE) return await realReq('POST', '/hrm/attendance/clock', { body: { employee_id, ...hrStamp() } });

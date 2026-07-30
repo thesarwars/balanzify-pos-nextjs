@@ -53,6 +53,15 @@ export function HRM({ T }: { T: any }) {
   const [assignTpl, setAssignTpl] = useStateHr<any>(null);
   const [editHol, setEditHol] = useStateHr<any>(null);
   const [editOrg, setEditOrg] = useStateHr<any>(null);
+  // Attendance sub-tabs, mirroring the reference: All / By shift / By date / Import.
+  const [attView, setAttView] = useStateHr('all');
+  const [attEmp, setAttEmp] = useStateHr('');
+  const [attFrom, setAttFrom] = useStateHr('');
+  const [attTo, setAttTo] = useStateHr('');
+  const [byShift, setByShift] = useStateHr<any>(null);
+  const [byDate, setByDate] = useStateHr<any>(null);
+  const [byShiftDay, setByShiftDay] = useStateHr(todayLocal());
+  const [editAtt, setEditAtt] = useStateHr<any>(null);
   const [q, setQ] = useStateHr('');
   const [fDept, setFDept] = useStateHr('');
   const [fStatus, setFStatus] = useStateHr('');
@@ -67,7 +76,7 @@ export function HRM({ T }: { T: any }) {
   const reload = React.useCallback(() => {
     API.hrm.summary().then(setSummary).catch(() => {});
     API.hrm.employees().then(setEmps).catch(() => {});
-    API.hrm.attendance().then(setAtt).catch(() => {});
+    API.hrm.attendance({ ...(attEmp && { employee_id: attEmp }), ...(attFrom && { from: attFrom }), ...(attTo && { to: attTo }) }).then(setAtt).catch(() => {});
     API.hrm.leaves({ ...(leaveFrom && { from: leaveFrom }), ...(leaveTo && { to: leaveTo }) }).then(setLeaves).catch(() => {});
     API.hrm.payroll().then(setPay).catch(() => {});
     API.hrm.todos().then(setTodos).catch(() => {});
@@ -81,8 +90,13 @@ export function HRM({ T }: { T: any }) {
     API.hrm.payrollGroups().then(setPayGroups).catch(() => {});
     API.hrm.salesTargets().then(setTargets).catch(() => {});
     API.hrm.advances().then(setAdvances).catch(() => {});
-  }, [leaveFrom, leaveTo]);
+  }, [leaveFrom, leaveTo, attEmp, attFrom, attTo]);
   useEffectHr(() => { API.module.list().then((ms: any[]) => setEnabled(!!(ms.find((m: any) => m.key === 'hrm') || {}).enabled)).catch(() => setEnabled(false)); }, []);
+  useEffectHr(() => {
+    if (!enabled || tab !== 'attendance') return;
+    if (attView === 'by_shift') API.hrm.attendanceByShift(byShiftDay).then(setByShift).catch(() => {});
+    if (attView === 'by_date') API.hrm.attendanceByDate(attFrom || undefined, attTo || undefined).then(setByDate).catch(() => {});
+  }, [enabled, tab, attView, byShiftDay, attFrom, attTo]);
   useEffectHr(() => { if (enabled) { reload(); API.hrm.meta().then(setMeta).catch(() => {}); API.location.list().then(setLocs).catch(() => {}); } }, [enabled, reload]);
 
   async function enableModule() { await API.module.setEnabled('hrm', true); setEnabled(true); show('HRM module enabled'); }
@@ -131,7 +145,7 @@ export function HRM({ T }: { T: any }) {
     targets: () => ({ title: 'Sales targets', cols: ['User', 'Bands', 'Rates'], rows: fTargets.map((t: any) => [t.name, t.bands.length || 'flat', t.bands.length ? t.bands.map((b: any) => `${b.from_amount}-${b.to_amount ?? '∞'} @ ${b.commission_percent}%`).join('; ') : `${t.flat_percent}%`]) }),
     holidays: () => ({ title: 'Holidays', cols: ['Name', 'From', 'To', 'Business Location', 'Note'], rows: fHolidays.map((h: any) => [h.name, h.start_date, h.end_date, h.location_name, h.note]) }),
     employees: () => ({ title: 'Employees', cols: ['Name', 'Email', 'Department', 'Designation', 'Location', 'Salary', 'Joined', 'Status'], rows: emps.filter((e: any) => matchQ(e.name) && (!fDept || e.department === fDept)).map((e: any) => [e.name, e.email, e.department, e.designation, e.location_name, e.salary, e.joined, e.on_leave ? 'on leave' : e.status]) }),
-    attendance: () => ({ title: 'Attendance', cols: ['Employee', 'Date', 'Clock in', 'Clock out', 'Hours', 'Status'], rows: fAtt.map((a: any) => [a.employee_name, a.date, a.clock_in, a.clock_out, a.hours_label, a.status]) }),
+    attendance: () => ({ title: 'Attendance', cols: ['Date', 'Employee', 'Clock in', 'Clock out', 'Work duration', 'IP address', 'Shift', 'Clock in note', 'Clock out note', 'Status'], rows: fAtt.map((a: any) => [a.date, a.employee_name, a.clock_in, a.clock_out, a.hours_label, a.ip_address, a.shift_name, a.clock_in_note, a.clock_out_note, a.status]) }),
     report: () => ({ title: 'Attendance report ' + reportMonth, cols: ['Employee', 'Days', 'Present', 'Late', 'Absent', 'Hours', 'Overtime h', 'OT pay', 'Deductions'], rows: fReport.map((r: any) => [r.employee_name, r.days_worked, r.present, r.late, r.absent, r.total_hours, r.overtime_hours, r.overtime_pay, r.total_deduction]) }),
     shifts: () => ({ title: 'Shifts', cols: ['Employee', 'Date', 'Start', 'End', 'Role', 'Location'], rows: fShifts.map((s: any) => [s.employee_name, s.date, s.start, s.end, s.role, s.location_name]) }),
     leave: () => ({ title: 'Leave', cols: ['Reference No', 'Employee', 'Type', 'From', 'To', 'Days', 'Reason', 'Status', 'Approved by'], rows: fLeaves.map((l: any) => [l.reference_no || '', l.employee_name, l.type, l.from, l.to, l.days, l.reason, l.status, l.approved_by || '']) }),
@@ -181,7 +195,7 @@ export function HRM({ T }: { T: any }) {
           : tab === 'holidays' ? <Btn T={T} kind="accent" onClick={() => setModal('holiday')}>+ Add Holiday</Btn>
           : tab === 'shifts' ? <Btn T={T} kind="accent" onClick={() => setModal('shift')}>+ Add Shift</Btn>
           : tab === 'advances' ? <Btn T={T} kind="accent" onClick={() => setModal('advance')}>+ Give Advance</Btn>
-          : tab === 'attendance' ? <><Btn T={T} kind="ghost" onClick={() => API.hrm.autoClockOut().then((r: any) => { show(r?.closed ? `Closed ${r.closed} open clock-in(s)` : 'Nothing left open'); reload(); }).catch((e: any) => show(e.message))}>Auto clock out</Btn><Btn T={T} kind="ghost" onClick={() => setModal('shifttemplate')}>+ Add Shift</Btn><Btn T={T} kind="ghost" onClick={() => setModal('attsettings')}><LuSettings size={13} style={{ verticalAlign: -2, marginRight: 5 }} />Attendance Settings</Btn></>
+          : tab === 'attendance' ? <><Btn T={T} kind="ghost" onClick={() => API.hrm.autoClockOut().then((r: any) => { show(r?.closed ? `Closed ${r.closed} open clock-in(s)` : 'Nothing left open'); reload(); }).catch((e: any) => show(e.message))}>Auto clock out</Btn><Btn T={T} kind="ghost" onClick={() => setModal('shifttemplate')}>+ Add Shift</Btn><Btn T={T} kind="accent" onClick={() => setEditAtt({})}>+ Add latest attendance</Btn><Btn T={T} kind="ghost" onClick={() => setModal('attsettings')}><LuSettings size={13} style={{ verticalAlign: -2, marginRight: 5 }} />Attendance Settings</Btn></>
           : tab === 'report' ? <Btn T={T} kind="ghost" onClick={() => API.hrm.autoAbsent().then((r: any) => { show(r.added ? `Marked ${r.added} absent` : 'No one to mark absent'); API.hrm.attendanceSummary(reportMonth).then(setReport); })}><LuTriangleAlert size={13} style={{ verticalAlign: -2, marginRight: 5 }} />Mark absentees</Btn>
           : tab === 'todos' ? <Btn T={T} kind="accent" onClick={() => setModal('todo')}>+ Add Task</Btn> : null}
         </span>} />
@@ -394,8 +408,75 @@ export function HRM({ T }: { T: any }) {
           {tab === 'attendance' && (() => {
             const today = todayLocal();
             const todayRec = (id: any) => att.find((a: any) => a.employee_id === id && a.date === today);
+            const ATT_VIEWS: any[] = [['all', 'All Attendance'], ['by_shift', 'Attendance by shift'], ['by_date', 'Attendance by date'], ['import', 'Import Attendance']];
             return (
             <>
+              <div style={{ display: 'flex', gap: 4, marginBottom: 16, background: T.paper, padding: 4, borderRadius: 10, width: 'fit-content', border: `1px solid ${T.line}`, flexWrap: 'wrap' }}>
+                {ATT_VIEWS.map(([id, lbl]) => (
+                  <button key={id} onClick={() => setAttView(id)} style={{ padding: '7px 13px', borderRadius: 7, border: 'none', cursor: 'pointer', fontFamily: T.fBody, fontSize: 12.5, fontWeight: attView === id ? 700 : 500, background: attView === id ? T.accent.base : 'transparent', color: attView === id ? T.accent.on : T.inkMid }}>{lbl}</button>
+                ))}
+              </div>
+
+              {attView === 'by_shift' && (
+                <Panel T={T} title="Attendance by shift" pad={false}>
+                  <div style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}` }}>
+                    <input type="date" value={byShiftDay} onChange={e => setByShiftDay(e.target.value)} style={hrFilterSel(T)} />
+                  </div>
+                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead><tr style={{ background: T.paperAlt }}>{['Shift', 'Assigned', 'Present', 'Absent'].map((h, i) => (
+                      <th key={h} style={{ padding: '10px 18px', textAlign: i ? 'right' : 'left', fontSize: 11, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', color: T.inkSub, borderBottom: `1px solid ${T.line}` }}>{h}</th>))}</tr></thead>
+                    <tbody>
+                      {(!byShift || byShift.rows.length === 0) && <tr><td colSpan={4} style={{ padding: 26, textAlign: 'center', fontSize: 12.5, color: T.inkMute }}>No data found</td></tr>}
+                      {(byShift?.rows || []).map((r: any) => (
+                        <tr key={r.shift_id || 'none'}>
+                          <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 13, fontWeight: 600, color: r.shift_id ? T.ink : T.inkMute }}>{r.shift}</td>
+                          <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right', fontFamily: T.fMono, fontSize: 12.5, color: T.inkSub }}>{r.assigned}</td>
+                          <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right', fontFamily: T.fMono, fontSize: 12.5, color: T.greenText }}>{r.present}</td>
+                          <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right', fontFamily: T.fMono, fontSize: 12.5, color: r.absent ? T.redText : T.inkSub }}>{r.absent}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </Panel>
+              )}
+
+              {attView === 'by_date' && (
+                <Panel T={T} title="Attendance by date" pad={false}>
+                  <div style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <input type="date" value={attFrom} onChange={e => setAttFrom(e.target.value)} style={hrFilterSel(T)} />
+                    <span style={{ color: T.inkMute, fontSize: 12 }}>to</span>
+                    <input type="date" value={attTo} onChange={e => setAttTo(e.target.value)} style={hrFilterSel(T)} />
+                    {byDate && <span style={{ marginLeft: 8, fontSize: 12, color: T.inkSub }}>{byDate.headcount} active staff</span>}
+                  </div>
+                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead><tr style={{ background: T.paperAlt }}>{['Date', 'Present', 'Absent'].map((h, i) => (
+                      <th key={h} style={{ padding: '10px 18px', textAlign: i ? 'right' : 'left', fontSize: 11, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', color: T.inkSub, borderBottom: `1px solid ${T.line}` }}>{h}</th>))}</tr></thead>
+                    <tbody>
+                      {(!byDate || byDate.rows.length === 0) && <tr><td colSpan={3} style={{ padding: 26, textAlign: 'center', fontSize: 12.5, color: T.inkMute }}>No data found</td></tr>}
+                      {(byDate?.rows || []).map((r: any) => (
+                        <tr key={r.date}>
+                          <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}`, fontFamily: T.fMono, fontSize: 12.5, color: T.ink }}>{r.date}{r.holiday ? <Badge T={T} tone="blue" style={{ marginLeft: 8 }}>holiday</Badge> : null}</td>
+                          <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right', fontFamily: T.fMono, fontSize: 12.5, color: T.greenText }}>{r.present}</td>
+                          <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right', fontFamily: T.fMono, fontSize: 12.5, color: r.absent ? T.redText : T.inkSub }}>{r.absent}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </Panel>
+              )}
+
+              {attView === 'import' && <AttendanceImport T={T} onDone={() => { setAttView('all'); reload(); }} show={show} />}
+
+              {attView === 'all' && <>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 14, alignItems: 'center', flexWrap: 'wrap' }}>
+                <select value={attEmp} onChange={e => setAttEmp(e.target.value)} style={hrFilterSel(T)}>
+                  <option value="">All employees</option>
+                  {emps.map((e: any) => <option key={e.id} value={e.id}>{e.name}</option>)}
+                </select>
+                <input type="date" title="From" value={attFrom} onChange={e => setAttFrom(e.target.value)} style={hrFilterSel(T)} />
+                <input type="date" title="To" value={attTo} onChange={e => setAttTo(e.target.value)} style={hrFilterSel(T)} />
+                {(attEmp || attFrom || attTo) && <button onClick={() => { setAttEmp(''); setAttFrom(''); setAttTo(''); }} style={{ padding: '8px 12px', borderRadius: T.r, border: `1px solid ${T.line}`, background: T.paper, color: T.inkMid, cursor: 'pointer', fontFamily: T.fBody, fontSize: 12, fontWeight: 600 }}>Clear</button>}
+              </div>
               <div style={{ marginBottom: 16, display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 10 }}>
                 {emps.map((e: any) => {
                   const rec = todayRec(e.id);
@@ -418,7 +499,7 @@ export function HRM({ T }: { T: any }) {
               </div>
               <Panel T={T} pad={false}>
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                  <thead><tr>{[['Employee', 'l'], ['Date', 'l'], ['Clock in', 'l'], ['Clock out', 'l'], ['Total hours', 'r'], ['Status', 'l'], ['', 'r']].map(([h, a], i) => <th key={i} style={{ textAlign: a === 'r' ? 'right' : 'left', padding: '11px 18px', fontSize: 10, fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', color: T.inkSub, background: T.paperAlt, borderBottom: `1px solid ${T.line}` }}>{h}</th>)}</tr></thead>
+                  <thead><tr>{[['Employee', 'l'], ['Date', 'l'], ['Clock in', 'l'], ['Clock out', 'l'], ['Work duration', 'r'], ['IP address', 'l'], ['Shift', 'l'], ['Status', 'l'], ['', 'r']].map(([h, a], i) => <th key={i} style={{ textAlign: a === 'r' ? 'right' : 'left', padding: '11px 18px', fontSize: 10, fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', color: T.inkSub, background: T.paperAlt, borderBottom: `1px solid ${T.line}` }}>{h}</th>)}</tr></thead>
                   <tbody>
                     {fAtt.map((a: any) => (
                       <tr key={a.id}>
@@ -427,13 +508,22 @@ export function HRM({ T }: { T: any }) {
                         <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontFamily: T.fMono, fontSize: 12.5, color: T.ink }}>{a.clock_in || '—'}</td>
                         <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontFamily: T.fMono, fontSize: 12.5, color: a.status === 'running' ? T.amberText : T.ink }}>{a.clock_out || (a.status === 'running' ? nowClock : '—')}</td>
                         <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right', fontFamily: T.fMono, fontSize: 12.5, fontWeight: 600, color: a.status === 'running' ? T.amberText : T.ink }}>{a.hours_label}</td>
+                        <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontFamily: T.fMono, fontSize: 11.5, color: T.inkSub }} title={[a.clock_in_note, a.clock_out_note].filter(Boolean).join(' / ')}>{a.ip_address || '—'}</td>
+                        <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 12, color: T.inkSub }}>{a.shift_name || '—'}</td>
                         <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}` }}><Badge T={T} tone={atone[a.status] || 'gray'}>{a.status}</Badge></td>
-                        <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right' }}>{a.date === today && a.clock_in && !a.clock_out ? <button onClick={() => API.hrm.clock(a.employee_id).then(() => { reload(); show('Clocked out ' + a.employee_name.split(' ')[0]); })} style={hrMini(T)}>Clock out</button> : null}</td>
+                        <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                          {a.date === today && a.clock_in && !a.clock_out
+                            ? <button onClick={() => API.hrm.clock(a.employee_id).then(() => { reload(); show('Clocked out ' + a.employee_name.split(' ')[0]); })} style={hrMini(T)}>Clock out</button>
+                            : null}
+                          <button onClick={() => setEditAtt(a)} style={{ ...hrMini(T), marginLeft: 6 }}>Edit</button>
+                          <button onClick={() => API.hrm.removeAttendance(a.id).then(reload).catch((e: any) => show(e.message))} style={{ ...hrMini(T, true), marginLeft: 6 }}>Remove</button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </Panel>
+              </>}
             </>
             );
           })()}
@@ -706,6 +796,7 @@ export function HRM({ T }: { T: any }) {
       {editTpl && <ShiftTemplateModal T={T} template={editTpl} onClose={() => setEditTpl(null)} onSaved={() => { setEditTpl(null); show('Shift updated'); reload(); }} />}
       {assignTpl && <ShiftAssignModal T={T} emps={emps} template={assignTpl} onClose={() => setAssignTpl(null)} onSaved={() => { setAssignTpl(null); show('Employees assigned'); reload(); }} />}
       {(modal === 'org' || modal === 'designation') && <OrgUnitModal T={T} kind={modal === 'org' ? 'department' : 'designation'} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Added'); API.hrm.org().then(setOrg); }} />}
+      {editAtt && <AttendanceEntryModal T={T} emps={emps} templates={templates} record={editAtt.id ? editAtt : null} onClose={() => setEditAtt(null)} onSaved={() => { setEditAtt(null); show('Attendance saved'); reload(); }} />}
       {editOrg && <OrgUnitModal T={T} kind={editOrg.kind} unit={editOrg} onClose={() => setEditOrg(null)} onSaved={() => { setEditOrg(null); show('Saved'); API.hrm.org().then(setOrg); reload(); }} />}
       {modal === 'holiday' && <HolidayModal T={T} locs={locs} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Holiday added'); reload(); }} />}
       {editHol && <HolidayModal T={T} locs={locs} holiday={editHol} onClose={() => setEditHol(null)} onSaved={() => { setEditHol(null); show('Holiday updated'); reload(); }} />}
@@ -1031,6 +1122,171 @@ function ShiftAssignModal({ T, emps, template, onClose, onSaved }: { T: any; emp
       </div>
       {err && <div style={{ marginTop: 14, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}><LuTriangleAlert size={13} style={{ verticalAlign: -2, marginRight: 5 }} />{err}</div>}
     </Modal>
+  );
+}
+
+// Admin-entered attendance, upserted on (employee, date) — the reference's
+// "Add latest attendance" row.
+function AttendanceEntryModal({ T, emps, templates, record, onClose, onSaved }: { T: any; emps: any[]; templates: any[]; record?: any; onClose: () => void; onSaved: () => void }) {
+  const editing = !!record;
+  const [f, setF] = useStateHr<any>(editing
+    ? { employee_id: record.employee_id, date: record.date, clock_in: record.clock_in || '', clock_out: record.clock_out || '', shift_id: record.shift_id || '', ip_address: record.ip_address || '', clock_in_note: record.clock_in_note || '', clock_out_note: record.clock_out_note || '' }
+    : { employee_id: (emps[0] || {}).id || '', date: todayLocal(), clock_in: '', clock_out: '', shift_id: '', ip_address: '', clock_in_note: '', clock_out_note: '' });
+  const [busy, setBusy] = useStateHr(false); const [err, setErr] = useStateHr<any>(null);
+  const set = (k: string, v: any) => setF((s: any) => ({ ...s, [k]: v }));
+  return (
+    <Modal T={T} title={editing ? `Edit attendance — ${record.employee_name}` : 'Add latest attendance'} width={620} onClose={onClose}
+      footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Close</Btn><Btn T={T} kind="accent" onClick={async () => {
+        if (!f.employee_id) { setErr('Pick an employee.'); return; }
+        if (!f.date) { setErr('Pick a date.'); return; }
+        setBusy(true); setErr(null);
+        try { await API.hrm.saveAttendanceEntry(f); onSaved(); }
+        catch (e: any) { setErr(e.message); } finally { setBusy(false); }
+      }} disabled={busy}>{busy ? 'Saving…' : 'Save'}</Btn></>}>
+      <FormGrid>
+        <Field T={T} label="Employee" full>
+          <SelectField T={T} value={String(f.employee_id)} options={emps.map((e: any) => String(e.id))}
+            onChange={v => set('employee_id', v)} render={(v: any) => (emps.find((e: any) => String(e.id) === v) || {}).name} />
+        </Field>
+        <Field T={T} label="Date"><TextField T={T} type="date" value={f.date} onChange={v => set('date', v)} /></Field>
+        <Field T={T} label="Shift" hint="Blank uses the employee's own shift">
+          <SelectField T={T} value={String(f.shift_id)} options={['', ...templates.map((t: any) => String(t.id))]}
+            onChange={v => set('shift_id', v)}
+            render={(v: any) => v === '' ? "Employee's shift" : (templates.find((t: any) => String(t.id) === v) || {}).name || v} />
+        </Field>
+        <Field T={T} label="Clock in time"><TextField T={T} type="time" value={f.clock_in} onChange={v => set('clock_in', v)} /></Field>
+        <Field T={T} label="Clock out time"><TextField T={T} type="time" value={f.clock_out} onChange={v => set('clock_out', v)} /></Field>
+        <Field T={T} label="IP address" full><TextField T={T} value={f.ip_address} onChange={v => set('ip_address', v)} placeholder="Optional" /></Field>
+        <Field T={T} label="Clock in note"><TextField T={T} value={f.clock_in_note} onChange={v => set('clock_in_note', v)} placeholder="Optional" /></Field>
+        <Field T={T} label="Clock out note"><TextField T={T} value={f.clock_out_note} onChange={v => set('clock_out_note', v)} placeholder="Optional" /></Field>
+      </FormGrid>
+      <div style={{ marginTop: 12, padding: '9px 13px', borderRadius: T.r, background: T.paperAlt, border: `1px solid ${T.line}`, fontSize: 12, color: T.inkMid, lineHeight: 1.5 }}>
+        Leaving clock in blank records the day as absent. Late is judged against the shift's start time.
+      </div>
+      {err && <div style={{ marginTop: 14, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}><LuTriangleAlert size={13} style={{ verticalAlign: -2, marginRight: 5 }} />{err}</div>}
+    </Modal>
+  );
+}
+
+// Bulk import. The CSV is parsed here and posted as rows, the same way sale
+// invoices are imported, so the server can report which lines failed and why.
+const IMPORT_COLS = [
+  ['1', 'Email', 'Required', 'Email id of the user'],
+  ['2', 'Clock in time', 'Required', 'Clock in time in "Y-m-d H:i:s" format (2026-07-29 03:44:29)'],
+  ['3', 'Clock out time', 'Optional', 'Clock out time in "Y-m-d H:i:s" format (2026-07-29 03:44:29)'],
+  ['4', 'Clock in note', 'Optional', ''],
+  ['5', 'Clock out note', 'Optional', ''],
+  ['6', 'IP Address', 'Optional', ''],
+];
+
+function AttendanceImport({ T, onDone, show }: { T: any; onDone: () => void; show: (m: any) => void }) {
+  const [rows, setRows] = useStateHr<any[]>([]);
+  const [fileName, setFileName] = useStateHr('');
+  const [result, setResult] = useStateHr<any>(null);
+  const [busy, setBusy] = useStateHr(false); const [err, setErr] = useStateHr<any>(null);
+
+  // Minimal CSV reader: handles quoted fields and embedded commas, which is all
+  // the template needs. A header row is detected and skipped.
+  function parseCsv(text: string) {
+    const out: string[][] = [];
+    let row: string[] = [], cell = '', q = false;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (q) {
+        if (c === '"' && text[i + 1] === '"') { cell += '"'; i++; }
+        else if (c === '"') q = false;
+        else cell += c;
+      } else if (c === '"') q = true;
+      else if (c === ',') { row.push(cell); cell = ''; }
+      else if (c === '\n') { row.push(cell); out.push(row); row = []; cell = ''; }
+      else if (c !== '\r') cell += c;
+    }
+    if (cell || row.length) { row.push(cell); out.push(row); }
+    return out.filter(r => r.some(x => String(x).trim()));
+  }
+
+  function onFile(e: any) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setFileName(file.name); setErr(null); setResult(null);
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const grid = parseCsv(String(reader.result || ''));
+        if (!grid.length) { setErr('That file has no rows.'); setRows([]); return; }
+        const first = grid[0].map(c => c.trim().toLowerCase());
+        const body = first[0].includes('email') ? grid.slice(1) : grid;
+        setRows(body.map(r => ({
+          email: (r[0] || '').trim(), clock_in_time: (r[1] || '').trim(),
+          clock_out_time: (r[2] || '').trim() || undefined,
+          clock_in_note: (r[3] || '').trim() || undefined,
+          clock_out_note: (r[4] || '').trim() || undefined,
+          ip_address: (r[5] || '').trim() || undefined,
+        })));
+      } catch { setErr('Could not read that file.'); setRows([]); }
+    };
+    reader.readAsText(file);
+  }
+
+  function downloadTemplate() {
+    const csv = 'Email,Clock in time,Clock out time,Clock in note,Clock out note,IP Address\n'
+      + 'staff@example.com,2026-07-29 08:00:00,2026-07-29 17:00:00,,,\n';
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+    const a = document.createElement('a');
+    a.href = url; a.download = 'attendance-template.csv'; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  return (
+    <Panel T={T} title="Import attendance">
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '8px 13px', borderRadius: T.r, border: `1px solid ${T.line}`, background: T.paper, cursor: 'pointer', fontSize: 12.5, color: T.inkMid }}>
+          <input type="file" accept=".csv,text/csv" onChange={onFile} style={{ display: 'none' }} />
+          Choose file
+        </label>
+        <span style={{ fontSize: 12.5, color: T.inkSub }}>{fileName || 'No file chosen'}{rows.length ? ` · ${rows.length} row(s)` : ''}</span>
+        <Btn T={T} kind="accent" disabled={busy || !rows.length} onClick={async () => {
+          setBusy(true); setErr(null);
+          try {
+            const r = await API.hrm.importAttendance(rows);
+            setResult(r);
+            show(`Imported ${r.imported} row(s)${r.failed ? `, ${r.failed} failed` : ''}`);
+            if (r.failed === 0) onDone();
+          } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
+        }}>{busy ? 'Importing…' : 'Submit'}</Btn>
+        <Btn T={T} kind="ghost" onClick={downloadTemplate}>Download template file</Btn>
+      </div>
+
+      {err && <div style={{ marginTop: 14, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}><LuTriangleAlert size={13} style={{ verticalAlign: -2, marginRight: 5 }} />{err}</div>}
+
+      {result && result.errors?.length > 0 && (
+        <div style={{ marginTop: 14, border: `1px solid ${T.line}`, borderRadius: T.r, overflow: 'hidden' }}>
+          <div style={{ padding: '9px 13px', background: T.redSoft, color: T.redText, fontSize: 12.5, fontWeight: 600 }}>{result.failed} row(s) could not be imported</div>
+          {result.errors.map((e: any, i: number) => (
+            <div key={i} style={{ padding: '8px 13px', borderTop: `1px solid ${T.line}`, fontSize: 12, color: T.inkMid }}>
+              Line {e.line} · <span style={{ fontFamily: T.fMono }}>{e.email}</span> — {e.error}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{ marginTop: 20, border: `1px solid ${T.line}`, borderRadius: T.r, overflow: 'hidden' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead><tr style={{ background: T.paperAlt }}>{['Column number', 'Column name', '', 'Instruction'].map((h, i) => (
+            <th key={i} style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', color: T.inkSub, borderBottom: `1px solid ${T.line}` }}>{h}</th>))}</tr></thead>
+          <tbody>
+            {IMPORT_COLS.map(([num, name, req, instr]) => (
+              <tr key={num}>
+                <td style={{ padding: '9px 14px', borderTop: `1px solid ${T.line}`, fontFamily: T.fMono, fontSize: 12, color: T.inkSub }}>{num}</td>
+                <td style={{ padding: '9px 14px', borderTop: `1px solid ${T.line}`, fontSize: 12.5, fontWeight: 600, color: T.ink }}>{name}</td>
+                <td style={{ padding: '9px 14px', borderTop: `1px solid ${T.line}`, fontSize: 11.5, color: req === 'Required' ? T.redText : T.inkMute }}>({req})</td>
+                <td style={{ padding: '9px 14px', borderTop: `1px solid ${T.line}`, fontSize: 12, color: T.inkSub }}>{instr}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Panel>
   );
 }
 
