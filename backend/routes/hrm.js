@@ -379,23 +379,28 @@ router.post('/attendance/break', auth, validate(AttendanceClockSchema), async (r
   } catch (err) { next(err); }
 });
 
-router.post('/attendance/auto-absent', auth, requireRole('owner', 'manager'), async (req, res, next) => {
+router.post('/attendance/auto-absent', auth, requireRole('owner', 'manager'),
+  validate(z.object({
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD').optional().nullable(),
+  })), async (req, res, next) => {
   try {
     const businessId = req.user.business_id;
     const settings = await loadSettings(businessId);
     const date = new Date(req.body.date || tzParts(settings.timezone).date);
-    const [emps, present, shifts] = await Promise.all([
+    const [emps, present, shifts, onLeave] = await Promise.all([
       prisma.employee.findMany({ where: { businessId, status: 'active' }, select: { id: true } }),
       prisma.attendance.findMany({ where: { businessId, date }, select: { employeeId: true } }),
       prisma.employeeShift.findMany({ where: { employee: { businessId } }, select: { employeeId: true, type: true } }),
+      // Someone on approved leave is not absent — we already know why they are out.
+      onLeaveOn(businessId, date),
     ]);
     const has = new Set(present.map(p => p.employeeId));
     const flexible = new Set(shifts.filter(s => s.type === 'flexible').map(s => s.employeeId));
-    const toAdd = emps.filter(e => !has.has(e.id) && !flexible.has(e.id));
+    const toAdd = emps.filter(e => !has.has(e.id) && !flexible.has(e.id) && !onLeave.has(e.id));
     if (toAdd.length) {
       await prisma.attendance.createMany({ data: toAdd.map(e => ({ businessId, employeeId: e.id, date, status: 'absent' })), skipDuplicates: true });
     }
-    res.json({ added: toAdd.length });
+    res.json({ added: toAdd.length, skipped_on_leave: emps.filter(e => onLeave.has(e.id) && !has.has(e.id)).length });
   } catch (err) { next(err); }
 });
 
