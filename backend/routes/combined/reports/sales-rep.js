@@ -9,6 +9,7 @@ const express = require('express');
 const prisma = require('../../../lib/prisma');
 const { getBusinessSettings } = require('../../../lib/businessSettings');
 const { auth, requireRole } = require('../../../middleware/auth');
+const commission = require('../../../lib/commission');
 const { PL_POSTED, PL_UUID_RE, plNum, plRound, plRange } = require('./_shared');
 
 const router = express.Router();
@@ -131,11 +132,16 @@ router.get('/sales-rep', auth, requireRole('owner', 'manager'), async (req, res,
         take: 5000,
       });
       const commissionOnly = view === 'sales_commission';
+      // Commission resolves through the shared band table, so this report, the
+      // commission report and the HRM profile cannot quote different rates.
+      const bands = await commission.loadBands(bizId);
+      const earns = (c) => !!c && (plNum(c.commissionPercent) > 0 || (bands.get(c.id) || []).length > 0);
       rows = list
-        .filter(s => !commissionOnly || plNum(s.cashier?.commissionPercent) > 0)
+        .filter(s => !commissionOnly || earns(s.cashier))
         .map(s => {
           const total = plRound(plNum(s.totalAmount));
-          const pct = plNum(s.cashier?.commissionPercent);
+          const resolved = commission.commissionFor(bands.get(s.cashier?.id), total, s.cashier?.commissionPercent);
+          const pct = resolved.percent;
           return {
             id: s.id,
             date: s.saleDate || s.createdAt,
@@ -148,7 +154,7 @@ router.get('/sales-rep', auth, requireRole('owner', 'manager'), async (req, res,
             remaining: plRound(plNum(s.amountDue)),
             rep: s.cashier?.name || '',
             commission_percent: pct,
-            commission: plRound(total * pct / 100),
+            commission: resolved.commission,
           };
         });
       const byStatus = {};

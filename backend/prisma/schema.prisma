@@ -626,6 +626,7 @@ model Business {
   shiftTemplates     ShiftTemplate[]
   payComponents      PayComponent[]
   payrollGroups      PayrollGroup[]
+  salesTargetBands   SalesTargetBand[]
   shiftAssignments   ShiftAssignment[]
   serviceTypes       ServiceType[]
   subscription         Subscription?
@@ -1231,6 +1232,25 @@ model ShiftAssignment {
 // A named batch of payrolls run together — the reference's "payroll groups".
 // A single POST /hrm/payroll still works for one employee; a group assembles
 // drafts for many and commits them in one reviewed step.
+// A tiered commission band for one user: "sell between FROM and TO and you
+// earn PERCENT". Several bands per user; the flat User.commissionPercent is the
+// fallback when a user has none.
+model SalesTargetBand {
+  id         String   @id @default(uuid()) @db.Uuid
+  businessId String   @map("business_id") @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  fromAmount Decimal  @default(0) @map("from_amount") @db.Decimal(14, 2)
+  toAmount   Decimal? @map("to_amount") @db.Decimal(14, 2)   // null = no upper bound
+  commissionPercent Decimal @default(0) @map("commission_percent") @db.Decimal(6, 2)
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([businessId, userId])
+  @@map("sales_target_bands")
+}
+
 model PayrollGroup {
   id            String    @id @default(uuid()) @db.Uuid
   businessId    String    @map("business_id") @db.Uuid
@@ -1522,6 +1542,7 @@ model User {
 
   @@map("users")
   payrollsCreated    Payroll[]      @relation("payrollsCreated")
+  salesTargetBands   SalesTargetBand[]
   payrollGroupsMade  PayrollGroup[] @relation("payrollGroupsMade")
 }
 

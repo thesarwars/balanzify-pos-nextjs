@@ -547,6 +547,14 @@ const HrTodoSchema = z.object({
   due:         isoDate,
 });
 const StatusSchema = z.object({ status: z.string().trim().min(1).max(20) });
+// The whole band set for one user, submitted at once.
+const SalesTargetSchema = z.object({
+  bands: z.array(z.object({
+    from_amount:        money.default(0),
+    to_amount:          money.optional().nullable(),   // null = open-ended
+    commission_percent: z.coerce.number().min(0).max(100),
+  })).max(20),
+});
 const PayComponentSchema = z.object({
   description:     shortStr(255),
   type:            z.enum(['earning', 'deduction']),
@@ -1407,7 +1415,7 @@ module.exports = {
   EmployeeSchema, EmployeeUpdateSchema, OrgUnitSchema, HrmSettingsSchema, HolidaySchema, ShiftTemplateSchema, ShiftAssignSchema, AttendanceClockSchema,
   LeaveTypeSchema, LeaveTypeUpdateSchema, LeaveSchema, LeaveStatusSchema, LeaveOverrideSchema,
   RosterShiftSchema, RosterSwapSchema, HrAdvanceSchema, HrTodoSchema, StatusSchema,
-  PayrollSchema, PayrollGroupSchema, PayComponentSchema, PayslipSettingsSchema, PackageSchema, ServiceTypeSchema,
+  PayrollSchema, PayrollGroupSchema, PayComponentSchema, SalesTargetSchema, PayslipSettingsSchema, PackageSchema, ServiceTypeSchema,
   PaginationSchema, ProductVariantSchema, OpeningStockSchema,
   CouponSchema, ApplyCouponSchema, LoyaltyRuleSchema, RewardSettingsSchema, PettyCashSchema,
   BundleSchema, ScheduledReportSchema, CustomerSegmentSchema,

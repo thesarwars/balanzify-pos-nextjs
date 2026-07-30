@@ -46,6 +46,8 @@ export function HRM({ T }: { T: any }) {
   const [templates, setTemplates] = useStateHr<any[]>([]);
   const [payComps, setPayComps] = useStateHr<any[]>([]);
   const [payGroups, setPayGroups] = useStateHr<any[]>([]);
+  const [targets, setTargets] = useStateHr<any[]>([]);
+  const [editTarget, setEditTarget] = useStateHr<any>(null);
   const [editComp, setEditComp] = useStateHr<any>(null);
   const [editTpl, setEditTpl] = useStateHr<any>(null);
   const [assignTpl, setAssignTpl] = useStateHr<any>(null);
@@ -76,6 +78,7 @@ export function HRM({ T }: { T: any }) {
     API.hrm.shiftTemplates().then(setTemplates).catch(() => {});
     API.hrm.payComponents().then(setPayComps).catch(() => {});
     API.hrm.payrollGroups().then(setPayGroups).catch(() => {});
+    API.hrm.salesTargets().then(setTargets).catch(() => {});
     API.hrm.advances().then(setAdvances).catch(() => {});
   }, [leaveFrom, leaveTo]);
   useEffectHr(() => { API.module.list().then((ms: any[]) => setEnabled(!!(ms.find((m: any) => m.key === 'hrm') || {}).enabled)).catch(() => setEnabled(false)); }, []);
@@ -107,19 +110,21 @@ export function HRM({ T }: { T: any }) {
   }
   if (enabled === null) return <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: T.paperAlt, fontFamily: T.fMono, fontSize: 12.5, color: T.inkSub }}>Loading…</div>;
 
-  const tabs = [['overview', 'Overview'], ['employees', 'Employees'], ['org', 'Departments'], ['attendance', 'Attendance'], ['report', 'Report'], ['shifts', 'Shifts'], ['leave', 'Leave'], ['holidays', 'Holiday'], ['payroll', 'Payroll'], ['advances', 'Advances'], ['todos', 'Tasks']];
+  const tabs = [['overview', 'Overview'], ['employees', 'Employees'], ['org', 'Departments'], ['attendance', 'Attendance'], ['report', 'Report'], ['shifts', 'Shifts'], ['leave', 'Leave'], ['holidays', 'Holiday'], ['payroll', 'Payroll'], ['targets', 'Sales Targets'], ['advances', 'Advances'], ['todos', 'Tasks']];
   const inDept = (empId: any) => !fDept || (emps.find((e: any) => e.id === empId) || {}).department === fDept;
   const fAtt = att.filter((a: any) => matchQ(a.employee_name) && inDept(a.employee_id) && (!fStatus || a.status === fStatus));
   const fLeaves = leaves.filter((l: any) => (matchQ(l.employee_name) || matchQ(l.type) || matchQ(l.reason)) && inDept(l.employee_id) && (!fStatus || l.status === fStatus));
   const fShifts = shifts.filter((s: any) => (matchQ(s.employee_name) || matchQ(s.role)) && inDept(s.employee_id));
   const fPay = pay.filter((p: any) => (matchQ(p.employee_name) || matchQ(p.month)) && inDept(p.employee_id));
   const fAdvances = advances.filter((a: any) => (matchQ(a.employee_name) || matchQ(a.note)) && inDept(a.employee_id) && (!fStatus || a.status === fStatus));
+  const fTargets = targets.filter((t: any) => matchQ(t.name));
   const fHolidays = holidays.filter((h: any) => matchQ(h.name) || matchQ(h.note) || matchQ(h.location_name));
   const fTodos = todos.filter((t: any) => (matchQ(t.title) || matchQ(t.assigned_name)) && (!fStatus || t.status === fStatus));
   const fReport = report.filter((r: any) => matchQ(r.employee_name) && inDept(r.employee_id));
 
   // ── Export / print for the active tab ─────────────────────────────
   const exportSets: any = {
+    targets: () => ({ title: 'Sales targets', cols: ['User', 'Bands', 'Rates'], rows: fTargets.map((t: any) => [t.name, t.bands.length || 'flat', t.bands.length ? t.bands.map((b: any) => `${b.from_amount}-${b.to_amount ?? '∞'} @ ${b.commission_percent}%`).join('; ') : `${t.flat_percent}%`]) }),
     holidays: () => ({ title: 'Holidays', cols: ['Name', 'From', 'To', 'Business Location', 'Note'], rows: fHolidays.map((h: any) => [h.name, h.start_date, h.end_date, h.location_name, h.note]) }),
     employees: () => ({ title: 'Employees', cols: ['Name', 'Email', 'Department', 'Designation', 'Location', 'Salary', 'Joined', 'Status'], rows: emps.filter((e: any) => matchQ(e.name) && (!fDept || e.department === fDept)).map((e: any) => [e.name, e.email, e.department, e.designation, e.location_name, e.salary, e.joined, e.on_leave ? 'on leave' : e.status]) }),
     attendance: () => ({ title: 'Attendance', cols: ['Employee', 'Date', 'Clock in', 'Clock out', 'Hours', 'Status'], rows: fAtt.map((a: any) => [a.employee_name, a.date, a.clock_in, a.clock_out, a.hours_label, a.status]) }),
@@ -190,7 +195,7 @@ export function HRM({ T }: { T: any }) {
             const statusOpts = ({
               attendance: ['present', 'late', 'absent', 'running', 'on break'],
               leave: ['pending', 'approved', 'rejected'],
-              shifts: [], payroll: [], report: [], holidays: [],
+              shifts: [], payroll: [], report: [], holidays: [], targets: [],
               advances: ['outstanding', 'settled'],
               todos: ['pending', 'done'],
             } as any)[tab] || [];
@@ -244,6 +249,38 @@ export function HRM({ T }: { T: any }) {
                       <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right' }}>
                         <button onClick={(ev) => { ev.stopPropagation(); setEditEmp(e); }} style={hrMini(T)}>Edit</button>
                         <button onClick={(ev) => { ev.stopPropagation(); API.hrm.removeEmployee(e.id).then(reload); }} style={{ ...hrMini(T, true), marginLeft: 6 }}>Remove</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </Panel>
+          )}
+
+          {tab === 'targets' && (
+            <Panel T={T} title="Sales targets" pad={false}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead><tr style={{ background: T.paperAlt }}>
+                  {['User', 'Commission bands', ''].map((h, i) => (
+                    <th key={h} style={{ padding: '10px 18px', textAlign: i === 2 ? 'right' : 'left', fontSize: 11, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', color: T.inkSub, borderBottom: `1px solid ${T.line}` }}>{h}</th>
+                  ))}
+                </tr></thead>
+                <tbody>
+                  {fTargets.length === 0 && <tr><td colSpan={3} style={{ padding: 30, textAlign: 'center', fontSize: 12.5, color: T.inkMute }}>No users.</td></tr>}
+                  {fTargets.map((t: any) => (
+                    <tr key={t.user_id}>
+                      <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 13, fontWeight: 600, color: T.ink }}>{t.name}</td>
+                      <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 12.5, color: T.inkSub }}>
+                        {t.bands.length === 0
+                          ? <span style={{ color: T.inkMute }}>Flat {t.flat_percent}%</span>
+                          : t.bands.map((b: any, i: number) => (
+                              <span key={i} style={{ display: 'inline-block', marginRight: 8, fontFamily: T.fMono, fontSize: 11.5 }}>
+                                {money(b.from_amount)}–{b.to_amount == null ? '∞' : money(b.to_amount)} @ <b>{b.commission_percent}%</b>
+                              </span>
+                            ))}
+                      </td>
+                      <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right' }}>
+                        <button onClick={() => setEditTarget(t)} style={hrMini(T)}>Set Sales Target</button>
                       </td>
                     </tr>
                   ))}
@@ -638,6 +675,7 @@ export function HRM({ T }: { T: any }) {
       </div>
 
       {modal === 'employee' && <EmployeeModal T={T} meta={meta} locs={locs} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Employee added'); reload(); }} />}
+      {editTarget && <SalesTargetModal T={T} target={editTarget} onClose={() => setEditTarget(null)} onSaved={() => { setEditTarget(null); show('Sales target saved'); reload(); }} />}
       {modal === 'paygroup' && <PayrollGroupModal T={T} emps={emps} locs={locs} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Payroll group created as draft'); reload(); }} />}
       {modal === 'paycomponent' && <PayComponentModal T={T} emps={emps} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Pay component added'); reload(); }} />}
       {editComp && <PayComponentModal T={T} emps={emps} component={editComp} onClose={() => setEditComp(null)} onSaved={() => { setEditComp(null); show('Pay component updated'); reload(); }} />}
@@ -664,6 +702,50 @@ export function HRM({ T }: { T: any }) {
 }
 
 // Doubles as the edit form: pass `employee` to load it and PUT instead of POST.
+// Tiered commission for one user: repeatable from/to/percent rows, saved as a
+// set. An empty set falls back to the user's flat percent.
+function SalesTargetModal({ T, target, onClose, onSaved }: { T: any; target: any; onClose: () => void; onSaved: () => void }) {
+  const [rows, setRows] = useStateHr<any[]>(target.bands.length
+    ? target.bands.map((b: any) => ({ from_amount: String(b.from_amount), to_amount: b.to_amount == null ? '' : String(b.to_amount), commission_percent: String(b.commission_percent) }))
+    : [{ from_amount: '0', to_amount: '', commission_percent: '' }]);
+  const [busy, setBusy] = useStateHr(false); const [err, setErr] = useStateHr<any>(null);
+  const setRow = (i: number, k: string, v: any) => setRows((s: any[]) => s.map((r, j) => j === i ? { ...r, [k]: v } : r));
+  return (
+    <Modal T={T} title={`Set sales target for ${target.name}`} width={560} onClose={onClose}
+      footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Close</Btn><Btn T={T} kind="accent" onClick={async () => {
+        // A blank upper bound means open-ended, not zero.
+        const bands = rows
+          .filter((r: any) => r.commission_percent !== '')
+          .map((r: any) => ({
+            from_amount: Number(r.from_amount || 0),
+            to_amount: r.to_amount === '' ? null : Number(r.to_amount),
+            commission_percent: Number(r.commission_percent),
+          }));
+        setBusy(true); setErr(null);
+        try { await API.hrm.setSalesTarget(target.user_id, bands); onSaved(); }
+        catch (e: any) { setErr(e.message); } finally { setBusy(false); }
+      }} disabled={busy}>{busy ? 'Saving…' : 'Submit'}</Btn></>}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 32px', gap: 8, fontSize: 11, fontWeight: 600, color: T.inkSub, marginBottom: 6 }}>
+        <div>Total sales amount from</div><div>Total sale amount to</div><div>Commission percent</div><div />
+      </div>
+      {rows.map((r: any, i: number) => (
+        <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 32px', gap: 8, marginBottom: 8, alignItems: 'center' }}>
+          <TextField T={T} type="number" value={r.from_amount} onChange={(v: any) => setRow(i, 'from_amount', v)} placeholder="0" />
+          <TextField T={T} type="number" value={r.to_amount} onChange={(v: any) => setRow(i, 'to_amount', v)} placeholder="No limit" />
+          <TextField T={T} type="number" value={r.commission_percent} onChange={(v: any) => setRow(i, 'commission_percent', v)} placeholder="0" />
+          <button onClick={() => setRows((s: any[]) => s.filter((_, j) => j !== i))}
+            style={{ width: 28, height: 28, borderRadius: 6, border: `1px solid ${T.line}`, background: T.paper, color: T.redText, cursor: 'pointer', lineHeight: 0 }}><LuX size={12} /></button>
+        </div>
+      ))}
+      <Btn T={T} kind="ghost" onClick={() => setRows((s: any[]) => [...s, { from_amount: '', to_amount: '', commission_percent: '' }])}>+ Add band</Btn>
+      <div style={{ marginTop: 12, padding: '9px 13px', borderRadius: T.r, background: T.paperAlt, border: `1px solid ${T.line}`, fontSize: 12, color: T.inkMid, lineHeight: 1.5 }}>
+        Leave the upper bound blank for the top band. Bands must not overlap. With no bands, this user earns their flat {target.flat_percent}%.
+      </div>
+      {err && <div style={{ marginTop: 14, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}><LuTriangleAlert size={13} style={{ verticalAlign: -2, marginRight: 5 }} />{err}</div>}
+    </Modal>
+  );
+}
+
 // Build a batch of DRAFT payrolls. Nothing posts to the ledger until the group
 // is paid, so the total can be reviewed first.
 function PayrollGroupModal({ T, emps, locs, onClose, onSaved }: { T: any; emps: any[]; locs: any[]; onClose: () => void; onSaved: () => void }) {

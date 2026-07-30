@@ -3,6 +3,7 @@
 
 const express = require('express');
 const prisma = require('../../../lib/prisma');
+const commission = require('../../../lib/commission');
 const { getBusinessSettings } = require('../../../lib/businessSettings');
 const { auth, requireRole } = require('../../../middleware/auth');
 const { validate } = require('../../../middleware/validate');
@@ -336,7 +337,7 @@ router.put('/commission/settings', auth, requireRole('owner', 'manager'), valida
 router.get('/commission/reps', auth, requireRole('owner', 'manager'), async (req, res, next) => {
   try {
     const payCalc = req.query.calc === 'payment_received';
-    const [users, agg] = await Promise.all([
+    const [users, agg, bands] = await Promise.all([
       prisma.user.findMany({ where: { businessId: req.user.business_id }, select: { id: true, name: true, role: true, commissionPercent: true } }),
       prisma.sale.groupBy({
         by: ['cashierId'],
@@ -344,18 +345,20 @@ router.get('/commission/reps', auth, requireRole('owner', 'manager'), async (req
         _sum: { totalAmount: true, cashAmount: true, zaadAmount: true, cardAmount: true },
         _count: { id: true },
       }),
+      commission.loadBands(req.user.business_id),
     ]);
     const byUser = Object.fromEntries(agg.map(a => [a.cashierId, a]));
     const reps = users.map(u => {
       const a = byUser[u.id];
       const totalSale = parseFloat(a?._sum.totalAmount || 0);
       const totalReceived = parseFloat(a?._sum.cashAmount || 0) + parseFloat(a?._sum.zaadAmount || 0) + parseFloat(a?._sum.cardAmount || 0);
-      const pct = parseFloat(u.commissionPercent || 0);
       const base = payCalc ? totalReceived : totalSale;
+      // Tiered bands resolve against the same base the payout is priced on.
+      const c = commission.commissionFor(bands.get(u.id), base, u.commissionPercent);
       return {
         user_id: u.id, name: u.name, role_name: u.role.charAt(0).toUpperCase() + u.role.slice(1),
-        commission_percent: pct, total_sale: totalSale, total_received: totalReceived,
-        tx_count: a?._count.id || 0, commission: +(base * pct / 100).toFixed(2),
+        commission_percent: c.percent, total_sale: totalSale, total_received: totalReceived,
+        tx_count: a?._count.id || 0, commission: c.commission,
       };
     }).sort((x, y) => y.commission - x.commission);
     res.json(reps);
@@ -371,8 +374,11 @@ router.get('/commission/reps/:id', auth, requireRole('owner', 'manager'), async 
       orderBy: { createdAt: 'desc' }, take: 100,
       select: { id: true, saleNumber: true, status: true, totalAmount: true, cashAmount: true, zaadAmount: true, cardAmount: true },
     });
+    // Same resolution as the list, so the detail cannot show a different rate.
+    const totalSale = sales.reduce((t, s) => t + parseFloat(s.totalAmount || 0), 0);
+    const resolved = await commission.commissionForUser(req.user.business_id, req.params.id, totalSale, user.commissionPercent);
     res.json({
-      name: user.name, commission_percent: parseFloat(user.commissionPercent || 0),
+      name: user.name, commission_percent: resolved.percent,
       transactions: sales.map(s => ({
         id: s.saleNumber || s.id, status: s.status,
         total: parseFloat(s.totalAmount || 0),

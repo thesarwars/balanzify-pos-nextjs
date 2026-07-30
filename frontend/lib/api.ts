@@ -4637,6 +4637,15 @@ const API: any = {
       return null;
     },
     // Pay components — named, reusable earnings and deductions.
+    // Sales targets — tiered commission bands per user.
+    async salesTargets() {
+      if (REAL_MODE) return await realReq('GET', '/hrm/sales-target');
+      return [];
+    },
+    async setSalesTarget(userId: any, bands: any[]) {
+      if (REAL_MODE) return await realReq('PUT', '/hrm/sales-target/' + userId, { body: { bands } });
+      return null;
+    },
     async payComponents() {
       if (REAL_MODE) return await realReq('GET', '/hrm/pay-component');
       return [];
