@@ -434,8 +434,18 @@ const OrgUnitSchema = z.object({
 const HrmSettingsSchema = z.object({
   work_start:     hhmm.optional(),
   grace_minutes:  z.coerce.number().int().min(0).max(120).optional(),
+  // The clock every attendance timestamp is written and read against.
+  timezone:       shortStr(64).optional(),
   standard_hours: z.coerce.number().min(0).max(24).optional(),
   half_day_hours: z.coerce.number().min(0).max(24).optional(),
+  // These four drive the payroll math and were previously writable by nothing,
+  // pinning every tenant to 1.5x overtime and a 26-day month.
+  overtime_rate:  z.coerce.number().min(0).max(10).optional(),
+  working_days:   z.coerce.number().int().min(1).max(31).optional(),
+  late_deduction: money.optional(),
+  // Either the literal 'day' (deduct a day's pay) or a fixed amount.
+  absent_deduction: z.union([z.literal('day'), z.coerce.number().min(0)])
+    .transform(v => String(v)).optional(),
 });
 const EmployeeShiftSchema = z.object({
   type:  z.enum(['fixed', 'flexible']).default('fixed'),

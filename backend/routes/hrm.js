@@ -189,7 +189,7 @@ async function loadSettings(businessId) {
 }
 function serializeSettings(s, empShift) {
   return {
-    work_start: s.workStart, grace_minutes: s.graceMinutes,
+    work_start: s.workStart, grace_minutes: s.graceMinutes, timezone: s.timezone,
     standard_hours: parseFloat(s.standardHours), half_day_hours: parseFloat(s.halfDayHours),
     overtime_rate: parseFloat(s.overtimeRate), working_days: s.workingDays,
     late_deduction: parseFloat(s.lateDeduction), absent_deduction: s.absentDeduction,
@@ -218,14 +218,19 @@ router.get('/settings', auth, async (req, res, next) => {
 router.put('/settings', auth, requireRole('owner', 'manager'), validate(HrmSettingsSchema), async (req, res, next) => {
   try {
     await loadSettings(req.user.business_id);
-    const { work_start, grace_minutes, standard_hours, half_day_hours } = req.body;
+    const b = req.body;
     const s = await prisma.hrmSettings.update({
       where: { businessId: req.user.business_id },
       data: {
-        ...(work_start     !== undefined && { workStart: work_start }),
-        ...(grace_minutes  !== undefined && { graceMinutes: grace_minutes }),
-        ...(standard_hours !== undefined && { standardHours: standard_hours }),
-        ...(half_day_hours !== undefined && { halfDayHours: half_day_hours }),
+        ...(b.work_start       !== undefined && { workStart: b.work_start }),
+        ...(b.grace_minutes    !== undefined && { graceMinutes: b.grace_minutes }),
+        ...(b.timezone         !== undefined && { timezone: b.timezone }),
+        ...(b.standard_hours   !== undefined && { standardHours: b.standard_hours }),
+        ...(b.half_day_hours   !== undefined && { halfDayHours: b.half_day_hours }),
+        ...(b.overtime_rate    !== undefined && { overtimeRate: b.overtime_rate }),
+        ...(b.working_days     !== undefined && { workingDays: b.working_days }),
+        ...(b.late_deduction   !== undefined && { lateDeduction: b.late_deduction }),
+        ...(b.absent_deduction !== undefined && { absentDeduction: b.absent_deduction }),
       },
     });
     res.json(serializeSettings(s, await empShiftMap(req.user.business_id)));
@@ -267,7 +272,11 @@ function tzParts(tz) {
 }
 const hoursLabel = (h) => h > 0 ? `${Math.floor(h)}h ${Math.round((h % 1) * 60)}m` : '—';
 
-function decorateAtt(rec, empName, nowHM = serverNowHM()) {
+// `nowHM` must be the wall clock in the BUSINESS timezone — the same clock the
+// clock-in was written with. There is deliberately no default: falling back to
+// the container clock (UTC) against an EAT clock-in makes the span negative,
+// wrap past midnight and report ~21h on every open row.
+function decorateAtt(rec, empName, nowHM) {
   const breaks = Array.isArray(rec.breaks) ? rec.breaks : [];
   let breakMin = 0, onBreak = false, openStart = null;
   for (const b of breaks) { if (b.end) breakMin += hm2min(b.end) - hm2min(b.start); else { onBreak = true; openStart = b.start; } }
@@ -300,12 +309,14 @@ async function clockStatusFor(businessId, employeeId, at, settings) {
 
 router.get('/attendance', auth, async (req, res, next) => {
   try {
+    const settings = await loadSettings(req.user.business_id);
+    const nowHM = tzParts(settings.timezone).hm;
     const rows = await prisma.attendance.findMany({
       where: { businessId: req.user.business_id },
       include: { employee: { select: { name: true } } },
       orderBy: { date: 'desc' }, take: 300,
     });
-    res.json(rows.map(r => decorateAtt(r, r.employee?.name || '—')));
+    res.json(rows.map(r => decorateAtt(r, r.employee?.name || '—', nowHM)));
   } catch (err) { next(err); }
 });
 
@@ -379,7 +390,8 @@ async function buildSummary(emp, records, settings) {
   const late = records.filter(r => r.status === 'late').length;
   const absent = records.filter(r => r.status === 'absent' || !r.clockIn).length;
   const daysWorked = records.filter(r => r.clockIn).length;
-  const totalHours = records.reduce((s, r) => s + decorateAtt(r, '').hours, 0);
+  const nowHM = tzParts(settings.timezone).hm;
+  const totalHours = records.reduce((s, r) => s + decorateAtt(r, '', nowHM).hours, 0);
   const std = parseFloat(settings.standardHours), wd = settings.workingDays || 26;
   const otRate = parseFloat(settings.overtimeRate), lateDed = parseFloat(settings.lateDeduction);
   const salary = parseFloat(emp.salary || 0);
