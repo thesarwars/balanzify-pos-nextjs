@@ -122,24 +122,6 @@ export function HRM({ T }: { T: any }) {
     return () => clearInterval(t);
   }, [tab, hasRunning]);
 
-  if (enabled === false) {
-    return (
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: T.paperAlt }}>
-        <Topbar T={T} title="HRM / Essentials" subtitle="Add-on module" />
-        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
-          <div style={{ textAlign: 'center', maxWidth: 400 }}>
-            <div style={{ width: 76, height: 76, borderRadius: 20, background: T.accent.soft, color: T.accent.base, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 34, margin: '0 auto 20px' }}><LuUsers /></div>
-            <div style={{ fontFamily: T.fDisplay, fontSize: 24, fontWeight: T.dispWeight, color: T.ink, marginBottom: 8 }}>HRM / Essentials</div>
-            <div style={{ fontSize: 13.5, color: T.inkSub, lineHeight: 1.6, marginBottom: 22 }}>Manage employees, attendance, leave, payroll and team tasks. Paid add-on ($18/mo) — enable it to start.</div>
-            <Btn T={T} kind="accent" onClick={enableModule}>Enable HRM · $18/mo</Btn>
-          </div>
-        </div>
-        {node}
-      </div>
-    );
-  }
-  if (enabled === null) return <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: T.paperAlt, fontFamily: T.fMono, fontSize: 12.5, color: T.inkSub }}>Loading…</div>;
-
   const tabs = [['overview', 'Overview'], ['employees', 'Employees'], ['org', 'Departments'], ['designations', 'Designations'], ['attendance', 'Attendance'], ['report', 'Report'], ['shifts', 'Shifts'], ['leave', 'Leave'], ['holidays', 'Holiday'], ['payroll', 'Payroll'], ['targets', 'Sales Targets'], ['mypay', 'My Payrolls'], ['settings', 'Settings'], ['advances', 'Advances'], ['todos', 'Tasks']];
   const inDept = (empId: any) => !fDept || (emps.find((e: any) => e.id === empId) || {}).department === fDept;
   const fAtt = att.filter((a: any) => matchQ(a.employee_name) && inDept(a.employee_id) && (!fStatus || a.status === fStatus));
@@ -189,6 +171,26 @@ export function HRM({ T }: { T: any }) {
   const atone: any = { present: 'green', late: 'amber', absent: 'red', running: 'amber' };
   const ltone: any = { approved: 'green', pending: 'amber', rejected: 'red' };
   const ptone: any = { high: 'red', medium: 'amber', low: 'gray' };
+
+  // Gated here, not earlier: an early return above the hooks below would
+  // change the hook count between renders once `enabled` resolves.
+  if (enabled === false) {
+    return (
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: T.paperAlt }}>
+        <Topbar T={T} title="HRM / Essentials" subtitle="Add-on module" />
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+          <div style={{ textAlign: 'center', maxWidth: 400 }}>
+            <div style={{ width: 76, height: 76, borderRadius: 20, background: T.accent.soft, color: T.accent.base, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 34, margin: '0 auto 20px' }}><LuUsers /></div>
+            <div style={{ fontFamily: T.fDisplay, fontSize: 24, fontWeight: T.dispWeight, color: T.ink, marginBottom: 8 }}>HRM / Essentials</div>
+            <div style={{ fontSize: 13.5, color: T.inkSub, lineHeight: 1.6, marginBottom: 22 }}>Manage employees, attendance, leave, payroll and team tasks. Paid add-on ($18/mo) — enable it to start.</div>
+            <Btn T={T} kind="accent" onClick={enableModule}>Enable HRM · $18/mo</Btn>
+          </div>
+        </div>
+        {node}
+      </div>
+    );
+  }
+  if (enabled === null) return <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: T.paperAlt, fontFamily: T.fMono, fontSize: 12.5, color: T.inkSub }}>Loading…</div>;
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: T.paperAlt }}>
