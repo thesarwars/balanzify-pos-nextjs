@@ -538,22 +538,46 @@ function LeaveTypesManager({ T, emps, onClose, onSaved }: { T: any; emps: any[];
   const [accrues, setAccrues] = useStateHr(false);
   const [paid, setPaid] = useStateHr(true);
   const [ovEmp, setOvEmp] = useStateHr<any>('');
+  const [draftDays, setDraftDays] = useStateHr<any>({});
   const [ov, setOv] = useStateHr<any>({});
   const reload = () => API.hrm.leaveTypes().then(setTypes);
   React.useEffect(() => { reload(); }, []);
   React.useEffect(() => { if (ovEmp) API.hrm.leaveOverride(ovEmp).then(setOv).catch(() => {}); else setOv({}); }, [ovEmp]);
-  async function add() { if (!name.trim()) return; await API.hrm.addLeaveType({ name, default_days: Number(days || 0), accrues, paid }); setName(''); setDays(''); setAccrues(false); setPaid(true); reload(); onSaved(); }
-  async function del(t: any) { await API.hrm.removeLeaveType(t.id); reload(); onSaved(); }
-  async function updDays(t: any, v: any) { await API.hrm.updateLeaveType(t.id, { default_days: Number(v || 0) }); reload(); onSaved(); }
-  async function saveOverride() { if (!ovEmp) return; await API.hrm.setLeaveOverride(ovEmp, ov); onSaved(); }
+  const [err, setErr] = useStateHr('');
+  // Every mutation here is owner/manager-only server-side, and delete/create can
+  // now legitimately refuse (in use, duplicate name) — so failures must be shown
+  // rather than becoming an unhandled rejection behind a button that looks broken.
+  const run = async (fn: () => Promise<any>) => {
+    setErr('');
+    try { await fn(); reload(); onSaved(); }
+    catch (e: any) { setErr(e?.message || 'That did not work.'); }
+  };
+  async function add() { if (!name.trim()) return; await run(async () => { await API.hrm.addLeaveType({ name, default_days: Number(days || 0), accrues, paid }); setName(''); setDays(''); setAccrues(false); setPaid(true); }); }
+  async function del(t: any) { await run(() => API.hrm.removeLeaveType(t.id)); }
+  // Committed on blur, not per keystroke: the input is controlled off server
+  // state, so typing "100" used to persist 1, then 10, then 100, and clearing
+  // the field persisted 0 days for the whole business.
+  async function commitDays(t: any, v: any) {
+    const n = Number(v);
+    if (v === '' || !Number.isFinite(n) || n < 0 || n === t.default_days) { setDraftDays((d: any) => { const { [t.id]: _, ...rest } = d; return rest; }); return; }
+    await run(() => API.hrm.updateLeaveType(t.id, { default_days: n }));
+    setDraftDays((d: any) => { const { [t.id]: _, ...rest } = d; return rest; });
+  }
+  async function saveOverride() { if (!ovEmp) return; await run(() => API.hrm.setLeaveOverride(ovEmp, ov)); }
   return (
     <Modal T={T} title="Leave types" subtitle="Create and configure leave types — admin-managed" width={600} onClose={onClose} footer={null}>
+      {err && <div style={{ marginBottom: 12, padding: '9px 12px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5, lineHeight: 1.5 }}>{err}</div>}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
         {types.map((t: any) => (
           <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', border: `1px solid ${T.line}`, borderRadius: T.r, background: T.paper }}>
             <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: T.ink }}>{t.name} {!t.paid && <Badge T={T} tone="gray" style={{ marginLeft: 4 }}>unpaid</Badge>}{t.accrues && <Badge T={T} tone="blue" style={{ marginLeft: 4 }}>accrues</Badge>}</span>
             <span style={{ fontSize: 11, color: T.inkSub }}>days/yr</span>
-            <input type="number" value={t.default_days} onChange={e => updDays(t, e.target.value)} disabled={!t.paid} style={{ width: 60, padding: '5px 7px', fontSize: 12.5, fontFamily: T.fMono, textAlign: 'right', color: T.ink, background: t.paid ? T.paper : T.paperAlt, border: `1px solid ${T.line}`, borderRadius: 6, outline: 'none' }} />
+            <input type="number" min={0}
+              value={draftDays[t.id] != null ? draftDays[t.id] : t.default_days}
+              onChange={e => setDraftDays((d: any) => ({ ...d, [t.id]: e.target.value }))}
+              onBlur={e => commitDays(t, e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+              disabled={!t.paid} style={{ width: 60, padding: '5px 7px', fontSize: 12.5, fontFamily: T.fMono, textAlign: 'right', color: T.ink, background: t.paid ? T.paper : T.paperAlt, border: `1px solid ${T.line}`, borderRadius: 6, outline: 'none' }} />
             <button onClick={() => del(t)} style={{ width: 26, height: 26, borderRadius: 6, border: `1px solid ${T.line}`, background: T.paper, color: T.redText, cursor: 'pointer', fontSize: 12 }}>✕</button>
           </div>
         ))}
