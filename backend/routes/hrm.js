@@ -22,10 +22,13 @@ const PL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const DEFAULT_DEPARTMENTS  = ['Sales', 'Inventory', 'Finance', 'Management', 'Kitchen'];
 const DEFAULT_DESIGNATIONS = ['Cashier', 'Store Keeper', 'Accountant', 'Manager', 'Chef', 'Cleaner'];
 
-// Seed a business's department/designation list on first use.
+// Seed a business's department/designation list ONCE. Keying this off "are
+// there zero org units?" meant deleting them all resurrected the whole default
+// set on the next read, so the flag is what records that we have seeded.
 async function ensureOrgDefaults(businessId) {
-  const count = await prisma.orgUnit.count({ where: { businessId } });
-  if (count > 0) return;
+  const settings = await loadSettings(businessId);
+  if (settings.orgSeeded) return;
+  await prisma.hrmSettings.update({ where: { businessId }, data: { orgSeeded: true } });
   await prisma.orgUnit.createMany({
     data: [
       ...DEFAULT_DEPARTMENTS.map(name => ({ businessId, kind: 'department', name })),

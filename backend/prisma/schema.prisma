@@ -1160,6 +1160,10 @@ model HrmSettings {
   showBonus              Boolean @default(true)  @map("show_bonus")
   showIncentive          Boolean @default(true)  @map("show_incentive")
   showDeductionBreakdown Boolean @default(true)  @map("show_deduction_breakdown")
+  // Department/designation defaults are seeded exactly once. Without this the
+  // seeder keyed off "are there zero org units?", so deleting them all brought
+  // the whole default set back on the next read.
+  orgSeeded              Boolean @default(false) @map("org_seeded")
 
   business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
 
