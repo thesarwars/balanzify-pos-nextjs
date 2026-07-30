@@ -52,6 +52,7 @@ export function HRM({ T }: { T: any }) {
   const [editTpl, setEditTpl] = useStateHr<any>(null);
   const [assignTpl, setAssignTpl] = useStateHr<any>(null);
   const [editHol, setEditHol] = useStateHr<any>(null);
+  const [editOrg, setEditOrg] = useStateHr<any>(null);
   const [q, setQ] = useStateHr('');
   const [fDept, setFDept] = useStateHr('');
   const [fStatus, setFStatus] = useStateHr('');
@@ -110,7 +111,7 @@ export function HRM({ T }: { T: any }) {
   }
   if (enabled === null) return <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: T.paperAlt, fontFamily: T.fMono, fontSize: 12.5, color: T.inkSub }}>Loading…</div>;
 
-  const tabs = [['overview', 'Overview'], ['employees', 'Employees'], ['org', 'Departments'], ['attendance', 'Attendance'], ['report', 'Report'], ['shifts', 'Shifts'], ['leave', 'Leave'], ['holidays', 'Holiday'], ['payroll', 'Payroll'], ['targets', 'Sales Targets'], ['settings', 'Settings'], ['advances', 'Advances'], ['todos', 'Tasks']];
+  const tabs = [['overview', 'Overview'], ['employees', 'Employees'], ['org', 'Departments'], ['designations', 'Designations'], ['attendance', 'Attendance'], ['report', 'Report'], ['shifts', 'Shifts'], ['leave', 'Leave'], ['holidays', 'Holiday'], ['payroll', 'Payroll'], ['targets', 'Sales Targets'], ['settings', 'Settings'], ['advances', 'Advances'], ['todos', 'Tasks']];
   const inDept = (empId: any) => !fDept || (emps.find((e: any) => e.id === empId) || {}).department === fDept;
   const fAtt = att.filter((a: any) => matchQ(a.employee_name) && inDept(a.employee_id) && (!fStatus || a.status === fStatus));
   const fLeaves = leaves.filter((l: any) => (matchQ(l.employee_name) || matchQ(l.type) || matchQ(l.reason)) && inDept(l.employee_id) && (!fStatus || l.status === fStatus));
@@ -125,6 +126,8 @@ export function HRM({ T }: { T: any }) {
   // ── Export / print for the active tab ─────────────────────────────
   const exportSets: any = {
     settings: () => ({ title: 'Settings', cols: [], rows: [] }),
+    org: () => ({ title: 'Departments', cols: ['Department', 'Department ID', 'Description', 'Staff'], rows: (org.departments || []).map((d: any) => [d.name, d.code, d.description, d.count]) }),
+    designations: () => ({ title: 'Designations', cols: ['Designation', 'Description', 'Staff'], rows: (org.designations || []).map((d: any) => [d.name, d.description, d.count]) }),
     targets: () => ({ title: 'Sales targets', cols: ['User', 'Bands', 'Rates'], rows: fTargets.map((t: any) => [t.name, t.bands.length || 'flat', t.bands.length ? t.bands.map((b: any) => `${b.from_amount}-${b.to_amount ?? '∞'} @ ${b.commission_percent}%`).join('; ') : `${t.flat_percent}%`]) }),
     holidays: () => ({ title: 'Holidays', cols: ['Name', 'From', 'To', 'Business Location', 'Note'], rows: fHolidays.map((h: any) => [h.name, h.start_date, h.end_date, h.location_name, h.note]) }),
     employees: () => ({ title: 'Employees', cols: ['Name', 'Email', 'Department', 'Designation', 'Location', 'Salary', 'Joined', 'Status'], rows: emps.filter((e: any) => matchQ(e.name) && (!fDept || e.department === fDept)).map((e: any) => [e.name, e.email, e.department, e.designation, e.location_name, e.salary, e.joined, e.on_leave ? 'on leave' : e.status]) }),
@@ -135,7 +138,6 @@ export function HRM({ T }: { T: any }) {
     payroll: () => ({ title: 'Payroll', cols: ['Employee', 'Department', 'Designation', 'Month', 'Reference No', 'Total amount', 'Basic', 'Deduction', 'Net', 'Payment status'], rows: fPay.map((p: any) => [p.employee_name, p.department, p.designation, p.month, p.reference_no || '', p.gross, p.basic, p.deduction, p.net, p.payment_status]) }),
     advances: () => ({ title: 'Advances', cols: ['Employee', 'Date', 'Amount', 'Outstanding', 'Account', 'Note', 'Status'], rows: fAdvances.map((a: any) => [a.employee_name, a.date, a.amount, a.outstanding, a.account_name, a.note, a.status]) }),
     todos: () => ({ title: 'Tasks', cols: ['Task', 'Assigned to', 'Priority', 'Status', 'Due'], rows: fTodos.map((t: any) => [t.title, t.assigned_name, t.priority, t.status, t.due]) }),
-    org: () => ({ title: 'Departments & designations', cols: ['Type', 'Name', 'Employees'], rows: [...org.departments.map((d: any) => ['Department', d.name, d.count]), ...org.designations.map((d: any) => ['Designation', d.name, d.count])] }),
   };
   const activeSet = () => (exportSets[tab] || exportSets.employees)();
   function exportCSV() {
@@ -173,7 +175,7 @@ export function HRM({ T }: { T: any }) {
         right={<span style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           {tab !== 'overview' && <><Btn T={T} kind="ghost" onClick={exportCSV}>⤓ Export</Btn><Btn T={T} kind="ghost" onClick={printTable}><LuPrinter size={13} style={{ verticalAlign: -2, marginRight: 5 }} />Print</Btn></>}
           {tab === 'employees' ? <Btn T={T} kind="accent" onClick={() => setModal('employee')}>+ Add Employee</Btn>
-          : tab === 'org' ? <Btn T={T} kind="accent" onClick={() => setModal('org')}>+ Add</Btn>
+          : tab === 'org' || tab === 'designations' ? <Btn T={T} kind="accent" onClick={() => setModal(tab === 'org' ? 'org' : 'designation')}>+ Add</Btn>
           : tab === 'leave' ? <><Btn T={T} kind="ghost" onClick={() => setModal('leavetypes')}><LuSettings size={13} style={{ verticalAlign: -2, marginRight: 5 }} />Leave Types</Btn><Btn T={T} kind="accent" onClick={() => setModal('leave')}>+ Apply Leave</Btn></>
           : tab === 'payroll' ? <><Btn T={T} kind="ghost" onClick={() => setModal('payslipsettings')}><LuSettings size={13} style={{ verticalAlign: -2, marginRight: 5 }} />Payslip</Btn><Btn T={T} kind="accent" onClick={() => setModal('payroll')}><LuPlay size={12} style={{ verticalAlign: -2, marginRight: 5 }} />Run Payroll</Btn><Btn T={T} kind="ghost" onClick={() => setModal('paygroup')}>+ Payroll Group</Btn><Btn T={T} kind="ghost" onClick={() => setModal('paycomponent')}>+ Pay Component</Btn></>
           : tab === 'holidays' ? <Btn T={T} kind="accent" onClick={() => setModal('holiday')}>+ Add Holiday</Btn>
@@ -320,25 +322,42 @@ export function HRM({ T }: { T: any }) {
           )}
 
           {/* DEPARTMENTS & DESIGNATIONS */}
-          {tab === 'org' && (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16 }}>
-              {[['department', 'Departments', org.departments], ['designation', 'Designations', org.designations]].map(([kind, title, list]: any) => (
-                <Panel T={T} key={kind} title={title}>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-                    {list.filter((d: any) => matchQ(d.name)).map((d: any) => (
-                      <div key={d.name} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', border: `1px solid ${T.line}`, borderRadius: T.r, background: T.paper }}>
-                        <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: T.ink }}>{d.name}</span>
-                        <Badge T={T} tone="gray">{d.count} staff</Badge>
-                        <button onClick={() => API.hrm.removeOrg(kind, d.name).then(() => API.hrm.org().then(setOrg)).catch((e: any) => show(e.message))} disabled={d.count > 0} style={{ width: 26, height: 26, borderRadius: 6, border: `1px solid ${T.line}`, background: T.paper, color: d.count > 0 ? T.inkMute : T.redText, cursor: d.count > 0 ? 'not-allowed' : 'pointer', fontSize: 12, opacity: d.count > 0 ? 0.4 : 1, lineHeight: 0 }}><LuX size={12} /></button>
-                      </div>
+          {(tab === 'org' || tab === 'designations') && (() => {
+            const kind = tab === 'org' ? 'department' : 'designation';
+            const list = (tab === 'org' ? org.departments : org.designations).filter((d: any) => matchQ(d.name) || matchQ(d.code) || matchQ(d.description));
+            // The reference shows a Department ID on departments only.
+            const cols = kind === 'department'
+              ? ['Department', 'Department ID', 'Description', 'Staff', '']
+              : ['Designation', 'Description', 'Staff', ''];
+            return (
+              <Panel T={T} title={kind === 'department' ? 'Manage departments' : 'Manage designations'} pad={false}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead><tr style={{ background: T.paperAlt }}>
+                    {cols.map((h, i) => (
+                      <th key={h} style={{ padding: '10px 18px', textAlign: i === cols.length - 1 ? 'right' : 'left', fontSize: 11, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', color: T.inkSub, borderBottom: `1px solid ${T.line}` }}>{h}</th>
                     ))}
-                    {list.length === 0 && <div style={{ padding: 14, textAlign: 'center', fontSize: 12.5, color: T.inkMute }}>None yet.</div>}
-                  </div>
-                  <OrgAdder T={T} kind={kind} onAdded={() => API.hrm.org().then(setOrg)} show={show} />
-                </Panel>
-              ))}
-            </div>
-          )}
+                  </tr></thead>
+                  <tbody>
+                    {list.length === 0 && <tr><td colSpan={cols.length} style={{ padding: 26, textAlign: 'center', fontSize: 12.5, color: T.inkMute }}>None yet.</td></tr>}
+                    {list.map((d: any) => (
+                      <tr key={d.id || d.name}>
+                        <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 13, fontWeight: 600, color: T.ink }}>{d.name}</td>
+                        {kind === 'department' && <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}`, fontFamily: T.fMono, fontSize: 12, color: T.inkSub }}>{d.code || '—'}</td>}
+                        <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 12.5, color: T.inkSub }}>{d.description || '—'}</td>
+                        <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}` }}><Badge T={T} tone="gray">{d.count}</Badge></td>
+                        <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right' }}>
+                          <button onClick={() => setEditOrg({ ...d, kind })} style={hrMini(T)}>Edit</button>
+                          <button onClick={() => API.hrm.removeOrg(kind, d.name).then(() => API.hrm.org().then(setOrg)).catch((e: any) => show(e.message))}
+                            disabled={d.count > 0} title={d.count > 0 ? 'In use by staff' : ''}
+                            style={{ ...hrMini(T, true), marginLeft: 6, opacity: d.count > 0 ? 0.4 : 1, cursor: d.count > 0 ? 'not-allowed' : 'pointer' }}>Remove</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </Panel>
+            );
+          })()}
 
           {/* ATTENDANCE */}
           {tab === 'attendance' && (
@@ -686,6 +705,8 @@ export function HRM({ T }: { T: any }) {
       {modal === 'shifttemplate' && <ShiftTemplateModal T={T} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Shift added'); reload(); }} />}
       {editTpl && <ShiftTemplateModal T={T} template={editTpl} onClose={() => setEditTpl(null)} onSaved={() => { setEditTpl(null); show('Shift updated'); reload(); }} />}
       {assignTpl && <ShiftAssignModal T={T} emps={emps} template={assignTpl} onClose={() => setAssignTpl(null)} onSaved={() => { setAssignTpl(null); show('Employees assigned'); reload(); }} />}
+      {(modal === 'org' || modal === 'designation') && <OrgUnitModal T={T} kind={modal === 'org' ? 'department' : 'designation'} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Added'); API.hrm.org().then(setOrg); }} />}
+      {editOrg && <OrgUnitModal T={T} kind={editOrg.kind} unit={editOrg} onClose={() => setEditOrg(null)} onSaved={() => { setEditOrg(null); show('Saved'); API.hrm.org().then(setOrg); reload(); }} />}
       {modal === 'holiday' && <HolidayModal T={T} locs={locs} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Holiday added'); reload(); }} />}
       {editHol && <HolidayModal T={T} locs={locs} holiday={editHol} onClose={() => setEditHol(null)} onSaved={() => { setEditHol(null); show('Holiday updated'); reload(); }} />}
       {editEmp && <EmployeeModal T={T} meta={meta} locs={locs} employee={editEmp} onClose={() => setEditEmp(null)} onSaved={() => { setEditEmp(null); show('Employee updated'); reload(); }} />}
@@ -1008,6 +1029,37 @@ function ShiftAssignModal({ T, emps, template, onClose, onSaved }: { T: any; emp
           </label>
         ))}
       </div>
+      {err && <div style={{ marginTop: 14, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}><LuTriangleAlert size={13} style={{ verticalAlign: -2, marginRight: 5 }} />{err}</div>}
+    </Modal>
+  );
+}
+
+// Add or edit a department / designation. Renaming carries the assigned
+// employees across, since Employee.department is a denormalised string.
+function OrgUnitModal({ T, kind, unit, onClose, onSaved }: { T: any; kind: string; unit?: any; onClose: () => void; onSaved: () => void }) {
+  const editing = !!unit;
+  const label = kind === 'department' ? 'Department' : 'Designation';
+  const [f, setF] = useStateHr<any>(editing
+    ? { name: unit.name, code: unit.code || '', description: unit.description || '' }
+    : { name: '', code: '', description: '' });
+  const [busy, setBusy] = useStateHr(false); const [err, setErr] = useStateHr<any>(null);
+  const set = (k: string, v: any) => setF((s: any) => ({ ...s, [k]: v }));
+  return (
+    <Modal T={T} title={editing ? `Edit ${unit.name}` : `Add ${label.toLowerCase()}`} width={520} onClose={onClose}
+      footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Cancel</Btn><Btn T={T} kind="accent" onClick={async () => {
+        if (!f.name.trim()) { setErr('Name is required.'); return; }
+        setBusy(true); setErr(null);
+        try { if (editing) await API.hrm.updateOrg(unit.id, f); else await API.hrm.addOrg(kind, f.name, f); onSaved(); }
+        catch (e: any) { setErr(e.message); } finally { setBusy(false); }
+      }} disabled={busy}>{busy ? 'Saving…' : editing ? 'Save changes' : 'Add'}</Btn></>}>
+      <FormGrid>
+        <Field T={T} label={label} full><TextField T={T} value={f.name} onChange={v => set('name', v)} placeholder={`e.g. ${kind === 'department' ? 'Warehouse' : 'Supervisor'}`} /></Field>
+        {kind === 'department' && <Field T={T} label="Department ID" hint="A short code of your own, e.g. WH" full><TextField T={T} value={f.code} onChange={v => set('code', v)} /></Field>}
+        <Field T={T} label="Description" full><TextField T={T} value={f.description} onChange={v => set('description', v)} placeholder="Optional" /></Field>
+      </FormGrid>
+      {editing && unit.count > 0 && <div style={{ marginTop: 12, padding: '9px 13px', borderRadius: T.r, background: T.paperAlt, border: `1px solid ${T.line}`, fontSize: 12, color: T.inkMid, lineHeight: 1.5 }}>
+        Renaming moves the {unit.count} assigned employee(s) to the new name.
+      </div>}
       {err && <div style={{ marginTop: 14, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}><LuTriangleAlert size={13} style={{ verticalAlign: -2, marginRight: 5 }} />{err}</div>}
     </Modal>
   );
@@ -1517,15 +1569,6 @@ function hrAvatar(T: any, name: any, size: number): React.CSSProperties {
   return { width: size, height: size, flexShrink: 0, borderRadius: '50%', background: palette[h % palette.length], color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: T.fBody, fontSize: size * 0.4, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.3px' };
 }
 
-function OrgAdder({ T, kind, onAdded, show }: { T: any; kind: any; onAdded: () => void; show: (m: any) => void }) {
-  const [v, setV] = useStateHr('');
-  return (
-    <div style={{ display: 'flex', gap: 8, marginTop: 12, borderTop: `1px solid ${T.line}`, paddingTop: 12 }}>
-      <input value={v} onChange={e => setV(e.target.value)} placeholder={kind === 'designation' ? 'New designation…' : 'New department…'} style={{ flex: 1, padding: '8px 10px', fontSize: 12.5, fontFamily: T.fBody, color: T.ink, background: T.paper, border: `1px solid ${T.line}`, borderRadius: 7, outline: 'none' }} />
-      <Btn T={T} kind="accent" onClick={() => { if (!v.trim()) return; API.hrm.addOrg(kind, v.trim()).then(() => { setV(''); onAdded(); }).catch((e: any) => show(e.message)); }}>Add</Btn>
-    </div>
-  );
-}
 
 function OrgModal({ T, onClose, onSaved }: { T: any; onClose: () => void; onSaved: () => void }) {
   const [kind, setKind] = useStateHr('department');

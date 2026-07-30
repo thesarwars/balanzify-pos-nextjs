@@ -444,6 +444,14 @@ const EmployeeUpdateSchema = z.object({
 const OrgUnitSchema = z.object({
   kind: z.enum(['department', 'designation']),
   name: shortStr(100),
+  code: optStr(50),
+  description: optStr(500),
+});
+// Renaming is separate: it has to carry employees across with it.
+const OrgUnitUpdateSchema = z.object({
+  name: shortStr(100).optional(),
+  code: optStr(50),
+  description: optStr(500),
 });
 const HrmSettingsSchema = z.object({
   work_start:     hhmm.optional(),
@@ -1434,7 +1442,7 @@ module.exports = {
   CustomerGroupSchema, UnitSchema, BrandSchema, VariationTemplateSchema, DiscountSchema,
   CommissionAgentSchema,
   PriceGroupSchema, InvoiceLayoutSchema, InvoiceSchemeSchema, CommissionSettingsSchema,
-  EmployeeSchema, EmployeeUpdateSchema, OrgUnitSchema, HrmSettingsSchema, HolidaySchema, ShiftTemplateSchema, ShiftAssignSchema, AttendanceClockSchema,
+  EmployeeSchema, EmployeeUpdateSchema, OrgUnitSchema, OrgUnitUpdateSchema, HrmSettingsSchema, HolidaySchema, ShiftTemplateSchema, ShiftAssignSchema, AttendanceClockSchema,
   LeaveTypeSchema, LeaveTypeUpdateSchema, LeaveSchema, LeaveStatusSchema, LeaveOverrideSchema,
   RosterShiftSchema, RosterSwapSchema, HrAdvanceSchema, HrTodoSchema, StatusSchema,
   PayrollSchema, PayrollGroupSchema, PayComponentSchema, SalesTargetSchema, PayslipSettingsSchema, PackageSchema, ServiceTypeSchema,

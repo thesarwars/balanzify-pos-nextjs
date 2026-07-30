@@ -4432,9 +4432,17 @@ const API: any = {
       if (REAL_MODE) return await realReq('GET', '/hrm/org');
       return (await transport('GET', '/connector/api/hrm/org')).data;
     },
-    async addOrg(kind: any, name: any) {
-      if (REAL_MODE) return await realReq('POST', '/hrm/org', { body: { kind, name } });
-      return (await transport('POST', '/connector/api/hrm/org', { body: { kind, name } })).data;
+    async addOrg(kind: any, name: any, extra: any = {}) {
+      const body = { kind, name, code: extra.code || undefined, description: extra.description || undefined };
+      if (REAL_MODE) return await realReq('POST', '/hrm/org', { body });
+      return (await transport('POST', '/connector/api/hrm/org', { body })).data;
+    },
+    // Renaming carries the assigned employees across with it.
+    async updateOrg(id: any, body: any) {
+      if (REAL_MODE) return await realReq('PUT', '/hrm/org/' + id, { body: {
+        name: body.name, code: body.code || undefined, description: body.description || undefined,
+      }});
+      return null;
     },
     async removeOrg(kind: any, name: any) {
       if (REAL_MODE) return await realReq('DELETE', '/hrm/org', { query: { kind, name } });

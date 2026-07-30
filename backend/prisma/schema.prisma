@@ -1167,6 +1167,10 @@ model OrgUnit {
   businessId String   @map("business_id") @db.Uuid
   kind       String   @db.VarChar(20)
   name       String   @db.VarChar(100)
+  // The reference shows a short human code alongside the name ("Department ID")
+  // and a description on both kinds.
+  code        String? @db.VarChar(50)
+  description String? @db.VarChar(500)
   createdAt  DateTime @default(now()) @map("created_at")
 
   business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
