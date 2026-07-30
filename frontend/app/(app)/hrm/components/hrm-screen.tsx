@@ -40,6 +40,7 @@ export function HRM({ T }: { T: any }) {
   const [meta, setMeta] = useStateHr<any>({ departments: [], designations: [] });
   const [locs, setLocs] = useStateHr<any[]>([]);
   const [modal, setModal] = useStateHr<any>(null);
+  const [editEmp, setEditEmp] = useStateHr<any>(null);
   const [q, setQ] = useStateHr('');
   const [fDept, setFDept] = useStateHr('');
   const [fStatus, setFStatus] = useStateHr('');
@@ -220,7 +221,8 @@ export function HRM({ T }: { T: any }) {
                       <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 12, color: T.inkSub, fontFamily: T.fMono }}>{e.joined}</td>
                       <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}` }}><Badge T={T} tone={e.on_leave ? 'blue' : e.status === 'active' ? 'green' : 'blue'}>{e.on_leave ? 'on leave' : e.status}</Badge></td>
                       <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right' }}>
-                        <button onClick={(ev) => { ev.stopPropagation(); API.hrm.removeEmployee(e.id).then(reload); }} style={hrMini(T, true)}>Remove</button>
+                        <button onClick={(ev) => { ev.stopPropagation(); setEditEmp(e); }} style={hrMini(T)}>Edit</button>
+                        <button onClick={(ev) => { ev.stopPropagation(); API.hrm.removeEmployee(e.id).then(reload); }} style={{ ...hrMini(T, true), marginLeft: 6 }}>Remove</button>
                       </td>
                     </tr>
                   ))}
@@ -492,6 +494,7 @@ export function HRM({ T }: { T: any }) {
       </div>
 
       {modal === 'employee' && <EmployeeModal T={T} meta={meta} locs={locs} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Employee added'); reload(); }} />}
+      {editEmp && <EmployeeModal T={T} meta={meta} locs={locs} employee={editEmp} onClose={() => setEditEmp(null)} onSaved={() => { setEditEmp(null); show('Employee updated'); reload(); }} />}
       {modal === 'org' && <OrgModal T={T} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Added'); API.hrm.org().then(setOrg); API.hrm.meta().then(setMeta); }} />}
       {modal === 'leave' && <LeaveModal T={T} emps={emps} leaveTypes={leaveTypes} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Leave applied'); reload(); API.hrm.leaveBalances().then(setLeaveBal); }} />}
       {modal === 'leavetypes' && <LeaveTypesManager T={T} emps={emps} onClose={() => setModal(null)} onSaved={() => { API.hrm.leaveTypes().then(setLeaveTypes); API.hrm.leaveBalances().then(setLeaveBal); }} />}
@@ -508,15 +511,19 @@ export function HRM({ T }: { T: any }) {
   );
 }
 
-function EmployeeModal({ T, meta, locs, onClose, onSaved }: { T: any; meta: any; locs: any[]; onClose: () => void; onSaved: () => void }) {
-  const [f, setF] = useStateHr<any>({ name: '', email: '', department: meta.departments[0] || '', designation: meta.designations[0] || '', location_id: (locs[0] || {}).id || 1, salary: '', joined: todayLocal() });
+// Doubles as the edit form: pass `employee` to load it and PUT instead of POST.
+function EmployeeModal({ T, meta, locs, employee, onClose, onSaved }: { T: any; meta: any; locs: any[]; employee?: any; onClose: () => void; onSaved: () => void }) {
+  const editing = !!employee;
+  const [f, setF] = useStateHr<any>(editing
+    ? { name: employee.name || '', email: employee.email || '', department: employee.department || '', designation: employee.designation || '', location_id: employee.location_id ?? ((locs[0] || {}).id || 1), salary: String(employee.salary ?? ''), joined: employee.joined || todayLocal(), commission_percent: String(employee.commission_percent ?? '') }
+    : { name: '', email: '', department: meta.departments[0] || '', designation: meta.designations[0] || '', location_id: (locs[0] || {}).id || 1, salary: '', joined: todayLocal(), commission_percent: '' });
   const [busy, setBusy] = useStateHr(false); const [err, setErr] = useStateHr<any>(null);
   const set = (k: string, v: any) => setF((s: any) => ({ ...s, [k]: v }));
   // Keep numeric ids numeric (mock) but pass uuid ids through unchanged (real backend).
   const idv = (v: any) => /^\d+$/.test(String(v)) ? Number(v) : v;
   return (
-    <Modal T={T} title="Add employee" width={600} onClose={onClose}
-      footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Cancel</Btn><Btn T={T} kind="accent" onClick={async () => { if (!f.name.trim()) { setErr('Name is required.'); return; } setBusy(true); try { await API.hrm.addEmployee(f); onSaved(); } catch (e: any) { setErr(e.message); } finally { setBusy(false); } }} disabled={busy}>{busy ? 'Saving…' : 'Add employee'}</Btn></>}>
+    <Modal T={T} title={editing ? `Edit ${employee.name}` : 'Add employee'} width={600} onClose={onClose}
+      footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Cancel</Btn><Btn T={T} kind="accent" onClick={async () => { if (!f.name.trim()) { setErr('Name is required.'); return; } setBusy(true); try { if (editing) await API.hrm.updateEmployee(employee.id, f); else await API.hrm.addEmployee(f); onSaved(); } catch (e: any) { setErr(e.message); } finally { setBusy(false); } }} disabled={busy}>{busy ? 'Saving…' : editing ? 'Save changes' : 'Add employee'}</Btn></>}>
       <FormGrid>
         <Field T={T} label="Full name" full><TextField T={T} value={f.name} onChange={v => set('name', v)} placeholder="Employee name" /></Field>
         <Field T={T} label="Email" full><TextField T={T} type="email" value={f.email} onChange={v => set('email', v)} placeholder="name@business.so" /></Field>
@@ -525,6 +532,7 @@ function EmployeeModal({ T, meta, locs, onClose, onSaved }: { T: any; meta: any;
         <Field T={T} label="Location"><SelectField T={T} value={String(f.location_id)} options={locs.map(l => String(l.id))} onChange={v => set('location_id', idv(v))} render={v => (locs.find(l => String(l.id) === v) || {}).name} /></Field>
         <Field T={T} label="Monthly salary"><TextField T={T} type="number" value={f.salary} onChange={v => set('salary', v)} placeholder="0.00" /></Field>
         <Field T={T} label="Joined"><TextField T={T} type="date" value={f.joined} onChange={v => set('joined', v)} /></Field>
+        <Field T={T} label="Commission %"><TextField T={T} type="number" value={f.commission_percent} onChange={v => set('commission_percent', v)} placeholder="0" /></Field>
       </FormGrid>
       {err && <div style={{ marginTop: 14, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}>⚠ {err}</div>}
     </Modal>

@@ -427,6 +427,20 @@ const EmployeeSchema = z.object({
   user_id:            uuid.optional().nullable(),
   commission_percent: z.coerce.number().min(0).max(100).optional(),
 });
+// Editing an employee — every field optional, only what is sent is written.
+const EmployeeUpdateSchema = z.object({
+  name:               shortStr(255).optional(),
+  email:              optStr(255),
+  department:         optStr(100),
+  designation:        optStr(100),
+  location_id:        uuid.optional().nullable(),
+  salary:             money.optional(),
+  joined:             isoDate,
+  user_id:            uuid.optional().nullable(),
+  commission_percent: z.coerce.number().min(0).max(100).optional(),
+  // Employment state. "On leave" is derived from approved leave, not set here.
+  status:             z.enum(['active', 'inactive']).optional(),
+});
 const OrgUnitSchema = z.object({
   kind: z.enum(['department', 'designation']),
   name: shortStr(100),
@@ -1350,7 +1364,7 @@ module.exports = {
   CustomerGroupSchema, UnitSchema, BrandSchema, VariationTemplateSchema, DiscountSchema,
   CommissionAgentSchema,
   PriceGroupSchema, InvoiceLayoutSchema, InvoiceSchemeSchema, CommissionSettingsSchema,
-  EmployeeSchema, OrgUnitSchema, HrmSettingsSchema, EmployeeShiftSchema, AttendanceClockSchema,
+  EmployeeSchema, EmployeeUpdateSchema, OrgUnitSchema, HrmSettingsSchema, EmployeeShiftSchema, AttendanceClockSchema,
   LeaveTypeSchema, LeaveTypeUpdateSchema, LeaveSchema, LeaveStatusSchema, LeaveOverrideSchema,
   RosterShiftSchema, RosterSwapSchema, HrAdvanceSchema, HrTodoSchema, StatusSchema,
   PayrollSchema, PayslipSettingsSchema, PackageSchema, ServiceTypeSchema,

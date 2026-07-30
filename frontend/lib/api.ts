@@ -4446,8 +4446,23 @@ const API: any = {
         department: body.department || undefined, designation: body.designation || undefined,
         location_id: isUuid(body.location_id) ? body.location_id : undefined,
         salary: Number(body.salary || 0), joined: body.joined || undefined,
+        user_id: isUuid(body.user_id) ? body.user_id : undefined,
+        commission_percent: body.commission_percent !== undefined && body.commission_percent !== ''
+          ? Number(body.commission_percent) : undefined,
       }});
       return (await transport('POST', '/connector/api/hrm/employee', { body })).data;
+    },
+    async updateEmployee(id: any, body: any) {
+      if (REAL_MODE) return await realReq('PUT', '/hrm/employee/' + id, { body: {
+        name: body.name, email: body.email || undefined,
+        department: body.department || undefined, designation: body.designation || undefined,
+        location_id: isUuid(body.location_id) ? body.location_id : undefined,
+        salary: Number(body.salary || 0), joined: body.joined || undefined,
+        user_id: isUuid(body.user_id) ? body.user_id : undefined,
+        commission_percent: body.commission_percent !== undefined && body.commission_percent !== ''
+          ? Number(body.commission_percent) : undefined,
+      }});
+      return (await transport('PUT', '/connector/api/hrm/employee/' + id, { body })).data;
     },
     async removeEmployee(id: any) {
       if (REAL_MODE) return await realReq('DELETE', '/hrm/employee/' + id);

@@ -10,7 +10,7 @@ const statutory = require('../lib/statutory');
 const wa = require('../lib/whatsapp');
 const { auth, requireRole } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
-const { EmployeeSchema, OrgUnitSchema, HrmSettingsSchema, EmployeeShiftSchema, AttendanceClockSchema,
+const { EmployeeSchema, EmployeeUpdateSchema, OrgUnitSchema, HrmSettingsSchema, EmployeeShiftSchema, AttendanceClockSchema,
   LeaveTypeSchema, LeaveTypeUpdateSchema, LeaveSchema, LeaveStatusSchema, LeaveOverrideSchema,
   RosterShiftSchema, RosterSwapSchema, HrAdvanceSchema, HrTodoSchema, StatusSchema,
   PayrollSchema, PayslipSettingsSchema } = require('../validation/schemas');
@@ -107,14 +107,32 @@ router.get('/employee/:id', auth, async (req, res, next) => {
       include: { location: { select: { name: true } }, user: { select: { name: true } }, shift: true },
     });
     if (!e) return res.status(404).json({ title: 'Not found', status: 404 });
+    const businessId = req.user.business_id;
     const pct = parseFloat(e.commissionPercent || 0);
+    const settings = await loadSettings(businessId);
+    const nowHM = tzParts(settings.timezone).hm;
+    await ensureLeaveTypeDefaults(businessId);
+    const [attendance, leaves, payroll, advances, types, overrides, sales] = await Promise.all([
+      prisma.attendance.findMany({ where: { businessId, employeeId: e.id }, orderBy: { date: 'desc' }, take: 30 }),
+      prisma.leave.findMany({ where: { businessId, employeeId: e.id }, orderBy: { createdAt: 'desc' }, take: 50 }),
+      prisma.payroll.findMany({ where: { businessId, employeeId: e.id }, orderBy: { month: 'desc' }, take: 24, include: { employee: { select: { name: true } } } }),
+      prisma.hrAdvance.findMany({ where: { businessId, employeeId: e.id }, orderBy: { createdAt: 'desc' }, take: 30 }),
+      prisma.leaveType.findMany({ where: { businessId } }),
+      prisma.employeeLeaveOverride.findMany({ where: { employeeId: e.id } }),
+      employeeSales(businessId, e.userId, pct),
+    ]);
+    const overrideMap = Object.fromEntries(overrides.map(o => [o.type, o.days]));
     res.json({
       ...serializeEmployee(e),
       user_name: e.user?.name || null,
       shift: e.shift ? { type: e.shift.type, start: e.shift.start, end: e.shift.end } : null,
-      attendance: [], leaves: [], payroll: [], advances: [],   // populated in later phases
-      outstanding_advance: 0, leave_balance: [],
-      sales: await employeeSales(req.user.business_id, e.userId, pct),
+      attendance: attendance.map(a => decorateAtt(a, e.name, nowHM)),
+      leaves: leaves.map(l => serializeLeave(l, e.name)),
+      payroll: payroll.map(serializePayroll),
+      advances: advances.map(serializeAdvance),
+      outstanding_advance: +advances.reduce((s, a) => s + parseFloat(a.outstanding || 0), 0).toFixed(2),
+      leave_balance: computeBalances(e, types, leaves, overrideMap),
+      sales,
     });
   } catch (err) { next(err); }
 });
@@ -144,6 +162,31 @@ router.post('/employee', auth, requireRole('owner', 'manager'), validate(Employe
       include: { location: { select: { name: true } } },
     });
     res.status(201).json(serializeEmployee(created));
+  } catch (err) { next(err); }
+});
+
+router.put('/employee/:id', auth, requireRole('owner', 'manager'), validate(EmployeeUpdateSchema), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id, b = req.body;
+    const e = await prisma.employee.findFirst({ where: { id: req.params.id, businessId }, select: { id: true } });
+    if (!e) return res.status(404).json({ title: 'Not found', status: 404 });
+    const updated = await prisma.employee.update({
+      where: { id: req.params.id },
+      data: {
+        ...(b.name        !== undefined && { name: b.name }),
+        ...(b.email       !== undefined && { email: b.email || null }),
+        ...(b.department  !== undefined && { department: b.department || null }),
+        ...(b.designation !== undefined && { designation: b.designation || null }),
+        ...(b.location_id !== undefined && { locationId: b.location_id || null }),
+        ...(b.salary      !== undefined && { salary: b.salary }),
+        ...(b.joined      !== undefined && { joinedAt: b.joined ? new Date(b.joined) : null }),
+        ...(b.user_id     !== undefined && { userId: b.user_id || null }),
+        ...(b.commission_percent !== undefined && { commissionPercent: b.commission_percent }),
+        ...(b.status      !== undefined && { status: b.status }),
+      },
+      include: { location: { select: { name: true } } },
+    });
+    res.json(serializeEmployee(updated));
   } catch (err) { next(err); }
 });
 
