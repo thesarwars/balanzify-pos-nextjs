@@ -110,7 +110,7 @@ export function HRM({ T }: { T: any }) {
   }
   if (enabled === null) return <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: T.paperAlt, fontFamily: T.fMono, fontSize: 12.5, color: T.inkSub }}>Loading…</div>;
 
-  const tabs = [['overview', 'Overview'], ['employees', 'Employees'], ['org', 'Departments'], ['attendance', 'Attendance'], ['report', 'Report'], ['shifts', 'Shifts'], ['leave', 'Leave'], ['holidays', 'Holiday'], ['payroll', 'Payroll'], ['targets', 'Sales Targets'], ['advances', 'Advances'], ['todos', 'Tasks']];
+  const tabs = [['overview', 'Overview'], ['employees', 'Employees'], ['org', 'Departments'], ['attendance', 'Attendance'], ['report', 'Report'], ['shifts', 'Shifts'], ['leave', 'Leave'], ['holidays', 'Holiday'], ['payroll', 'Payroll'], ['targets', 'Sales Targets'], ['settings', 'Settings'], ['advances', 'Advances'], ['todos', 'Tasks']];
   const inDept = (empId: any) => !fDept || (emps.find((e: any) => e.id === empId) || {}).department === fDept;
   const fAtt = att.filter((a: any) => matchQ(a.employee_name) && inDept(a.employee_id) && (!fStatus || a.status === fStatus));
   const fLeaves = leaves.filter((l: any) => (matchQ(l.employee_name) || matchQ(l.type) || matchQ(l.reason)) && inDept(l.employee_id) && (!fStatus || l.status === fStatus));
@@ -124,13 +124,14 @@ export function HRM({ T }: { T: any }) {
 
   // ── Export / print for the active tab ─────────────────────────────
   const exportSets: any = {
+    settings: () => ({ title: 'Settings', cols: [], rows: [] }),
     targets: () => ({ title: 'Sales targets', cols: ['User', 'Bands', 'Rates'], rows: fTargets.map((t: any) => [t.name, t.bands.length || 'flat', t.bands.length ? t.bands.map((b: any) => `${b.from_amount}-${b.to_amount ?? '∞'} @ ${b.commission_percent}%`).join('; ') : `${t.flat_percent}%`]) }),
     holidays: () => ({ title: 'Holidays', cols: ['Name', 'From', 'To', 'Business Location', 'Note'], rows: fHolidays.map((h: any) => [h.name, h.start_date, h.end_date, h.location_name, h.note]) }),
     employees: () => ({ title: 'Employees', cols: ['Name', 'Email', 'Department', 'Designation', 'Location', 'Salary', 'Joined', 'Status'], rows: emps.filter((e: any) => matchQ(e.name) && (!fDept || e.department === fDept)).map((e: any) => [e.name, e.email, e.department, e.designation, e.location_name, e.salary, e.joined, e.on_leave ? 'on leave' : e.status]) }),
     attendance: () => ({ title: 'Attendance', cols: ['Employee', 'Date', 'Clock in', 'Clock out', 'Hours', 'Status'], rows: fAtt.map((a: any) => [a.employee_name, a.date, a.clock_in, a.clock_out, a.hours_label, a.status]) }),
     report: () => ({ title: 'Attendance report ' + reportMonth, cols: ['Employee', 'Days', 'Present', 'Late', 'Absent', 'Hours', 'Overtime h', 'OT pay', 'Deductions'], rows: fReport.map((r: any) => [r.employee_name, r.days_worked, r.present, r.late, r.absent, r.total_hours, r.overtime_hours, r.overtime_pay, r.total_deduction]) }),
     shifts: () => ({ title: 'Shifts', cols: ['Employee', 'Date', 'Start', 'End', 'Role', 'Location'], rows: fShifts.map((s: any) => [s.employee_name, s.date, s.start, s.end, s.role, s.location_name]) }),
-    leave: () => ({ title: 'Leave', cols: ['Employee', 'Type', 'From', 'To', 'Days', 'Reason', 'Status', 'Approved by'], rows: fLeaves.map((l: any) => [l.employee_name, l.type, l.from, l.to, l.days, l.reason, l.status, l.approved_by || '']) }),
+    leave: () => ({ title: 'Leave', cols: ['Reference No', 'Employee', 'Type', 'From', 'To', 'Days', 'Reason', 'Status', 'Approved by'], rows: fLeaves.map((l: any) => [l.reference_no || '', l.employee_name, l.type, l.from, l.to, l.days, l.reason, l.status, l.approved_by || '']) }),
     payroll: () => ({ title: 'Payroll', cols: ['Employee', 'Department', 'Designation', 'Month', 'Reference No', 'Total amount', 'Basic', 'Deduction', 'Net', 'Payment status'], rows: fPay.map((p: any) => [p.employee_name, p.department, p.designation, p.month, p.reference_no || '', p.gross, p.basic, p.deduction, p.net, p.payment_status]) }),
     advances: () => ({ title: 'Advances', cols: ['Employee', 'Date', 'Amount', 'Outstanding', 'Account', 'Note', 'Status'], rows: fAdvances.map((a: any) => [a.employee_name, a.date, a.amount, a.outstanding, a.account_name, a.note, a.status]) }),
     todos: () => ({ title: 'Tasks', cols: ['Task', 'Assigned to', 'Priority', 'Status', 'Due'], rows: fTodos.map((t: any) => [t.title, t.assigned_name, t.priority, t.status, t.due]) }),
@@ -195,7 +196,7 @@ export function HRM({ T }: { T: any }) {
             const statusOpts = ({
               attendance: ['present', 'late', 'absent', 'running', 'on break'],
               leave: ['pending', 'approved', 'rejected'],
-              shifts: [], payroll: [], report: [], holidays: [], targets: [],
+              shifts: [], payroll: [], report: [], holidays: [], targets: [], settings: [],
               advances: ['outstanding', 'settled'],
               todos: ['pending', 'done'],
             } as any)[tab] || [];
@@ -256,6 +257,8 @@ export function HRM({ T }: { T: any }) {
               </table>
             </Panel>
           )}
+
+          {tab === 'settings' && <HrmSettingsPanel T={T} onSaved={() => { show('Settings saved'); reload(); }} />}
 
           {tab === 'targets' && (
             <Panel T={T} title="Sales targets" pad={false}>
@@ -436,10 +439,11 @@ export function HRM({ T }: { T: any }) {
               </div>
               <Panel T={T} pad={false}>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead><tr>{[['Employee', 'l'], ['Type', 'l'], ['Period', 'l'], ['Days', 'r'], ['Reason', 'l'], ['Status', 'l'], ['Approved by', 'l'], ['', 'r']].map(([h, a], i) => <th key={i} style={{ textAlign: a === 'r' ? 'right' : 'left', padding: '11px 18px', fontSize: 10, fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', color: T.inkSub, background: T.paperAlt, borderBottom: `1px solid ${T.line}` }}>{h}</th>)}</tr></thead>
+                <thead><tr>{[['Reference No', 'l'], ['Employee', 'l'], ['Type', 'l'], ['Period', 'l'], ['Days', 'r'], ['Reason', 'l'], ['Status', 'l'], ['Approved by', 'l'], ['', 'r']].map(([h, a], i) => <th key={i} style={{ textAlign: a === 'r' ? 'right' : 'left', padding: '11px 18px', fontSize: 10, fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', color: T.inkSub, background: T.paperAlt, borderBottom: `1px solid ${T.line}` }}>{h}</th>)}</tr></thead>
                 <tbody>
                   {fLeaves.map((l: any) => (
                     <tr key={l.id}>
+                      <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontFamily: T.fMono, fontSize: 12, color: T.inkSub }}>{l.reference_no || '—'}</td>
                       <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 13, fontWeight: 600, color: T.ink }}>{l.employee_name}</td>
                       <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}` }}><Badge T={T} tone="gray">{l.type}</Badge></td>
                       <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 11.5, color: T.inkSub, fontFamily: T.fMono }}>{l.from} → {l.to}</td>
@@ -702,6 +706,100 @@ export function HRM({ T }: { T: any }) {
 }
 
 // Doubles as the edit form: pass `employee` to load it and PUT instead of POST.
+// The reference's Essentials-and-HRM settings, as a real tab rather than two
+// modals hanging off other tabs.
+const SETTINGS_SECTIONS = ['Leave', 'Payroll', 'Attendance', 'Sales Targets', 'Essentials'];
+
+function HrmSettingsPanel({ T, onSaved }: { T: any; onSaved: () => void }) {
+  const [sec, setSec] = useStateHr('Leave');
+  const [f, setF] = useStateHr<any>(null);
+  const [busy, setBusy] = useStateHr(false); const [err, setErr] = useStateHr<any>(null);
+  React.useEffect(() => { API.hrm.settings().then(setF).catch(() => {}); }, []);
+  if (!f) return <Panel T={T}><div style={{ padding: 20, fontSize: 13, color: T.inkMute }}>Loading…</div></Panel>;
+  const set = (k: string, v: any) => setF((s: any) => ({ ...s, [k]: v }));
+  async function save() {
+    setBusy(true); setErr(null);
+    try {
+      await API.hrm.saveSettings({
+        leave_ref_prefix: f.leave_ref_prefix, leave_instructions: f.leave_instructions,
+        payroll_ref_prefix: f.payroll_ref_prefix, payroll_word_format: f.payroll_word_format,
+        location_required: !!f.location_required,
+        grace_before_checkin: Number(f.grace_before_checkin || 0),
+        grace_after_checkin: Number(f.grace_after_checkin || 0),
+        grace_before_checkout: Number(f.grace_before_checkout || 0),
+        grace_after_checkout: Number(f.grace_after_checkout || 0),
+        commission_excludes_tax: !!f.commission_excludes_tax,
+        todos_id_prefix: f.todos_id_prefix,
+      });
+      onSaved();
+    } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
+  }
+  const hint = (t: string) => <div style={{ fontSize: 11, color: T.inkMute, marginTop: 4 }}>{t}</div>;
+  return (
+    <Panel T={T} title="Essentials and HRM settings">
+      <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 190 }}>
+          {SETTINGS_SECTIONS.map(x => (
+            <button key={x} onClick={() => setSec(x)} style={{ padding: '10px 14px', textAlign: 'left', borderRadius: T.r, cursor: 'pointer', fontFamily: T.fBody, fontSize: 13, fontWeight: sec === x ? 700 : 500, border: `1px solid ${sec === x ? T.accent.base : T.line}`, background: sec === x ? T.accent.base : T.paper, color: sec === x ? T.accent.on : T.inkMid }}>{x}</button>
+          ))}
+        </div>
+        <div style={{ flex: 1, minWidth: 320 }}>
+          {sec === 'Leave' && <FormGrid>
+            <Field T={T} label="Leave reference no. prefix" full><TextField T={T} value={f.leave_ref_prefix || ''} onChange={v => set('leave_ref_prefix', v)} placeholder="e.g. LV-" /></Field>
+            <Field T={T} label="Leave instructions" full>
+              <textarea value={f.leave_instructions || ''} onChange={e => set('leave_instructions', e.target.value)} rows={7}
+                placeholder="Shown to staff on the leave form"
+                style={{ width: '100%', padding: '9px 11px', fontSize: 13, fontFamily: T.fBody, lineHeight: 1.5, color: T.ink, background: T.paper, border: `1.5px solid ${T.line}`, borderRadius: T.r, outline: 'none', resize: 'vertical', boxSizing: 'border-box' }} />
+            </Field>
+          </FormGrid>}
+
+          {sec === 'Payroll' && <FormGrid>
+            <Field T={T} label="Payroll reference no. prefix"><TextField T={T} value={f.payroll_ref_prefix || ''} onChange={v => set('payroll_ref_prefix', v)} placeholder="e.g. PR-" /></Field>
+            <Field T={T} label="Payroll print word format">
+              <SelectField T={T} value={f.payroll_word_format || 'international'} options={['international', 'somaliland']}
+                onChange={v => set('payroll_word_format', v)}
+                render={(v: any) => v === 'international' ? 'International' : 'Somaliland'} />
+            </Field>
+            <Field T={T} label="" full>{hint('How the net amount is spelled out in words on a printed payslip.')}</Field>
+          </FormGrid>}
+
+          {sec === 'Attendance' && <>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, fontSize: 12.5, color: T.inkMid, cursor: 'pointer' }}>
+              <input type="checkbox" checked={!!f.location_required} onChange={e => set('location_required', e.target.checked)} />
+              Is location required? — capture where a clock-in happened
+            </label>
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase', color: T.inkSub, marginBottom: 8 }}>Grace time</div>
+            <FormGrid>
+              <Field T={T} label="Grace before check-in"><TextField T={T} type="number" value={f.grace_before_checkin ?? 0} onChange={v => set('grace_before_checkin', v)} />{hint('In minutes. Not counted as overtime.')}</Field>
+              <Field T={T} label="Grace after check-in"><TextField T={T} type="number" value={f.grace_after_checkin ?? 0} onChange={v => set('grace_after_checkin', v)} />{hint('In minutes. Not counted as late.')}</Field>
+              <Field T={T} label="Grace before check-out"><TextField T={T} type="number" value={f.grace_before_checkout ?? 0} onChange={v => set('grace_before_checkout', v)} />{hint('In minutes. Not counted as leaving early.')}</Field>
+              <Field T={T} label="Grace after check-out"><TextField T={T} type="number" value={f.grace_after_checkout ?? 0} onChange={v => set('grace_after_checkout', v)} />{hint('In minutes. Not counted as overtime.')}</Field>
+            </FormGrid>
+            <div style={{ marginTop: 14, padding: '9px 13px', borderRadius: T.r, background: T.paperAlt, border: `1px solid ${T.line}`, fontSize: 12, color: T.inkMid, lineHeight: 1.5 }}>
+              Who may enter their own attendance is a role permission, not a setting here.
+            </div>
+          </>}
+
+          {sec === 'Sales Targets' && <>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: T.inkMid, cursor: 'pointer' }}>
+              <input type="checkbox" checked={!!f.commission_excludes_tax} onChange={e => set('commission_excludes_tax', e.target.checked)} />
+              Calculate sales target commission without tax
+            </label>
+            {hint('Commission is priced on the employee\'s sales net of tax rather than the gross total.')}
+          </>}
+
+          {sec === 'Essentials' && <FormGrid>
+            <Field T={T} label="Todos ID prefix" full><TextField T={T} value={f.todos_id_prefix || ''} onChange={v => set('todos_id_prefix', v)} placeholder="e.g. TD-" /></Field>
+          </FormGrid>}
+
+          {err && <div style={{ marginTop: 14, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}><LuTriangleAlert size={13} style={{ verticalAlign: -2, marginRight: 5 }} />{err}</div>}
+          <div style={{ marginTop: 18 }}><Btn T={T} kind="accent" onClick={save} disabled={busy}>{busy ? 'Saving…' : 'Update'}</Btn></div>
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
 // Tiered commission for one user: repeatable from/to/percent rows, saved as a
 // set. An empty set falls back to the user's flat percent.
 function SalesTargetModal({ T, target, onClose, onSaved }: { T: any; target: any; onClose: () => void; onSaved: () => void }) {

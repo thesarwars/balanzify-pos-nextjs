@@ -453,6 +453,14 @@ function serializeSettings(s, empShift) {
     standard_hours: parseFloat(s.standardHours), half_day_hours: parseFloat(s.halfDayHours),
     overtime_rate: parseFloat(s.overtimeRate), working_days: s.workingDays,
     late_deduction: parseFloat(s.lateDeduction), absent_deduction: s.absentDeduction,
+    // ── The reference's Settings tab, grouped as it presents them ──
+    leave_ref_prefix: s.leaveRefPrefix || '', leave_instructions: s.leaveInstructions || '',
+    payroll_ref_prefix: s.payrollRefPrefix || '', payroll_word_format: s.payrollWordFormat,
+    location_required: s.locationRequired,
+    grace_before_checkin: s.graceBeforeCheckin, grace_after_checkin: s.graceMinutes,
+    grace_before_checkout: s.graceBeforeCheckout, grace_after_checkout: s.graceAfterCheckout,
+    commission_excludes_tax: s.commissionExcludesTax,
+    todos_id_prefix: s.todosIdPrefix || '',
     emp_shift: empShift,
     payslip: {
       show_attendance: s.showAttendance, show_overtime: s.showOvertime, show_leave: s.showLeave,
@@ -511,6 +519,18 @@ router.put('/settings', auth, requireRole('owner', 'manager'), validate(HrmSetti
         ...(b.working_days     !== undefined && { workingDays: b.working_days }),
         ...(b.late_deduction   !== undefined && { lateDeduction: b.late_deduction }),
         ...(b.absent_deduction !== undefined && { absentDeduction: b.absent_deduction }),
+        ...(b.leave_ref_prefix   !== undefined && { leaveRefPrefix: b.leave_ref_prefix || null }),
+        ...(b.leave_instructions !== undefined && { leaveInstructions: b.leave_instructions || null }),
+        ...(b.payroll_ref_prefix !== undefined && { payrollRefPrefix: b.payroll_ref_prefix || null }),
+        ...(b.payroll_word_format !== undefined && { payrollWordFormat: b.payroll_word_format }),
+        ...(b.location_required  !== undefined && { locationRequired: b.location_required }),
+        // "grace after checkin" is the existing graceMinutes.
+        ...(b.grace_after_checkin  !== undefined && { graceMinutes: b.grace_after_checkin }),
+        ...(b.grace_before_checkin !== undefined && { graceBeforeCheckin: b.grace_before_checkin }),
+        ...(b.grace_before_checkout !== undefined && { graceBeforeCheckout: b.grace_before_checkout }),
+        ...(b.grace_after_checkout !== undefined && { graceAfterCheckout: b.grace_after_checkout }),
+        ...(b.commission_excludes_tax !== undefined && { commissionExcludesTax: b.commission_excludes_tax }),
+        ...(b.todos_id_prefix    !== undefined && { todosIdPrefix: b.todos_id_prefix || null }),
       },
     });
     res.json(serializeSettings(s, await empShiftMap(req.user.business_id)));
@@ -940,7 +960,7 @@ function computeBalances(emp, types, leaves, overrideMap) {
 }
 function serializeLeave(l, empName) {
   return {
-    id: l.id, employee_id: l.employeeId, employee_name: empName,
+    id: l.id, reference_no: l.referenceNo || null, employee_id: l.employeeId, employee_name: empName,
     type: l.type, from: l.fromDate.toISOString().slice(0, 10), to: l.toDate.toISOString().slice(0, 10),
     days: l.days, reason: l.reason || '', status: l.status, approved_by: l.approvedBy || null,
   };
@@ -1090,8 +1110,10 @@ router.post('/leave', auth, validate(LeaveSchema), async (req, res, next) => {
     if (bal.paid && req.body.days > bal.balance) {
       return res.status(422).json({ title: `Only ${bal.balance} ${req.body.type} day(s) available`, status: 422 });
     }
+    const lset = await loadSettings(businessId);
     const created = await prisma.leave.create({ data: {
       businessId, employeeId: emp.id, type: req.body.type,
+      referenceNo: await nextRef(prisma.leave, businessId, lset.leaveRefPrefix),
       fromDate, toDate,
       days: req.body.days, reason: req.body.reason || null,
     }});
@@ -1325,7 +1347,7 @@ router.delete('/advance/:id', auth, requireRole('owner', 'manager'), async (req,
 // ── Todos ────────────────────────────────────────────────────────────────────────
 function serializeTodo(t) {
   return {
-    id: t.id, title: t.title, assigned_to: t.assignedTo, assigned_name: t.assignee?.name || '—',
+    id: t.id, reference_no: t.referenceNo || null, title: t.title, assigned_to: t.assignedTo, assigned_name: t.assignee?.name || '—',
     priority: t.priority, status: t.status, due: t.dueDate ? t.dueDate.toISOString().slice(0, 10) : '',
   };
 }
@@ -1337,9 +1359,10 @@ router.get('/todo', auth, async (req, res, next) => {
 });
 router.post('/todo', auth, validate(HrTodoSchema), async (req, res, next) => {
   try {
-    const b = req.body;
+    const b = req.body, businessId = req.user.business_id;
+    const tset = await loadSettings(businessId);
     const todo = await prisma.hrTodo.create({
-      data: { businessId: req.user.business_id, title: b.title, assignedTo: b.assigned_to || null, priority: b.priority || 'medium', dueDate: b.due ? new Date(b.due) : null },
+      data: { businessId, title: b.title, referenceNo: await nextRef(prisma.hrTodo, businessId, tset.todosIdPrefix), assignedTo: b.assigned_to || null, priority: b.priority || 'medium', dueDate: b.due ? new Date(b.due) : null },
       include: { assignee: { select: { name: true } } },
     });
     res.status(201).json(serializeTodo(todo));
@@ -1379,16 +1402,28 @@ function serializePayroll(p) {
   };
 }
 
-// YYYY/NNNN per business per year. Allocated inside the caller's transaction,
-// and the unique index on (business_id, reference_no) is the real guard.
-async function nextPayrollRef(tx, businessId, month) {
-  const year = String(month).slice(0, 4);
-  const last = await tx.payroll.findFirst({
-    where: { businessId, referenceNo: { startsWith: `${year}/` } },
+// prefix + zero-padded sequence, per business. Allocated inside the caller's
+// transaction where there is one; the unique index is the real guard.
+async function nextRef(model, businessId, prefix) {
+  const p = prefix || '';
+  const last = await model.findFirst({
+    where: { businessId, referenceNo: { startsWith: p } },
     orderBy: { referenceNo: 'desc' }, select: { referenceNo: true },
   });
-  const n = last ? parseInt(String(last.referenceNo).split('/')[1], 10) + 1 : 1;
-  return `${year}/${String(n).padStart(4, '0')}`;
+  const n = last ? (parseInt(String(last.referenceNo).slice(p.length), 10) || 0) + 1 : 1;
+  return `${p}${String(n).padStart(4, '0')}`;
+}
+
+// YYYY/NNNN per business per year. Allocated inside the caller's transaction,
+// and the unique index on (business_id, reference_no) is the real guard.
+async function nextPayrollRef(tx, businessId, month, prefix) {
+  const head = `${prefix || ''}${String(month).slice(0, 4)}/`;
+  const last = await tx.payroll.findFirst({
+    where: { businessId, referenceNo: { startsWith: head } },
+    orderBy: { referenceNo: 'desc' }, select: { referenceNo: true },
+  });
+  const n = last ? (parseInt(String(last.referenceNo).slice(head.length), 10) || 0) + 1 : 1;
+  return `${head}${String(n).padStart(4, '0')}`;
 }
 
 // ── Pay components ──────────────────────────────────────────────────────────
@@ -1594,7 +1629,7 @@ router.post('/payroll', auth, requireRole('owner', 'manager'), validate(PayrollS
           // drafts and commits them together — see POST /payroll-group.
           status: b.status || 'paid',
           paidAt: (b.status || 'paid') === 'paid' ? new Date() : null,
-          referenceNo: await nextPayrollRef(tx, businessId, b.month),
+          referenceNo: await nextPayrollRef(tx, businessId, b.month, settings.payrollRefPrefix),
           locationId: emp.locationId || null,
           createdById: req.user.id,
           groupId: b.group_id || null,
@@ -1668,6 +1703,7 @@ router.post('/payroll-group', auth, requireRole('owner', 'manager'), validate(Pa
       });
     }
 
+    const gSettings = await loadSettings(businessId);
     const group = await prisma.$transaction(async (tx) => {
       const g = await tx.payrollGroup.create({
         data: {
@@ -1685,7 +1721,7 @@ router.post('/payroll-group', auth, requireRole('owner', 'manager'), validate(Pa
             businessId, employeeId: emp.id, month: b.month, basic,
             deduction: comps.deductions, net,
             status: 'draft', groupId: g.id,
-            referenceNo: await nextPayrollRef(tx, businessId, b.month),
+            referenceNo: await nextPayrollRef(tx, businessId, b.month, settings.payrollRefPrefix),
             locationId: emp.locationId || null, createdById: req.user.id,
             ...(comps.lines.length && { lines: { create: comps.lines } }),
           },

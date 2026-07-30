@@ -460,6 +460,25 @@ const HrmSettingsSchema = z.object({
   // Either the literal 'day' (deduct a day's pay) or a fixed amount.
   absent_deduction: z.union([z.literal('day'), z.coerce.number().min(0)])
     .transform(v => String(v)).optional(),
+  // ── Leave ──
+  leave_ref_prefix:   optStr(20),
+  leave_instructions: optStr(5000),
+  // ── Payroll ──
+  payroll_ref_prefix: optStr(20),
+  // How an amount is spelled out on a printed payslip. The reference offers
+  // International/Indian for lakh-crore grouping; Somaliland uses international
+  // grouping, so this selects Somali-language number words instead.
+  payroll_word_format: z.enum(['international', 'somaliland']).optional(),
+  // ── Attendance ──
+  location_required:     z.coerce.boolean().optional(),
+  grace_before_checkin:  z.coerce.number().int().min(0).max(240).optional(),
+  grace_after_checkin:   z.coerce.number().int().min(0).max(240).optional(),
+  grace_before_checkout: z.coerce.number().int().min(0).max(240).optional(),
+  grace_after_checkout:  z.coerce.number().int().min(0).max(240).optional(),
+  // ── Sales targets ──
+  commission_excludes_tax: z.coerce.boolean().optional(),
+  // ── Essentials ──
+  todos_id_prefix: optStr(20),
 });
 const HolidaySchema = z.object({
   name:        shortStr(255),

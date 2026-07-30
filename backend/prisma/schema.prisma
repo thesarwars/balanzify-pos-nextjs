@@ -1063,7 +1063,8 @@ model HrAdvance {
 }
 
 model HrTodo {
-  id         String    @id @default(uuid()) @db.Uuid
+  id          String   @id @default(uuid()) @db.Uuid
+  referenceNo String?  @map("reference_no") @db.VarChar(50)
   businessId String    @map("business_id") @db.Uuid
   title      String    @db.VarChar(255)
   assignedTo String?   @map("assigned_to") @db.Uuid
@@ -1075,6 +1076,7 @@ model HrTodo {
   business Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
   assignee Employee? @relation(fields: [assignedTo], references: [id], onDelete: SetNull)
 
+  @@unique([businessId, referenceNo])
   @@index([businessId])
   @@map("hr_todos")
 }
@@ -1095,7 +1097,8 @@ model LeaveType {
 }
 
 model Leave {
-  id         String   @id @default(uuid()) @db.Uuid
+  id          String  @id @default(uuid()) @db.Uuid
+  referenceNo String? @map("reference_no") @db.VarChar(50)
   businessId String   @map("business_id") @db.Uuid
   employeeId String   @map("employee_id") @db.Uuid
   type       String   @db.VarChar(100)
@@ -1110,6 +1113,7 @@ model Leave {
   business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
 
+  @@unique([businessId, referenceNo])
   @@index([businessId])
   @@map("leaves")
 }
@@ -1328,6 +1332,25 @@ model HrmSettings {
   // seeder keyed off "are there zero org units?", so deleting them all brought
   // the whole default set back on the next read.
   orgSeeded              Boolean @default(false) @map("org_seeded")
+
+  // ── Leave ──
+  leaveRefPrefix       String? @map("leave_ref_prefix") @db.VarChar(20)
+  leaveInstructions    String? @map("leave_instructions")            // shown on the leave form
+  // ── Payroll ──
+  payrollRefPrefix     String? @map("payroll_ref_prefix") @db.VarChar(20)
+  // How an amount is spelled out on a printed payslip.
+  payrollWordFormat    String  @default("international") @map("payroll_word_format") @db.VarChar(20)
+  // ── Attendance ──
+  locationRequired     Boolean @default(false) @map("location_required")  // capture lat/long on clock-in
+  // graceMinutes above is the reference's "grace after checkin" (not counted as
+  // late). These are the other three windows it exposes.
+  graceBeforeCheckin   Int     @default(0) @map("grace_before_checkin")   // not counted as overtime
+  graceBeforeCheckout  Int     @default(0) @map("grace_before_checkout")  // not counted as early leave
+  graceAfterCheckout   Int     @default(0) @map("grace_after_checkout")   // not counted as overtime
+  // ── Sales targets ──
+  commissionExcludesTax Boolean @default(false) @map("commission_excludes_tax")
+  // ── Essentials ──
+  todosIdPrefix        String? @map("todos_id_prefix") @db.VarChar(20)
 
   business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
 
