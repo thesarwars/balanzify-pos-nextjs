@@ -2335,6 +2335,164 @@ describe('HRM', () => {
     expect([2, 8, me.flat_percent]).toContain(rep.commission_percent);
   });
 
+  test('leave entitlement resets on the type\'s counting interval', async () => {
+    const t = await request(app).post('/api/v1/hrm/leave-type').set(auth(hrToken))
+      .send({ name: 'Monthly', default_days: 2, count_interval: 'month', paid: true });
+    expect(t.status).toBe(201);
+    expect(t.body.count_interval).toBe('month');
+
+    const bal = await request(app).get(`/api/v1/hrm/leave-balance/${hrEmpId}`).set(auth(hrToken));
+    const m = bal.body.find(b => b.type === 'Monthly');
+    expect(m.count_interval).toBe('month');
+    // A monthly window is reported so the UI can say what it counted.
+    expect(m.period_from).toMatch(/^\d{4}-\d{2}-01$/);
+    expect(m.balance).toBe(2);
+
+    // A leave in a DIFFERENT month must not consume this month's entitlement —
+    // the whole point of the interval, and previously impossible.
+    const old = await request(app).post('/api/v1/hrm/leave').set(auth(hrToken))
+      .send({ employee_id: hrEmpId, type: 'Monthly', days: 2, from: '2026-01-05', to: '2026-01-06' });
+    expect(old.status).toBe(201);
+    const after = await request(app).get(`/api/v1/hrm/leave-balance/${hrEmpId}`).set(auth(hrToken));
+    expect(after.body.find(b => b.type === 'Monthly').balance).toBe(2);
+
+    // Switching it to never-reset makes that same leave count again.
+    const off = await request(app).put(`/api/v1/hrm/leave-type/${t.body.id}`)
+      .set(auth(hrToken)).send({ count_interval: 'none' });
+    expect(off.status).toBe(200);
+    const none = await request(app).get(`/api/v1/hrm/leave-balance/${hrEmpId}`).set(auth(hrToken));
+    const nb = none.body.find(b => b.type === 'Monthly');
+    expect(nb.period_from).toBeNull();
+    expect(nb.balance).toBe(0);
+  });
+
+  test('departments carry a code and description, and renaming moves the staff', async () => {
+    const made = await request(app).post('/api/v1/hrm/org').set(auth(hrToken))
+      .send({ kind: 'department', name: 'Warehouse', code: 'WH', description: 'Back of house' });
+    expect(made.status).toBe(201);
+    expect(made.body.code).toBe('WH');
+
+    await request(app).put(`/api/v1/hrm/employee/${hrEmpId}`).set(auth(hrToken)).send({ department: 'Warehouse' });
+    const renamed = await request(app).put(`/api/v1/hrm/org/${made.body.id}`)
+      .set(auth(hrToken)).send({ name: 'Stores', description: 'Renamed' });
+    expect(renamed.status).toBe(200);
+    expect(renamed.body.count).toBe(1);
+    // Employee.department is a denormalised string — the rename must carry it.
+    const emp = await request(app).get(`/api/v1/hrm/employee/${hrEmpId}`).set(auth(hrToken));
+    expect(emp.body.department).toBe('Stores');
+
+    const clash = await request(app).put(`/api/v1/hrm/org/${made.body.id}`)
+      .set(auth(hrToken)).send({ name: 'Sales' });
+    expect(clash.status).toBe(409);
+  });
+
+  test('attendance can be entered, corrected and removed by an admin', async () => {
+    const entry = await request(app).put('/api/v1/hrm/attendance/entry').set(auth(hrToken)).send({
+      employee_id: hrEmpId, date: '2026-05-11', clock_in: '08:00', clock_out: '16:30',
+      ip_address: '10.0.0.4', clock_in_note: 'Gate B',
+    });
+    expect(entry.status).toBe(200);
+    expect(entry.body.ip_address).toBe('10.0.0.4');
+    expect(entry.body.clock_in_note).toBe('Gate B');
+    expect(entry.body.hours).toBeCloseTo(8.5, 1);
+
+    // Upserts on (employee, date) — a correction, not a duplicate.
+    const fixed = await request(app).put('/api/v1/hrm/attendance/entry').set(auth(hrToken))
+      .send({ employee_id: hrEmpId, date: '2026-05-11', clock_in: '09:00', clock_out: '17:00' });
+    expect(fixed.body.clock_in).toBe('09:00');
+
+    const list = await request(app).get('/api/v1/hrm/attendance')
+      .set(auth(hrToken)).query({ from: '2026-05-11', to: '2026-05-11' });
+    expect(list.body.length).toBe(1);
+    const byEmp = await request(app).get('/api/v1/hrm/attendance')
+      .set(auth(hrToken)).query({ employee_id: hrEmpId, from: '2026-05-01', to: '2026-05-31' });
+    expect(byEmp.body.every(r => r.employee_id === hrEmpId)).toBe(true);
+    const bad = await request(app).get('/api/v1/hrm/attendance').set(auth(hrToken)).query({ from: '2026-13-40' });
+    expect(bad.status).toBe(400);
+
+    const del = await request(app).delete(`/api/v1/hrm/attendance/${fixed.body.id}`).set(auth(hrToken));
+    expect(del.status).toBe(200);
+    const gone = await request(app).get('/api/v1/hrm/attendance')
+      .set(auth(hrToken)).query({ from: '2026-05-11', to: '2026-05-11' });
+    expect(gone.body.length).toBe(0);
+  });
+
+  test('attendance rolls up by shift and by date', async () => {
+    const shift = await request(app).post('/api/v1/hrm/shift-template').set(auth(hrToken))
+      .send({ name: 'Rollup', type: 'fixed', start_time: '08:00', end_time: '17:00' });
+    await request(app).put(`/api/v1/hrm/shift-template/${shift.body.id}/assign`)
+      .set(auth(hrToken)).send({ employee_ids: [hrEmpId] });
+    await request(app).put('/api/v1/hrm/attendance/entry').set(auth(hrToken))
+      .send({ employee_id: hrEmpId, date: '2026-05-12', clock_in: '08:05', clock_out: '17:00' });
+
+    const shifts = await request(app).get('/api/v1/hrm/attendance/by-shift')
+      .set(auth(hrToken)).query({ date: '2026-05-12' });
+    expect(shifts.status).toBe(200);
+    const row = shifts.body.rows.find(r => r.shift === 'Rollup');
+    expect(row.assigned).toBe(1);
+    expect(row.present).toBe(1);
+    expect(row.absent).toBe(0);
+    // Nobody clocked in the day before, so the same roster is fully absent.
+    const empty = await request(app).get('/api/v1/hrm/attendance/by-shift')
+      .set(auth(hrToken)).query({ date: '2026-05-13' });
+    expect(empty.body.rows.find(r => r.shift === 'Rollup').absent).toBe(1);
+
+    const dates = await request(app).get('/api/v1/hrm/attendance/by-date')
+      .set(auth(hrToken)).query({ from: '2026-05-11', to: '2026-05-13' });
+    expect(dates.status).toBe(200);
+    expect(dates.body.rows.length).toBe(3);
+    expect(dates.body.rows.find(r => r.date === '2026-05-12').present).toBe(1);
+    const backwards = await request(app).get('/api/v1/hrm/attendance/by-date')
+      .set(auth(hrToken)).query({ from: '2026-05-13', to: '2026-05-01' });
+    expect(backwards.status).toBe(400);
+  });
+
+  test('attendance import reports the rows it could not take', async () => {
+    const email = `hremp_${RUN}@balanzify.test`;
+    const res = await request(app).post('/api/v1/hrm/attendance/import').set(auth(hrToken)).send({
+      rows: [
+        { email, clock_in_time: '2026-05-20 08:15:00', clock_out_time: '2026-05-20 17:10:00', ip_address: '10.1.1.1' },
+        { email, clock_in_time: 'not a time' },
+        { email: 'nobody@nowhere.test', clock_in_time: '2026-05-20 08:00:00' },
+        { email, clock_in_time: '2026-05-21 08:00:00', clock_out_time: '2026-05-22 08:00:00' },
+      ],
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.imported).toBe(1);
+    expect(res.body.failed).toBe(3);
+    expect(res.body.errors.map(e => e.line).sort()).toEqual([2, 3, 4]);
+
+    const list = await request(app).get('/api/v1/hrm/attendance')
+      .set(auth(hrToken)).query({ from: '2026-05-20', to: '2026-05-20' });
+    expect(list.body[0].clock_in).toBe('08:15');
+    expect(list.body[0].ip_address).toBe('10.1.1.1');
+  });
+
+  test('a leave request can be edited while pending, but not once approved', async () => {
+    const filed = await request(app).post('/api/v1/hrm/leave').set(auth(hrToken))
+      .send({ employee_id: hrEmpId, type: 'Casual', days: 1, from: '2026-11-02', to: '2026-11-02' });
+    expect(filed.status).toBe(201);
+
+    const edited = await request(app).put(`/api/v1/hrm/leave/${filed.body.id}/details`).set(auth(hrToken))
+      .send({ employee_id: hrEmpId, type: 'Casual', days: 2, from: '2026-11-02', to: '2026-11-03', reason: 'Extended' });
+    expect(edited.status).toBe(200);
+    expect(edited.body.days).toBe(2);
+    expect(edited.body.reason).toBe('Extended');
+
+    const tooLong = await request(app).put(`/api/v1/hrm/leave/${filed.body.id}/details`).set(auth(hrToken))
+      .send({ employee_id: hrEmpId, type: 'Casual', days: 9, from: '2026-11-02', to: '2026-11-03' });
+    expect(tooLong.status).toBe(422);
+
+    await request(app).put(`/api/v1/hrm/leave/${filed.body.id}`).set(auth(hrToken)).send({ status: 'approved' });
+    // Approved days are committed against the entitlement.
+    const late = await request(app).put(`/api/v1/hrm/leave/${filed.body.id}/details`).set(auth(hrToken))
+      .send({ employee_id: hrEmpId, type: 'Casual', days: 1, from: '2026-11-02', to: '2026-11-02' });
+    expect(late.status).toBe(422);
+    expect(late.body.code).toBe('LEAVE_APPROVED');
+    const del = await request(app).delete(`/api/v1/hrm/leave/${filed.body.id}`).set(auth(hrToken));
+    expect(del.status).toBe(422);
+  });
+
   test('settings expose every field the Settings tab edits, and refs are prefixed', async () => {
     const res = await request(app).put('/api/v1/hrm/settings').set(auth(hrToken)).send({
       leave_ref_prefix: 'LV-', leave_instructions: 'Apply two weeks ahead.',
