@@ -689,6 +689,41 @@ router.post('/attendance/break', auth, validate(AttendanceClockSchema), async (r
   } catch (err) { next(err); }
 });
 
+// Close forgotten clock-ins. A shift with auto_clock_out set says "this person
+// will not remember to clock out", so the open row is closed at the shift end
+// rather than left running — which, before this, meant the hours climbed all
+// night and fed straight into payroll overtime.
+router.post('/attendance/auto-clock-out', auth, requireRole('owner', 'manager'),
+  validate(z.object({
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD').optional().nullable(),
+  })), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const settings = await loadSettings(businessId);
+    const date = new Date(req.body.date || tzParts(settings.timezone).date);
+    // Only shifts that opted in, and only rows still open.
+    const assignments = await prisma.shiftAssignment.findMany({
+      where: { businessId, shift: { autoClockOut: true, type: 'fixed', endTime: { not: null } } },
+      include: { shift: { select: { id: true, endTime: true } } },
+    });
+    if (!assignments.length) return res.json({ closed: 0 });
+    const endFor = new Map(assignments.map(a => [a.employeeId, a.shift.endTime]));
+    const open = await prisma.attendance.findMany({
+      where: { businessId, date, clockIn: { not: null }, clockOut: null, employeeId: { in: [...endFor.keys()] } },
+      select: { id: true, employeeId: true },
+    });
+    let closed = 0;
+    for (const rec of open) {
+      await prisma.attendance.update({
+        where: { id: rec.id },
+        data: { clockOut: endFor.get(rec.employeeId), clockOutNote: 'Auto clocked out at shift end' },
+      });
+      closed++;
+    }
+    res.json({ closed });
+  } catch (err) { next(err); }
+});
+
 router.post('/attendance/auto-absent', auth, requireRole('owner', 'manager'),
   validate(z.object({
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD').optional().nullable(),

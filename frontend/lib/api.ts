@@ -4518,6 +4518,11 @@ const API: any = {
       if (REAL_MODE) return await realReq('DELETE', '/hrm/shift-template/' + id);
       return null;
     },
+    // Close forgotten clock-ins on shifts that opt into auto clock-out.
+    async autoClockOut(date?: any) {
+      if (REAL_MODE) return await realReq('POST', '/hrm/attendance/auto-clock-out', { body: date ? { date } : {} });
+      return null;
+    },
     async assignShiftTemplate(id: any, employeeIds: any[]) {
       if (REAL_MODE) return await realReq('PUT', '/hrm/shift-template/' + id + '/assign', { body: { employee_ids: employeeIds } });
       return null;

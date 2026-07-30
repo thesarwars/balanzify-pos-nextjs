@@ -168,7 +168,7 @@ export function HRM({ T }: { T: any }) {
           : tab === 'holidays' ? <Btn T={T} kind="accent" onClick={() => setModal('holiday')}>+ Add Holiday</Btn>
           : tab === 'shifts' ? <Btn T={T} kind="accent" onClick={() => setModal('shift')}>+ Add Shift</Btn>
           : tab === 'advances' ? <Btn T={T} kind="accent" onClick={() => setModal('advance')}>+ Give Advance</Btn>
-          : tab === 'attendance' ? <><Btn T={T} kind="ghost" onClick={() => setModal('shifttemplate')}>+ Add Shift</Btn><Btn T={T} kind="ghost" onClick={() => setModal('attsettings')}><LuSettings size={13} style={{ verticalAlign: -2, marginRight: 5 }} />Attendance Settings</Btn></>
+          : tab === 'attendance' ? <><Btn T={T} kind="ghost" onClick={() => API.hrm.autoClockOut().then((r: any) => { show(r?.closed ? `Closed ${r.closed} open clock-in(s)` : 'Nothing left open'); reload(); }).catch((e: any) => show(e.message))}>Auto clock out</Btn><Btn T={T} kind="ghost" onClick={() => setModal('shifttemplate')}>+ Add Shift</Btn><Btn T={T} kind="ghost" onClick={() => setModal('attsettings')}><LuSettings size={13} style={{ verticalAlign: -2, marginRight: 5 }} />Attendance Settings</Btn></>
           : tab === 'report' ? <Btn T={T} kind="ghost" onClick={() => API.hrm.autoAbsent().then((r: any) => { show(r.added ? `Marked ${r.added} absent` : 'No one to mark absent'); API.hrm.attendanceSummary(reportMonth).then(setReport); })}><LuTriangleAlert size={13} style={{ verticalAlign: -2, marginRight: 5 }} />Mark absentees</Btn>
           : tab === 'todos' ? <Btn T={T} kind="accent" onClick={() => setModal('todo')}>+ Add Task</Btn> : null}
         </span>} />
