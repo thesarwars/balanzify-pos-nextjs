@@ -624,6 +624,7 @@ model Business {
   hrmSettings        HrmSettings?
   holidays           Holiday[]
   shiftTemplates     ShiftTemplate[]
+  payComponents      PayComponent[]
   shiftAssignments   ShiftAssignment[]
   serviceTypes       ServiceType[]
   subscription         Subscription?
@@ -950,6 +951,7 @@ model Employee {
   advances        HrAdvance[]
   todos           HrTodo[]
   payrolls        Payroll[]
+  payComponents   PayComponent[]
 
   @@index([businessId])
   @@map("employees")
@@ -979,8 +981,9 @@ model Payroll {
   status           String   @default("paid") @db.VarChar(20)
   createdAt        DateTime @default(now()) @map("created_at")
 
-  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  business Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  employee Employee      @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  lines    PayrollLine[]
 
   @@unique([businessId, employeeId, month]) // one payroll per employee per month
   @@index([businessId])
@@ -1208,6 +1211,42 @@ model ShiftAssignment {
   @@unique([shiftId, employeeId])
   @@index([businessId, employeeId])
   @@map("shift_assignments")
+}
+
+// A named, reusable earning or deduction. Optionally scoped to one employee
+// (null = everyone), effective from a date, fixed or a percentage of basic.
+// Payroll used to be six anonymous Decimal buckets retyped by hand each month.
+model PayComponent {
+  id             String    @id @default(uuid()) @db.Uuid
+  businessId     String    @map("business_id") @db.Uuid
+  description    String    @db.VarChar(255)
+  type           String    @db.VarChar(20)                     // earning | deduction
+  amountType     String    @default("fixed") @map("amount_type") @db.VarChar(20) // fixed | percentage
+  amount         Decimal   @default(0) @db.Decimal(12, 2)      // a % is of basic
+  applicableDate DateTime? @map("applicable_date") @db.Date    // effective from
+  employeeId     String?   @map("employee_id") @db.Uuid        // null = everyone
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  business Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  employee Employee? @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
+  @@map("pay_components")
+}
+
+// The components a run actually applied, resolved at run time. Without these
+// the payslip could only ever print the five compiled-in words.
+model PayrollLine {
+  id          String  @id @default(uuid()) @db.Uuid
+  payrollId   String  @map("payroll_id") @db.Uuid
+  description String  @db.VarChar(255)
+  type        String  @db.VarChar(20)   // earning | deduction
+  amount      Decimal @default(0) @db.Decimal(12, 2)
+
+  payroll Payroll @relation(fields: [payrollId], references: [id], onDelete: Cascade)
+
+  @@index([payrollId])
+  @@map("payroll_lines")
 }
 
 model HrmSettings {

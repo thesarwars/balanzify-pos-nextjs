@@ -547,6 +547,17 @@ const HrTodoSchema = z.object({
   due:         isoDate,
 });
 const StatusSchema = z.object({ status: z.string().trim().min(1).max(20) });
+const PayComponentSchema = z.object({
+  description:     shortStr(255),
+  type:            z.enum(['earning', 'deduction']),
+  amount_type:     z.enum(['fixed', 'percentage']).default('fixed'),
+  amount:          money.default(0),
+  applicable_date: isoDate,
+  // Blank means it applies to everyone.
+  employee_id:     uuid.optional().nullable(),
+}).refine(v => v.amount_type !== 'percentage' || v.amount <= 100, {
+  message: 'A percentage cannot exceed 100.', path: ['amount'],
+});
 const PayrollSchema = z.object({
   employee_id: uuid,
   month:       z.string().regex(/^\d{4}-\d{2}$/, 'Use YYYY-MM'),
@@ -1387,7 +1398,7 @@ module.exports = {
   EmployeeSchema, EmployeeUpdateSchema, OrgUnitSchema, HrmSettingsSchema, HolidaySchema, ShiftTemplateSchema, ShiftAssignSchema, AttendanceClockSchema,
   LeaveTypeSchema, LeaveTypeUpdateSchema, LeaveSchema, LeaveStatusSchema, LeaveOverrideSchema,
   RosterShiftSchema, RosterSwapSchema, HrAdvanceSchema, HrTodoSchema, StatusSchema,
-  PayrollSchema, PayslipSettingsSchema, PackageSchema, ServiceTypeSchema,
+  PayrollSchema, PayComponentSchema, PayslipSettingsSchema, PackageSchema, ServiceTypeSchema,
   PaginationSchema, ProductVariantSchema, OpeningStockSchema,
   CouponSchema, ApplyCouponSchema, LoyaltyRuleSchema, RewardSettingsSchema, PettyCashSchema,
   BundleSchema, ScheduledReportSchema, CustomerSegmentSchema,

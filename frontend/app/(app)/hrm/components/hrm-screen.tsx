@@ -44,6 +44,8 @@ export function HRM({ T }: { T: any }) {
   const [editEmp, setEditEmp] = useStateHr<any>(null);
   const [holidays, setHolidays] = useStateHr<any[]>([]);
   const [templates, setTemplates] = useStateHr<any[]>([]);
+  const [payComps, setPayComps] = useStateHr<any[]>([]);
+  const [editComp, setEditComp] = useStateHr<any>(null);
   const [editTpl, setEditTpl] = useStateHr<any>(null);
   const [assignTpl, setAssignTpl] = useStateHr<any>(null);
   const [editHol, setEditHol] = useStateHr<any>(null);
@@ -71,6 +73,7 @@ export function HRM({ T }: { T: any }) {
     API.hrm.leaveTypes().then(setLeaveTypes).catch(() => {});
     API.hrm.holidays().then(setHolidays).catch(() => {});
     API.hrm.shiftTemplates().then(setTemplates).catch(() => {});
+    API.hrm.payComponents().then(setPayComps).catch(() => {});
     API.hrm.advances().then(setAdvances).catch(() => {});
   }, [leaveFrom, leaveTo]);
   useEffectHr(() => { API.module.list().then((ms: any[]) => setEnabled(!!(ms.find((m: any) => m.key === 'hrm') || {}).enabled)).catch(() => setEnabled(false)); }, []);
@@ -164,7 +167,7 @@ export function HRM({ T }: { T: any }) {
           {tab === 'employees' ? <Btn T={T} kind="accent" onClick={() => setModal('employee')}>+ Add Employee</Btn>
           : tab === 'org' ? <Btn T={T} kind="accent" onClick={() => setModal('org')}>+ Add</Btn>
           : tab === 'leave' ? <><Btn T={T} kind="ghost" onClick={() => setModal('leavetypes')}><LuSettings size={13} style={{ verticalAlign: -2, marginRight: 5 }} />Leave Types</Btn><Btn T={T} kind="accent" onClick={() => setModal('leave')}>+ Apply Leave</Btn></>
-          : tab === 'payroll' ? <><Btn T={T} kind="ghost" onClick={() => setModal('payslipsettings')}><LuSettings size={13} style={{ verticalAlign: -2, marginRight: 5 }} />Payslip</Btn><Btn T={T} kind="accent" onClick={() => setModal('payroll')}><LuPlay size={12} style={{ verticalAlign: -2, marginRight: 5 }} />Run Payroll</Btn></>
+          : tab === 'payroll' ? <><Btn T={T} kind="ghost" onClick={() => setModal('payslipsettings')}><LuSettings size={13} style={{ verticalAlign: -2, marginRight: 5 }} />Payslip</Btn><Btn T={T} kind="accent" onClick={() => setModal('payroll')}><LuPlay size={12} style={{ verticalAlign: -2, marginRight: 5 }} />Run Payroll</Btn><Btn T={T} kind="ghost" onClick={() => setModal('paycomponent')}>+ Pay Component</Btn></>
           : tab === 'holidays' ? <Btn T={T} kind="accent" onClick={() => setModal('holiday')}>+ Add Holiday</Btn>
           : tab === 'shifts' ? <Btn T={T} kind="accent" onClick={() => setModal('shift')}>+ Add Shift</Btn>
           : tab === 'advances' ? <Btn T={T} kind="accent" onClick={() => setModal('advance')}>+ Give Advance</Btn>
@@ -416,6 +419,35 @@ export function HRM({ T }: { T: any }) {
 
           {/* PAYROLL */}
           {tab === 'payroll' && (
+            <div style={{ marginBottom: 16 }}>
+              <Panel T={T} title="Pay components" pad={false}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead><tr style={{ background: T.paperAlt }}>
+                    {['Description', 'Type', 'Amount', 'Applicable date', 'Employee', ''].map((h, i) => (
+                      <th key={h} style={{ padding: '10px 18px', textAlign: i === 5 ? 'right' : 'left', fontSize: 11, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', color: T.inkSub, borderBottom: `1px solid ${T.line}` }}>{h}</th>
+                    ))}
+                  </tr></thead>
+                  <tbody>
+                    {payComps.length === 0 && <tr><td colSpan={6} style={{ padding: 22, textAlign: 'center', fontSize: 12.5, color: T.inkMute }}>No pay components. Add one to apply it automatically to every run.</td></tr>}
+                    {payComps.map((c: any) => (
+                      <tr key={c.id}>
+                        <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 13, fontWeight: 600, color: T.ink }}>{c.description}</td>
+                        <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}` }}><Badge T={T} tone={c.type === 'earning' ? 'green' : 'red'}>{c.type}</Badge></td>
+                        <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}`, fontFamily: T.fMono, fontSize: 12.5, color: T.ink }}>{c.amount_type === 'percentage' ? `${c.amount}% of basic` : money(c.amount)}</td>
+                        <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 12.5, color: T.inkSub, fontFamily: T.fMono }}>{c.applicable_date || '—'}</td>
+                        <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 12.5, color: T.inkSub }}>{c.employee_name}</td>
+                        <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right' }}>
+                          <button onClick={() => setEditComp(c)} style={hrMini(T)}>Edit</button>
+                          <button onClick={() => API.hrm.removePayComponent(c.id).then(reload)} style={{ ...hrMini(T, true), marginLeft: 6 }}>Remove</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </Panel>
+            </div>
+          )}
+          {tab === 'payroll' && (
             <Panel T={T} pad={false}>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead><tr>{[['Employee', 'l'], ['Month', 'l'], ['Basic', 'r'], ['Allowance', 'r'], ['Deduction', 'r'], ['Net pay', 'r'], ['Status', 'l']].map(([h, a], i) => <th key={i} style={{ textAlign: a === 'r' ? 'right' : 'left', padding: '11px 18px', fontSize: 10, fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', color: T.inkSub, background: T.paperAlt, borderBottom: `1px solid ${T.line}` }}>{h}</th>)}</tr></thead>
@@ -568,6 +600,8 @@ export function HRM({ T }: { T: any }) {
       </div>
 
       {modal === 'employee' && <EmployeeModal T={T} meta={meta} locs={locs} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Employee added'); reload(); }} />}
+      {modal === 'paycomponent' && <PayComponentModal T={T} emps={emps} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Pay component added'); reload(); }} />}
+      {editComp && <PayComponentModal T={T} emps={emps} component={editComp} onClose={() => setEditComp(null)} onSaved={() => { setEditComp(null); show('Pay component updated'); reload(); }} />}
       {modal === 'shifttemplate' && <ShiftTemplateModal T={T} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Shift added'); reload(); }} />}
       {editTpl && <ShiftTemplateModal T={T} template={editTpl} onClose={() => setEditTpl(null)} onSaved={() => { setEditTpl(null); show('Shift updated'); reload(); }} />}
       {assignTpl && <ShiftAssignModal T={T} emps={emps} template={assignTpl} onClose={() => setAssignTpl(null)} onSaved={() => { setAssignTpl(null); show('Employees assigned'); reload(); }} />}
@@ -591,6 +625,40 @@ export function HRM({ T }: { T: any }) {
 }
 
 // Doubles as the edit form: pass `employee` to load it and PUT instead of POST.
+// A named earning or deduction applied automatically to every payroll run.
+function PayComponentModal({ T, emps, component, onClose, onSaved }: { T: any; emps: any[]; component?: any; onClose: () => void; onSaved: () => void }) {
+  const editing = !!component;
+  const [f, setF] = useStateHr<any>(editing
+    ? { description: component.description, type: component.type, amount_type: component.amount_type, amount: String(component.amount), applicable_date: component.applicable_date || '', employee_id: component.employee_id || '' }
+    : { description: '', type: 'earning', amount_type: 'fixed', amount: '', applicable_date: '', employee_id: '' });
+  const [busy, setBusy] = useStateHr(false); const [err, setErr] = useStateHr<any>(null);
+  const set = (k: string, v: any) => setF((s: any) => ({ ...s, [k]: v }));
+  return (
+    <Modal T={T} title={editing ? `Edit ${component.description}` : 'Add pay component'} width={560} onClose={onClose}
+      footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Cancel</Btn><Btn T={T} kind="accent" onClick={async () => {
+        if (!f.description.trim()) { setErr('Description is required.'); return; }
+        if (f.amount_type === 'percentage' && Number(f.amount) > 100) { setErr('A percentage cannot exceed 100.'); return; }
+        setBusy(true); setErr(null);
+        try { if (editing) await API.hrm.updatePayComponent(component.id, f); else await API.hrm.addPayComponent(f); onSaved(); }
+        catch (e: any) { setErr(e.message); } finally { setBusy(false); }
+      }} disabled={busy}>{busy ? 'Saving…' : editing ? 'Save changes' : 'Add'}</Btn></>}>
+      <FormGrid>
+        <Field T={T} label="Description" full><TextField T={T} value={f.description} onChange={v => set('description', v)} placeholder="e.g. Transport allowance" /></Field>
+        <Field T={T} label="Type"><SelectField T={T} value={f.type} options={['earning', 'deduction']} onChange={v => set('type', v)} render={(v: any) => v === 'earning' ? 'Earning' : 'Deduction'} /></Field>
+        <Field T={T} label="Employee" hint="Leave blank to apply to everyone">
+          <SelectField T={T} value={String(f.employee_id)} options={['', ...emps.map((e: any) => String(e.id))]}
+            onChange={v => set('employee_id', v)}
+            render={(v: any) => v === '' ? 'All employees' : (emps.find((e: any) => String(e.id) === v) || {}).name || v} />
+        </Field>
+        <Field T={T} label="Amount type"><SelectField T={T} value={f.amount_type} options={['fixed', 'percentage']} onChange={v => set('amount_type', v)} render={(v: any) => v === 'fixed' ? 'Fixed' : 'Percentage of basic'} /></Field>
+        <Field T={T} label="Amount"><TextField T={T} type="number" value={f.amount} onChange={v => set('amount', v)} placeholder="0" /></Field>
+        <Field T={T} label="Applicable date" hint="Applies from this month onward; blank = always" full><TextField T={T} type="date" value={f.applicable_date} onChange={v => set('applicable_date', v)} /></Field>
+      </FormGrid>
+      {err && <div style={{ marginTop: 14, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}><LuTriangleAlert size={13} style={{ verticalAlign: -2, marginRight: 5 }} />{err}</div>}
+    </Modal>
+  );
+}
+
 const DOW = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 // A named, reusable shift. A flexible shift keeps no fixed times, so the time

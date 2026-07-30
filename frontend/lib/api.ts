@@ -4614,6 +4614,33 @@ const API: any = {
       if (REAL_MODE) return await realReq('POST', '/hrm/payroll/compute', { body: { gross: Number(gross || 0), country: country || 'none' } });
       return null;
     },
+    // Pay components — named, reusable earnings and deductions.
+    async payComponents() {
+      if (REAL_MODE) return await realReq('GET', '/hrm/pay-component');
+      return [];
+    },
+    async addPayComponent(body: any) {
+      if (REAL_MODE) return await realReq('POST', '/hrm/pay-component', { body: {
+        description: body.description, type: body.type, amount_type: body.amount_type,
+        amount: Number(body.amount || 0),
+        applicable_date: body.applicable_date || undefined,
+        employee_id: isUuid(body.employee_id) ? body.employee_id : undefined,
+      }});
+      return null;
+    },
+    async updatePayComponent(id: any, body: any) {
+      if (REAL_MODE) return await realReq('PUT', '/hrm/pay-component/' + id, { body: {
+        description: body.description, type: body.type, amount_type: body.amount_type,
+        amount: Number(body.amount || 0),
+        applicable_date: body.applicable_date || undefined,
+        employee_id: isUuid(body.employee_id) ? body.employee_id : undefined,
+      }});
+      return null;
+    },
+    async removePayComponent(id: any) {
+      if (REAL_MODE) return await realReq('DELETE', '/hrm/pay-component/' + id);
+      return null;
+    },
     async payslip(id: any) {
       if (REAL_MODE) return await realReq('GET', '/hrm/payslip/' + id);
       return (await transport('GET', '/connector/api/hrm/payslip/' + id)).data;

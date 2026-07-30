@@ -13,7 +13,7 @@ const { validate } = require('../middleware/validate');
 const { EmployeeSchema, EmployeeUpdateSchema, OrgUnitSchema, HrmSettingsSchema, HolidaySchema, ShiftTemplateSchema, ShiftAssignSchema, AttendanceClockSchema,
   LeaveTypeSchema, LeaveTypeUpdateSchema, LeaveSchema, LeaveStatusSchema, LeaveOverrideSchema,
   RosterShiftSchema, RosterSwapSchema, HrAdvanceSchema, HrTodoSchema, StatusSchema,
-  PayrollSchema, PayslipSettingsSchema } = require('../validation/schemas');
+  PayrollSchema, PayComponentSchema, PayslipSettingsSchema } = require('../validation/schemas');
 
 const router = express.Router();
 
@@ -1302,13 +1302,122 @@ function serializePayroll(p) {
     statutory_country: p.statutoryCountry || null,
     paye: parseFloat(p.paye || 0), nssf: parseFloat(p.nssf || 0), shif: parseFloat(p.shif || 0),
     housing_levy: parseFloat(p.housingLevy || 0), statutory_total: parseFloat(p.statutoryTotal || 0),
+    lines: (p.lines || []).map(l => ({ description: l.description, type: l.type, amount: parseFloat(l.amount || 0) })),
+    gross: +(parseFloat(p.basic || 0) + parseFloat(p.allowance || 0) + parseFloat(p.overtime || 0)
+      + parseFloat(p.bonus || 0) + parseFloat(p.incentive || 0)
+      + (p.lines || []).filter(l => l.type === 'earning').reduce((s, l) => s + parseFloat(l.amount || 0), 0)).toFixed(2),
     net: parseFloat(p.net || 0), status: p.status,
   };
 }
 
+// ── Pay components ──────────────────────────────────────────────────────────
+function serializeComponent(c) {
+  return {
+    id: c.id, description: c.description, type: c.type,
+    amount_type: c.amountType, amount: parseFloat(c.amount || 0),
+    applicable_date: c.applicableDate ? c.applicableDate.toISOString().slice(0, 10) : null,
+    employee_id: c.employeeId, employee_name: c.employee?.name || 'All employees',
+  };
+}
+
+// The components that apply to one employee for one month: theirs plus the
+// business-wide ones, effective on or before the month end.
+async function componentsFor(businessId, employeeId, month) {
+  const { end } = monthRange(month);
+  const monthEnd = new Date(end); monthEnd.setUTCDate(monthEnd.getUTCDate() - 1);
+  return prisma.payComponent.findMany({
+    where: {
+      businessId,
+      OR: [{ employeeId: null }, { employeeId }],
+      AND: [{ OR: [{ applicableDate: null }, { applicableDate: { lte: monthEnd } }] }],
+    },
+    orderBy: { description: 'asc' },
+  });
+}
+
+// Resolve them into money against a basic. A percentage is of basic.
+function applyComponents(components, basic) {
+  const lines = components.map(c => ({
+    description: c.description,
+    type: c.type,
+    amount: +(c.amountType === 'percentage'
+      ? basic * parseFloat(c.amount || 0) / 100
+      : parseFloat(c.amount || 0)).toFixed(2),
+  })).filter(l => l.amount > 0);
+  return {
+    lines,
+    earnings: +lines.filter(l => l.type === 'earning').reduce((s, l) => s + l.amount, 0).toFixed(2),
+    deductions: +lines.filter(l => l.type === 'deduction').reduce((s, l) => s + l.amount, 0).toFixed(2),
+  };
+}
+
+router.get('/pay-component', auth, async (req, res, next) => {
+  try {
+    const rows = await prisma.payComponent.findMany({
+      where: { businessId: req.user.business_id },
+      include: { employee: { select: { name: true } } },
+      orderBy: [{ type: 'asc' }, { description: 'asc' }],
+    });
+    res.json(rows.map(serializeComponent));
+  } catch (err) { next(err); }
+});
+
+router.post('/pay-component', auth, requireRole('owner', 'manager'), validate(PayComponentSchema), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id, b = req.body;
+    if (b.employee_id) {
+      const emp = await prisma.employee.findFirst({ where: { id: b.employee_id, businessId }, select: { id: true } });
+      if (!emp) return res.status(404).json({ title: 'Employee not found', status: 404 });
+    }
+    const created = await prisma.payComponent.create({
+      data: {
+        businessId, description: b.description, type: b.type,
+        amountType: b.amount_type, amount: b.amount,
+        applicableDate: b.applicable_date ? new Date(b.applicable_date) : null,
+        employeeId: b.employee_id || null,
+      },
+      include: { employee: { select: { name: true } } },
+    });
+    res.status(201).json(serializeComponent(created));
+  } catch (err) { next(err); }
+});
+
+router.put('/pay-component/:id', auth, requireRole('owner', 'manager'), validate(PayComponentSchema), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id, b = req.body;
+    const existing = await prisma.payComponent.findFirst({ where: { id: req.params.id, businessId }, select: { id: true } });
+    if (!existing) return res.status(404).json({ title: 'Not found', status: 404 });
+    if (b.employee_id) {
+      const emp = await prisma.employee.findFirst({ where: { id: b.employee_id, businessId }, select: { id: true } });
+      if (!emp) return res.status(404).json({ title: 'Employee not found', status: 404 });
+    }
+    const updated = await prisma.payComponent.update({
+      where: { id: req.params.id },
+      data: {
+        description: b.description, type: b.type, amountType: b.amount_type, amount: b.amount,
+        applicableDate: b.applicable_date ? new Date(b.applicable_date) : null,
+        employeeId: b.employee_id || null,
+      },
+      include: { employee: { select: { name: true } } },
+    });
+    res.json(serializeComponent(updated));
+  } catch (err) { next(err); }
+});
+
+router.delete('/pay-component/:id', auth, requireRole('owner', 'manager'), async (req, res, next) => {
+  try {
+    const c = await prisma.payComponent.findFirst({ where: { id: req.params.id, businessId: req.user.business_id }, select: { id: true } });
+    if (!c) return res.status(404).json({ title: 'Not found', status: 404 });
+    // Runs that already applied it keep their own PayrollLine rows, so history
+    // survives the definition being retired.
+    await prisma.payComponent.delete({ where: { id: req.params.id } });
+    res.json({ deleted: true });
+  } catch (err) { next(err); }
+});
+
 router.get('/payroll', auth, async (req, res, next) => {
   try {
-    const rows = await prisma.payroll.findMany({ where: { businessId: req.user.business_id }, include: { employee: { select: { name: true } } }, orderBy: { createdAt: 'desc' } });
+    const rows = await prisma.payroll.findMany({ where: { businessId: req.user.business_id }, include: { employee: { select: { name: true } }, lines: true }, orderBy: { createdAt: 'desc' } });
     res.json(rows.map(serializePayroll));
   } catch (err) { next(err); }
 });
@@ -1344,7 +1453,11 @@ router.post('/payroll', auth, requireRole('owner', 'manager'), validate(PayrollS
         proration = { worked_days: workedDays, days_in_month: daysInMonth, full_basic: b.basic, prorated_basic: basic };
       }
     }
-    const gross = basic + b.allowance + b.overtime + b.bonus + b.incentive;
+    // Named components resolved for this employee and month, on top of the
+    // freeform amounts typed on the run itself.
+    const comps = applyComponents(await componentsFor(businessId, emp.id, b.month), basic);
+    const gross = +(basic + b.allowance + b.overtime + b.bonus + b.incentive + comps.earnings).toFixed(2);
+    const freeformDeduction = +(b.deduction + comps.deductions).toFixed(2);
     // Statutory deductions (PAYE/NSSF/SHIF/Housing) computed from gross, on top of
     // the freeform deduction (advances etc.). No country → no statutory (launch markets).
     const stat = b.statutory_country && b.statutory_country !== 'none'
@@ -1373,23 +1486,24 @@ router.post('/payroll', auth, requireRole('owner', 'manager'), validate(PayrollS
       recovered = +recovered.toFixed(2);
       // Net is reduced by what was ACTUALLY recovered — asking to recover more
       // than is outstanding must not over-deduct the employee.
-      const net = +(gross - b.deduction - recovered - statutoryTotal).toFixed(2);
+      const net = +(gross - freeformDeduction - recovered - statutoryTotal).toFixed(2);
       const created = await tx.payroll.create({
         data: {
           businessId, employeeId: emp.id, month: b.month, basic, allowance: b.allowance,
-          overtime: b.overtime, bonus: b.bonus, incentive: b.incentive, deduction: b.deduction,
+          overtime: b.overtime, bonus: b.bonus, incentive: b.incentive, deduction: freeformDeduction,
           advanceRecovered: recovered,
+          ...(comps.lines.length && { lines: { create: comps.lines } }),
           statutoryCountry: stat ? stat.country : null,
           paye: stat ? stat.paye : 0, nssf: stat ? stat.nssf : 0, shif: stat ? stat.shif : 0,
           housingLevy: stat ? stat.housing_levy : 0, statutoryTotal,
           net, status: 'paid',
         },
-        include: { employee: { select: { name: true } } },
+        include: { employee: { select: { name: true } }, lines: true },
       });
       // GL: gross wages expensed, net paid in cash, freeform + statutory withheld as payables.
       // postPayroll's contract is `deduction = advanceRecovered + withholding`,
       // so hand it the combined figure to keep the journal balanced.
-      await accounting.postPayroll(tx, { businessId, gross, net, deduction: +(b.deduction + recovered).toFixed(2), advanceRecovered: recovered, statutory: statutoryTotal, sourceId: created.id, createdById: req.user.id });
+      await accounting.postPayroll(tx, { businessId, gross, net, deduction: +(freeformDeduction + recovered).toFixed(2), advanceRecovered: recovered, statutory: statutoryTotal, sourceId: created.id, createdById: req.user.id });
       return created;
     });
     res.status(201).json({ ...serializePayroll(payroll), ...(proration && { proration }) });
@@ -1470,7 +1584,7 @@ router.get('/payslip/:id', auth, async (req, res, next) => {
     const businessId = req.user.business_id;
     const p = await prisma.payroll.findFirst({
       where: { id: req.params.id, businessId },
-      include: { employee: { include: { location: { select: { name: true } } } } },
+      include: { employee: { include: { location: { select: { name: true } } } }, lines: true },
     });
     if (!p) return res.status(404).json({ title: 'Not found', status: 404 });
     const emp = p.employee;
@@ -1486,7 +1600,12 @@ router.get('/payslip/:id', auth, async (req, res, next) => {
       employee: { name: emp.name, designation: emp.designation || '', department: emp.department || '', location: emp.location?.name || '' },
       month: p.month,
       earnings: { basic: parseFloat(p.basic), allowance: parseFloat(p.allowance), overtime: parseFloat(p.overtime), bonus: parseFloat(p.bonus), incentive: parseFloat(p.incentive) },
-      deductions: { total: parseFloat(p.deduction), late: att.late_deduction, absent: att.absent_deduction, advance_recovered: parseFloat(p.advanceRecovered) },
+      deductions: {
+        total: parseFloat(p.deduction), late: att.late_deduction, absent: att.absent_deduction,
+        advance_recovered: parseFloat(p.advanceRecovered),
+        items: p.lines.filter(l => l.type === 'deduction').map(l => ({ description: l.description, amount: parseFloat(l.amount) })),
+      },
+      earning_items: p.lines.filter(l => l.type === 'earning').map(l => ({ description: l.description, amount: parseFloat(l.amount) })),
       statutory: parseFloat(p.statutoryTotal) > 0 ? {
         country: p.statutoryCountry, paye: parseFloat(p.paye), nssf: parseFloat(p.nssf),
         shif: parseFloat(p.shif), housing_levy: parseFloat(p.housingLevy), total: parseFloat(p.statutoryTotal),
