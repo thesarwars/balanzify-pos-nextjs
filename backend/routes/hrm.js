@@ -518,10 +518,18 @@ router.get('/leave-type', auth, async (req, res, next) => {
 });
 router.post('/leave-type', auth, requireRole('owner', 'manager'), validate(LeaveTypeSchema), async (req, res, next) => {
   try {
-    const t = await prisma.leaveType.upsert({
-      where: { businessId_name: { businessId: req.user.business_id, name: req.body.name } },
-      create: { businessId: req.user.business_id, name: req.body.name, defaultDays: req.body.default_days, accrues: req.body.accrues, paid: req.body.paid },
-      update: { defaultDays: req.body.default_days, accrues: req.body.accrues, paid: req.body.paid },
+    const businessId = req.user.business_id;
+    const clash = await prisma.leaveType.findUnique({
+      where: { businessId_name: { businessId, name: req.body.name } }, select: { id: true },
+    });
+    if (clash) {
+      return res.status(409).json({
+        title: `A leave type called "${req.body.name}" already exists. Edit it instead.`,
+        status: 409, code: 'LEAVE_TYPE_EXISTS', leave_type_id: clash.id,
+      });
+    }
+    const t = await prisma.leaveType.create({
+      data: { businessId, name: req.body.name, defaultDays: req.body.default_days, accrues: req.body.accrues, paid: req.body.paid },
     });
     res.status(201).json({ id: t.id, name: t.name, default_days: t.defaultDays, accrues: t.accrues, paid: t.paid });
   } catch (err) { next(err); }
@@ -540,9 +548,22 @@ router.put('/leave-type/:id', auth, requireRole('owner', 'manager'), validate(Le
 });
 router.delete('/leave-type/:id', auth, requireRole('owner', 'manager'), async (req, res, next) => {
   try {
-    const t = await prisma.leaveType.findFirst({ where: { id: req.params.id, businessId: req.user.business_id } });
+    const businessId = req.user.business_id;
+    const t = await prisma.leaveType.findFirst({ where: { id: req.params.id, businessId } });
     if (!t) return res.status(404).json({ title: 'Not found', status: 404 });
-    await prisma.leaveType.delete({ where: { id: req.params.id } });
+    const used = await prisma.leave.count({ where: { businessId, type: t.name } });
+    if (used > 0) {
+      return res.status(422).json({
+        title: `In use by ${used} leave request(s). Deleting it would drop them from every balance.`,
+        status: 422, code: 'LEAVE_TYPE_IN_USE', used,
+      });
+    }
+    // Overrides are keyed by type NAME, so they would otherwise dangle and
+    // silently reattach if a type of the same name were recreated.
+    await prisma.$transaction([
+      prisma.employeeLeaveOverride.deleteMany({ where: { businessId, type: t.name } }),
+      prisma.leaveType.delete({ where: { id: req.params.id } }),
+    ]);
     res.json({ deleted: true });
   } catch (err) { next(err); }
 });
