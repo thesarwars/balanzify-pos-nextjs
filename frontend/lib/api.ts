@@ -4468,6 +4468,31 @@ const API: any = {
       if (REAL_MODE) return await realReq('DELETE', '/hrm/employee/' + id);
       return (await transport('DELETE', '/connector/api/hrm/employee/' + id)).data;
     },
+    // Holidays — a date range, optionally scoped to one location.
+    async holidays(params: any = {}) {
+      if (REAL_MODE) return await realReq('GET', '/hrm/holiday', { query: params });
+      return [];
+    },
+    async addHoliday(body: any) {
+      if (REAL_MODE) return await realReq('POST', '/hrm/holiday', { body: {
+        name: body.name, start_date: body.start_date, end_date: body.end_date,
+        location_id: isUuid(body.location_id) ? body.location_id : undefined,
+        note: body.note || undefined,
+      }});
+      return null;
+    },
+    async updateHoliday(id: any, body: any) {
+      if (REAL_MODE) return await realReq('PUT', '/hrm/holiday/' + id, { body: {
+        name: body.name, start_date: body.start_date, end_date: body.end_date,
+        location_id: isUuid(body.location_id) ? body.location_id : undefined,
+        note: body.note || undefined,
+      }});
+      return null;
+    },
+    async removeHoliday(id: any) {
+      if (REAL_MODE) return await realReq('DELETE', '/hrm/holiday/' + id);
+      return null;
+    },
     async settings() {
       if (REAL_MODE) return await realReq('GET', '/hrm/settings');
       return (await transport('GET', '/connector/api/hrm/settings')).data;

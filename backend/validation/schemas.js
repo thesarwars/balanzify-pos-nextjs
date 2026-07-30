@@ -461,6 +461,15 @@ const HrmSettingsSchema = z.object({
   absent_deduction: z.union([z.literal('day'), z.coerce.number().min(0)])
     .transform(v => String(v)).optional(),
 });
+const HolidaySchema = z.object({
+  name:        shortStr(255),
+  start_date:  z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD'),
+  end_date:    z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD'),
+  location_id: uuid.optional().nullable(),   // null = every location
+  note:        optStr(1000),
+}).refine(v => v.end_date >= v.start_date, {
+  message: 'End date cannot be before the start date.', path: ['end_date'],
+});
 const EmployeeShiftSchema = z.object({
   type:  z.enum(['fixed', 'flexible']).default('fixed'),
   start: hhmm.optional(),
@@ -1364,7 +1373,7 @@ module.exports = {
   CustomerGroupSchema, UnitSchema, BrandSchema, VariationTemplateSchema, DiscountSchema,
   CommissionAgentSchema,
   PriceGroupSchema, InvoiceLayoutSchema, InvoiceSchemeSchema, CommissionSettingsSchema,
-  EmployeeSchema, EmployeeUpdateSchema, OrgUnitSchema, HrmSettingsSchema, EmployeeShiftSchema, AttendanceClockSchema,
+  EmployeeSchema, EmployeeUpdateSchema, OrgUnitSchema, HrmSettingsSchema, HolidaySchema, EmployeeShiftSchema, AttendanceClockSchema,
   LeaveTypeSchema, LeaveTypeUpdateSchema, LeaveSchema, LeaveStatusSchema, LeaveOverrideSchema,
   RosterShiftSchema, RosterSwapSchema, HrAdvanceSchema, HrTodoSchema, StatusSchema,
   PayrollSchema, PayslipSettingsSchema, PackageSchema, ServiceTypeSchema,

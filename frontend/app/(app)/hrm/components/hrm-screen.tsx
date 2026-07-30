@@ -42,6 +42,8 @@ export function HRM({ T }: { T: any }) {
   const [locs, setLocs] = useStateHr<any[]>([]);
   const [modal, setModal] = useStateHr<any>(null);
   const [editEmp, setEditEmp] = useStateHr<any>(null);
+  const [holidays, setHolidays] = useStateHr<any[]>([]);
+  const [editHol, setEditHol] = useStateHr<any>(null);
   const [q, setQ] = useStateHr('');
   const [fDept, setFDept] = useStateHr('');
   const [fStatus, setFStatus] = useStateHr('');
@@ -64,6 +66,7 @@ export function HRM({ T }: { T: any }) {
     API.hrm.shiftSwaps().then(setSwaps).catch(() => {});
     API.hrm.leaveBalances().then(setLeaveBal).catch(() => {});
     API.hrm.leaveTypes().then(setLeaveTypes).catch(() => {});
+    API.hrm.holidays().then(setHolidays).catch(() => {});
     API.hrm.advances().then(setAdvances).catch(() => {});
   }, [leaveFrom, leaveTo]);
   useEffectHr(() => { API.module.list().then((ms: any[]) => setEnabled(!!(ms.find((m: any) => m.key === 'hrm') || {}).enabled)).catch(() => setEnabled(false)); }, []);
@@ -95,18 +98,20 @@ export function HRM({ T }: { T: any }) {
   }
   if (enabled === null) return <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: T.paperAlt, fontFamily: T.fMono, fontSize: 12.5, color: T.inkSub }}>Loading…</div>;
 
-  const tabs = [['overview', 'Overview'], ['employees', 'Employees'], ['org', 'Departments'], ['attendance', 'Attendance'], ['report', 'Report'], ['shifts', 'Shifts'], ['leave', 'Leave'], ['payroll', 'Payroll'], ['advances', 'Advances'], ['todos', 'Tasks']];
+  const tabs = [['overview', 'Overview'], ['employees', 'Employees'], ['org', 'Departments'], ['attendance', 'Attendance'], ['report', 'Report'], ['shifts', 'Shifts'], ['leave', 'Leave'], ['holidays', 'Holiday'], ['payroll', 'Payroll'], ['advances', 'Advances'], ['todos', 'Tasks']];
   const inDept = (empId: any) => !fDept || (emps.find((e: any) => e.id === empId) || {}).department === fDept;
   const fAtt = att.filter((a: any) => matchQ(a.employee_name) && inDept(a.employee_id) && (!fStatus || a.status === fStatus));
   const fLeaves = leaves.filter((l: any) => (matchQ(l.employee_name) || matchQ(l.type) || matchQ(l.reason)) && inDept(l.employee_id) && (!fStatus || l.status === fStatus));
   const fShifts = shifts.filter((s: any) => (matchQ(s.employee_name) || matchQ(s.role)) && inDept(s.employee_id));
   const fPay = pay.filter((p: any) => (matchQ(p.employee_name) || matchQ(p.month)) && inDept(p.employee_id));
   const fAdvances = advances.filter((a: any) => (matchQ(a.employee_name) || matchQ(a.note)) && inDept(a.employee_id) && (!fStatus || a.status === fStatus));
+  const fHolidays = holidays.filter((h: any) => matchQ(h.name) || matchQ(h.note) || matchQ(h.location_name));
   const fTodos = todos.filter((t: any) => (matchQ(t.title) || matchQ(t.assigned_name)) && (!fStatus || t.status === fStatus));
   const fReport = report.filter((r: any) => matchQ(r.employee_name) && inDept(r.employee_id));
 
   // ── Export / print for the active tab ─────────────────────────────
   const exportSets: any = {
+    holidays: () => ({ title: 'Holidays', cols: ['Name', 'From', 'To', 'Business Location', 'Note'], rows: fHolidays.map((h: any) => [h.name, h.start_date, h.end_date, h.location_name, h.note]) }),
     employees: () => ({ title: 'Employees', cols: ['Name', 'Email', 'Department', 'Designation', 'Location', 'Salary', 'Joined', 'Status'], rows: emps.filter((e: any) => matchQ(e.name) && (!fDept || e.department === fDept)).map((e: any) => [e.name, e.email, e.department, e.designation, e.location_name, e.salary, e.joined, e.on_leave ? 'on leave' : e.status]) }),
     attendance: () => ({ title: 'Attendance', cols: ['Employee', 'Date', 'Clock in', 'Clock out', 'Hours', 'Status'], rows: fAtt.map((a: any) => [a.employee_name, a.date, a.clock_in, a.clock_out, a.hours_label, a.status]) }),
     report: () => ({ title: 'Attendance report ' + reportMonth, cols: ['Employee', 'Days', 'Present', 'Late', 'Absent', 'Hours', 'Overtime h', 'OT pay', 'Deductions'], rows: fReport.map((r: any) => [r.employee_name, r.days_worked, r.present, r.late, r.absent, r.total_hours, r.overtime_hours, r.overtime_pay, r.total_deduction]) }),
@@ -156,6 +161,7 @@ export function HRM({ T }: { T: any }) {
           : tab === 'org' ? <Btn T={T} kind="accent" onClick={() => setModal('org')}>+ Add</Btn>
           : tab === 'leave' ? <><Btn T={T} kind="ghost" onClick={() => setModal('leavetypes')}><LuSettings size={13} style={{ verticalAlign: -2, marginRight: 5 }} />Leave Types</Btn><Btn T={T} kind="accent" onClick={() => setModal('leave')}>+ Apply Leave</Btn></>
           : tab === 'payroll' ? <><Btn T={T} kind="ghost" onClick={() => setModal('payslipsettings')}><LuSettings size={13} style={{ verticalAlign: -2, marginRight: 5 }} />Payslip</Btn><Btn T={T} kind="accent" onClick={() => setModal('payroll')}><LuPlay size={12} style={{ verticalAlign: -2, marginRight: 5 }} />Run Payroll</Btn></>
+          : tab === 'holidays' ? <Btn T={T} kind="accent" onClick={() => setModal('holiday')}>+ Add Holiday</Btn>
           : tab === 'shifts' ? <Btn T={T} kind="accent" onClick={() => setModal('shift')}>+ Add Shift</Btn>
           : tab === 'advances' ? <Btn T={T} kind="accent" onClick={() => setModal('advance')}>+ Give Advance</Btn>
           : tab === 'attendance' ? <Btn T={T} kind="ghost" onClick={() => setModal('attsettings')}><LuSettings size={13} style={{ verticalAlign: -2, marginRight: 5 }} />Attendance Settings</Btn>
@@ -175,7 +181,7 @@ export function HRM({ T }: { T: any }) {
             const statusOpts = ({
               attendance: ['present', 'late', 'absent', 'running', 'on break'],
               leave: ['pending', 'approved', 'rejected'],
-              shifts: [], payroll: [], report: [],
+              shifts: [], payroll: [], report: [], holidays: [],
               advances: ['outstanding', 'settled'],
               todos: ['pending', 'done'],
             } as any)[tab] || [];
@@ -229,6 +235,33 @@ export function HRM({ T }: { T: any }) {
                       <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right' }}>
                         <button onClick={(ev) => { ev.stopPropagation(); setEditEmp(e); }} style={hrMini(T)}>Edit</button>
                         <button onClick={(ev) => { ev.stopPropagation(); API.hrm.removeEmployee(e.id).then(reload); }} style={{ ...hrMini(T, true), marginLeft: 6 }}>Remove</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </Panel>
+          )}
+
+          {tab === 'holidays' && (
+            <Panel T={T} title="All holidays" pad={false}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead><tr style={{ background: T.paperAlt }}>
+                  {['Name', 'Date', 'Business Location', 'Note', ''].map((h, i) => (
+                    <th key={h} style={{ padding: '10px 18px', textAlign: i === 4 ? 'right' : 'left', fontSize: 11, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', color: T.inkSub, borderBottom: `1px solid ${T.line}` }}>{h}</th>
+                  ))}
+                </tr></thead>
+                <tbody>
+                  {fHolidays.length === 0 && <tr><td colSpan={5} style={{ padding: 30, textAlign: 'center', fontSize: 12.5, color: T.inkMute }}>No holidays yet.</td></tr>}
+                  {fHolidays.map((h: any) => (
+                    <tr key={h.id}>
+                      <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 13, fontWeight: 600, color: T.ink }}>{h.name}</td>
+                      <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 12.5, color: T.inkSub, fontFamily: T.fMono }}>{h.start_date === h.end_date ? h.start_date : `${h.start_date} → ${h.end_date}`}</td>
+                      <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 12.5, color: T.inkSub }}>{h.location_name}</td>
+                      <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 12.5, color: T.inkSub }}>{h.note}</td>
+                      <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right' }}>
+                        <button onClick={() => setEditHol(h)} style={hrMini(T)}>Edit</button>
+                        <button onClick={() => API.hrm.removeHoliday(h.id).then(reload)} style={{ ...hrMini(T, true), marginLeft: 6 }}>Remove</button>
                       </td>
                     </tr>
                   ))}
@@ -500,6 +533,8 @@ export function HRM({ T }: { T: any }) {
       </div>
 
       {modal === 'employee' && <EmployeeModal T={T} meta={meta} locs={locs} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Employee added'); reload(); }} />}
+      {modal === 'holiday' && <HolidayModal T={T} locs={locs} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Holiday added'); reload(); }} />}
+      {editHol && <HolidayModal T={T} locs={locs} holiday={editHol} onClose={() => setEditHol(null)} onSaved={() => { setEditHol(null); show('Holiday updated'); reload(); }} />}
       {editEmp && <EmployeeModal T={T} meta={meta} locs={locs} employee={editEmp} onClose={() => setEditEmp(null)} onSaved={() => { setEditEmp(null); show('Employee updated'); reload(); }} />}
       {modal === 'org' && <OrgModal T={T} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Added'); API.hrm.org().then(setOrg); API.hrm.meta().then(setMeta); }} />}
       {modal === 'leave' && <LeaveModal T={T} emps={emps} leaveTypes={leaveTypes} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Leave applied'); reload(); API.hrm.leaveBalances().then(setLeaveBal); }} />}
@@ -518,6 +553,47 @@ export function HRM({ T }: { T: any }) {
 }
 
 // Doubles as the edit form: pass `employee` to load it and PUT instead of POST.
+// Add / edit a holiday. A holiday spans a date range and is either company-wide
+// or scoped to one location.
+function HolidayModal({ T, locs, holiday, onClose, onSaved }: { T: any; locs: any[]; holiday?: any; onClose: () => void; onSaved: () => void }) {
+  const editing = !!holiday;
+  const today = todayLocal();
+  const [f, setF] = useStateHr<any>(editing
+    ? { name: holiday.name, start_date: holiday.start_date, end_date: holiday.end_date, location_id: holiday.location_id || '', note: holiday.note || '' }
+    : { name: '', start_date: today, end_date: today, location_id: '', note: '' });
+  const [busy, setBusy] = useStateHr(false); const [err, setErr] = useStateHr<any>(null);
+  // Moving the start past the end drags the end with it, so the range stays valid.
+  const set = (k: string, v: any) => setF((s: any) => {
+    const nf = { ...s, [k]: v };
+    if (k === 'start_date' && nf.end_date < v) nf.end_date = v;
+    return nf;
+  });
+  return (
+    <Modal T={T} title={editing ? `Edit ${holiday.name}` : 'Add holiday'} width={520} onClose={onClose}
+      footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Cancel</Btn><Btn T={T} kind="accent" onClick={async () => {
+        if (!f.name.trim()) { setErr('Name is required.'); return; }
+        if (!f.start_date || !f.end_date) { setErr('Pick a start and end date.'); return; }
+        if (f.end_date < f.start_date) { setErr('End date cannot be before the start date.'); return; }
+        setBusy(true); setErr(null);
+        try { if (editing) await API.hrm.updateHoliday(holiday.id, f); else await API.hrm.addHoliday(f); onSaved(); }
+        catch (e: any) { setErr(e.message); } finally { setBusy(false); }
+      }} disabled={busy}>{busy ? 'Saving…' : editing ? 'Save changes' : 'Add holiday'}</Btn></>}>
+      <FormGrid>
+        <Field T={T} label="Name" full><TextField T={T} value={f.name} onChange={v => set('name', v)} placeholder="e.g. Eid al-Fitr" /></Field>
+        <Field T={T} label="Start date"><TextField T={T} type="date" value={f.start_date} onChange={v => set('start_date', v)} /></Field>
+        <Field T={T} label="End date"><TextField T={T} type="date" value={f.end_date} onChange={v => set('end_date', v)} /></Field>
+        <Field T={T} label="Business location" full>
+          <SelectField T={T} value={String(f.location_id)} options={['', ...locs.map((l: any) => String(l.id))]}
+            onChange={v => set('location_id', v)}
+            render={(v: any) => v === '' ? 'All locations' : (locs.find((l: any) => String(l.id) === v) || {}).name || v} />
+        </Field>
+        <Field T={T} label="Note" full><TextField T={T} value={f.note} onChange={v => set('note', v)} placeholder="Optional" /></Field>
+      </FormGrid>
+      {err && <div style={{ marginTop: 14, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}><LuTriangleAlert size={13} style={{ verticalAlign: -2, marginRight: 5 }} />{err}</div>}
+    </Modal>
+  );
+}
+
 function EmployeeModal({ T, meta, locs, employee, onClose, onSaved }: { T: any; meta: any; locs: any[]; employee?: any; onClose: () => void; onSaved: () => void }) {
   const editing = !!employee;
   const [f, setF] = useStateHr<any>(editing

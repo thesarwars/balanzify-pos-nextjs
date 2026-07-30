@@ -622,6 +622,7 @@ model Business {
   employees          Employee[]
   orgUnits           OrgUnit[]
   hrmSettings        HrmSettings?
+  holidays           Holiday[]
   serviceTypes       ServiceType[]
   subscription         Subscription?
   subscriptionPayments SubscriptionPayment[]
@@ -1141,6 +1142,26 @@ model OrgUnit {
   @@map("org_units")
 }
 
+// A company holiday: a DATE RANGE, optionally scoped to one location.
+// Distinct from a shift's weekly off days — this is the calendar, that is the
+// roster. Attendance, leave day-counting and payroll all read it.
+model Holiday {
+  id         String   @id @default(uuid()) @db.Uuid
+  businessId String   @map("business_id") @db.Uuid
+  name       String   @db.VarChar(255)
+  startDate  DateTime @map("start_date") @db.Date
+  endDate    DateTime @map("end_date") @db.Date
+  locationId String?  @map("location_id") @db.Uuid  // null = every location
+  note       String?  @db.VarChar(1000)
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  business Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  location Location? @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@index([businessId, startDate, endDate])
+  @@map("holidays")
+}
+
 model HrmSettings {
   id                     String  @id @default(uuid()) @db.Uuid
   businessId             String  @unique @map("business_id") @db.Uuid
@@ -1508,6 +1529,7 @@ model Location {
   stockCounts        StockCount[]
   purchaseOrders     PurchaseOrder[]
   purchaseReturns    PurchaseReturn[]
+  holidays           Holiday[]
   shifts             Shift[]
   sales              Sale[]
   reorderSuggestions ReorderSuggestion[]
