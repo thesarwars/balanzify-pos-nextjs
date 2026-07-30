@@ -11,6 +11,7 @@ import { todayLocal } from '@/lib/business-settings';
 import { DOW, hrAvatar, hrFilterSel, hrInitials, hrMini } from './shared';
 import { HrmSettingsPanel } from './settings-panel';
 import { MyPayrolls } from './my-payrolls';
+import { HrmDashboard } from './dashboard';
 import { AttendanceEntryModal, AttendanceImport, AttendanceSettings, ShiftAssignModal, ShiftModal, ShiftTemplateModal, SwapModal } from './attendance-modals';
 import { EmployeeModal, EmployeeProfile, HolidayModal, OrgModal, OrgUnitModal } from './people-modals';
 import { AdvanceModal, PayComponentModal, PayrollGroupModal, PayrollModal, PayslipSettings, SalesTargetModal, TodoModal } from './payroll-modals';
@@ -267,17 +268,7 @@ export function HRM({ T }: { T: any }) {
               </div>
             );
           })()}
-          {tab === 'overview' && summary && (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 14 }}>
-              {[['Employees', summary.employees, LuUsers], ['Present today', summary.present, LuCheck], ['On leave', summary.on_leave, LuClock], ['Pending leave', summary.pending_leave, LuHourglass], ['Payroll (paid)', money0(summary.payroll), LuBanknote], ['Open tasks', summary.open_todos, LuListTodo]].map(([k, v, Ic]: any) => (
-                <div key={k} style={{ background: T.card, border: `1px solid ${T.line}`, borderRadius: T.rLg, padding: 18, boxShadow: T.sh1 }}>
-                  <div style={{ fontSize: 18, color: T.accent.base, marginBottom: 10, lineHeight: 0 }}><Ic /></div>
-                  <div style={{ fontFamily: T.fMono, fontSize: 26, fontWeight: 600, color: T.ink, letterSpacing: '-1px' }}>{v}</div>
-                  <div style={{ fontSize: 12, color: T.inkSub, marginTop: 2 }}>{k}</div>
-                </div>
-              ))}
-            </div>
-          )}
+          {tab === 'overview' && <HrmDashboard T={T} onOpenMyPayrolls={() => setTab('mypay')} />}
 
           {/* EMPLOYEES */}
           {tab === 'employees' && (

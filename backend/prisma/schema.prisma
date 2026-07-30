@@ -935,6 +935,7 @@ model Employee {
   locationId        String?   @map("location_id") @db.Uuid
   salary            Decimal   @default(0) @db.Decimal(12, 2)
   joinedAt          DateTime? @map("joined_at") @db.Date
+  dateOfBirth       DateTime? @map("date_of_birth") @db.Date
   status            String    @default("active") @db.VarChar(20)
   userId            String?   @map("user_id") @db.Uuid
   commissionPercent Decimal   @default(0) @map("commission_percent") @db.Decimal(6, 2)

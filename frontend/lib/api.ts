@@ -4694,6 +4694,11 @@ const API: any = {
       if (REAL_MODE) return await realReq('PUT', '/hrm/sales-target/' + userId, { body: { bands } });
       return null;
     },
+    // Everything the HRM dashboard renders, in one call.
+    async dashboard() {
+      if (REAL_MODE) return await realReq('GET', '/hrm/dashboard');
+      return null;
+    },
     // Self-service: the logged-in user's own record, payroll and components.
     async me() {
       if (REAL_MODE) return await realReq('GET', '/hrm/me');

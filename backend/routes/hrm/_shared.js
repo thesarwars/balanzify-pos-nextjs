@@ -56,6 +56,7 @@ function serializeEmployee(e) {
     location_id: e.locationId, location_name: e.location?.name || '—',
     salary: parseFloat(e.salary || 0),
     joined: e.joinedAt ? e.joinedAt.toISOString().slice(0, 10) : '',
+    date_of_birth: e.dateOfBirth ? e.dateOfBirth.toISOString().slice(0, 10) : '',
     status: e.status, user_id: e.userId,
     commission_percent: parseFloat(e.commissionPercent || 0),
   };

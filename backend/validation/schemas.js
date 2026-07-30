@@ -424,6 +424,7 @@ const EmployeeSchema = z.object({
   location_id:        uuid.optional().nullable(),
   salary:             money.default(0),
   joined:             isoDate,
+  date_of_birth:      isoDate,
   user_id:            uuid.optional().nullable(),
   commission_percent: z.coerce.number().min(0).max(100).optional(),
 });
@@ -436,6 +437,7 @@ const EmployeeUpdateSchema = z.object({
   location_id:        uuid.optional().nullable(),
   salary:             money.optional(),
   joined:             isoDate,
+  date_of_birth:      isoDate,
   user_id:            uuid.optional().nullable(),
   commission_percent: z.coerce.number().min(0).max(100).optional(),
   // Employment state. "On leave" is derived from approved leave, not set here.

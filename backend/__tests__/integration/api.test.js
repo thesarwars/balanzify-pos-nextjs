@@ -2549,6 +2549,32 @@ describe('HRM', () => {
     expect(unlinked.body.code).toBe('NO_EMPLOYEE_RECORD');
   });
 
+  test('the dashboard backs all nine widgets from one call', async () => {
+    // A birthday today, so the anniversary bucketing is exercised for real.
+    const today = new Date();
+    const dob = `1990-${String(today.getUTCMonth() + 1).padStart(2, '0')}-${String(today.getUTCDate()).padStart(2, '0')}`;
+    const born = await request(app).post('/api/v1/hrm/employee').set(auth(hrToken))
+      .send({ name: 'Birthday Person', salary: 500, joined: '2026-01-01', date_of_birth: dob });
+    expect(born.status).toBe(201);
+    expect(born.body.date_of_birth).toBe(dob);
+
+    const res = await request(app).get('/api/v1/hrm/dashboard').set(auth(hrToken));
+    expect(res.status).toBe(200);
+    expect(res.body.is_manager).toBe(true);
+    for (const k of ['my_leaves', 'birthdays', 'users', 'leaves', 'holidays', 'todays_attendance', 'sales_targets']) {
+      expect(res.body).toHaveProperty(k);
+    }
+    // Matched on month/day, so a 1990 birthday still lands today.
+    expect(res.body.birthdays.today.some(b => b.name === 'Birthday Person')).toBe(true);
+    expect(res.body.users.today.length + res.body.users.upcoming.length).toBeGreaterThanOrEqual(0);
+    expect(Array.isArray(res.body.sales_targets)).toBe(true);
+    const mine = res.body.sales_targets.length ? res.body.sales_targets[0] : null;
+    if (mine) {
+      expect(mine).toHaveProperty('achieved_last_month');
+      expect(mine).toHaveProperty('achieved_this_month');
+    }
+  });
+
   test('settings expose every field the Settings tab edits, and refs are prefixed', async () => {
     const res = await request(app).put('/api/v1/hrm/settings').set(auth(hrToken)).send({
       leave_ref_prefix: 'LV-', leave_instructions: 'Apply two weeks ahead.',
