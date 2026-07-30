@@ -2101,6 +2101,115 @@ describe('HRM', () => {
     expect(after.body.departments.some(d => d.name === 'Finance')).toBe(false);
   });
 
+  test('holidays are a date range, filter by location, and stop absentee marking', async () => {
+    const made = await request(app).post('/api/v1/hrm/holiday').set(auth(hrToken))
+      .send({ name: 'Independence', start_date: '2026-06-26', end_date: '2026-06-27', note: 'Two days' });
+    expect(made.status).toBe(201);
+    expect(made.body.location_name).toBe('All locations');
+
+    const reversed = await request(app).post('/api/v1/hrm/holiday').set(auth(hrToken))
+      .send({ name: 'Bad', start_date: '2026-06-10', end_date: '2026-06-01' });
+    expect(reversed.status).toBe(422);
+
+    // The window is an overlap test, not "does the start fall inside".
+    const overlap = await request(app).get('/api/v1/hrm/holiday')
+      .set(auth(hrToken)).query({ from: '2026-06-27', to: '2026-06-30' });
+    expect(overlap.body.some(h => h.id === made.body.id)).toBe(true);
+    const outside = await request(app).get('/api/v1/hrm/holiday')
+      .set(auth(hrToken)).query({ from: '2026-07-01', to: '2026-07-31' });
+    expect(outside.body.some(h => h.id === made.body.id)).toBe(false);
+    const badDate = await request(app).get('/api/v1/hrm/holiday')
+      .set(auth(hrToken)).query({ from: '2026-13-40' });
+    expect(badDate.status).toBe(400);
+
+    // Nobody is absent on a company holiday.
+    const run = await request(app).post('/api/v1/hrm/attendance/auto-absent')
+      .set(auth(hrToken)).send({ date: '2026-06-26' });
+    expect(run.status).toBe(200);
+    expect(run.body.added).toBe(0);
+    expect(run.body.holiday).toBe(true);
+
+    // And a holiday inside a leave period is not a leave day.
+    const leave = await request(app).post('/api/v1/hrm/leave').set(auth(hrToken))
+      .send({ employee_id: hrEmpId, type: 'Casual', days: 4, from: '2026-06-25', to: '2026-06-28' });
+    expect(leave.status).toBe(422);
+    expect(leave.body.code).toBe('DAYS_EXCEED_PERIOD');
+    expect(leave.body.holidays).toBe(2);
+    expect(leave.body.working_days).toBe(2);
+  });
+
+  test('shift templates are named, shared, assignable and drive late detection', async () => {
+    const bad = await request(app).post('/api/v1/hrm/shift-template').set(auth(hrToken))
+      .send({ name: 'No times', type: 'fixed' });
+    expect(bad.status).toBe(422);   // a fixed shift needs times
+
+    const made = await request(app).post('/api/v1/hrm/shift-template').set(auth(hrToken))
+      .send({ name: 'Morning', type: 'fixed', start_time: '09:00', end_time: '18:00', weekly_off_days: [0, 6] });
+    expect(made.status).toBe(201);
+    expect(made.body.weekly_off_days).toEqual([0, 6]);
+
+    const dupe = await request(app).post('/api/v1/hrm/shift-template').set(auth(hrToken))
+      .send({ name: 'Morning', type: 'flexible' });
+    expect(dupe.status).toBe(409);
+
+    // One shift, many employees — the thing EmployeeShift's @unique prevented.
+    const assign = await request(app).put(`/api/v1/hrm/shift-template/${made.body.id}/assign`)
+      .set(auth(hrToken)).send({ employee_ids: [hrEmpId] });
+    expect(assign.status).toBe(200);
+    expect(assign.body.employee_count).toBe(1);
+
+    // Assigned, so it cannot be deleted out from under them.
+    const del = await request(app).delete(`/api/v1/hrm/shift-template/${made.body.id}`).set(auth(hrToken));
+    expect(del.status).toBe(422);
+    expect(del.body.code).toBe('SHIFT_IN_USE');
+
+    // Late is measured against the shift's own 09:00, not the business default.
+    // An open row reports "running", so close it before reading the verdict.
+    await request(app).post('/api/v1/hrm/attendance/clock').set(auth(hrToken))
+      .send({ employee_id: hrEmpId, at: '09:45', date: '2026-06-15' });
+    const late = await request(app).post('/api/v1/hrm/attendance/clock').set(auth(hrToken))
+      .send({ employee_id: hrEmpId, at: '18:00', date: '2026-06-15' });
+    expect(late.status).toBe(200);
+    expect(late.body.status).toBe('late');
+    await request(app).post('/api/v1/hrm/attendance/clock').set(auth(hrToken))
+      .send({ employee_id: hrEmpId, at: '09:05', date: '2026-06-17' });
+    const onTime = await request(app).post('/api/v1/hrm/attendance/clock').set(auth(hrToken))
+      .send({ employee_id: hrEmpId, at: '18:00', date: '2026-06-17' });
+    expect(onTime.body.status).toBe('present');
+
+    // 2026-06-21 is a Sunday, which this shift has off — not an absence.
+    const sunday = await request(app).post('/api/v1/hrm/attendance/auto-absent')
+      .set(auth(hrToken)).send({ date: '2026-06-21' });
+    expect(sunday.body.added).toBe(0);
+    expect(sunday.body.skipped_weekly_off).toBe(1);
+
+    // Switching to flexible clears the times rather than leaving them stale.
+    const flex = await request(app).put(`/api/v1/hrm/shift-template/${made.body.id}`)
+      .set(auth(hrToken)).send({ name: 'Morning', type: 'flexible' });
+    expect(flex.status).toBe(200);
+    expect(flex.body.start_time).toBeNull();
+  });
+
+  test('auto clock-out closes a forgotten clock-in at the shift end', async () => {
+    const shift = await request(app).post('/api/v1/hrm/shift-template').set(auth(hrToken))
+      .send({ name: 'Closing', type: 'fixed', start_time: '10:00', end_time: '19:00', auto_clock_out: true });
+    expect(shift.status).toBe(201);
+    await request(app).put(`/api/v1/hrm/shift-template/${shift.body.id}/assign`)
+      .set(auth(hrToken)).send({ employee_ids: [hrEmpId] });
+
+    await request(app).post('/api/v1/hrm/attendance/clock').set(auth(hrToken))
+      .send({ employee_id: hrEmpId, at: '10:02', date: '2026-06-18' });
+    const closed = await request(app).post('/api/v1/hrm/attendance/auto-clock-out')
+      .set(auth(hrToken)).send({ date: '2026-06-18' });
+    expect(closed.status).toBe(200);
+    expect(closed.body.closed).toBe(1);
+
+    const list = await request(app).get('/api/v1/hrm/attendance').set(auth(hrToken));
+    const row = list.body.find(r => r.date === '2026-06-18');
+    expect(row.clock_out).toBe('19:00');
+    expect(row.status).not.toBe('running');
+  });
+
   test('payroll separates advance recovery from deduction and refuses a repeat month', async () => {
     const adv = await request(app).post('/api/v1/hrm/advance').set(auth(hrToken))
       .send({ employee_id: hrEmpId, amount: 300, note: 'School fees' });
