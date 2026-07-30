@@ -1089,6 +1089,7 @@ function LeaveTypesManager({ T, emps, onClose, onSaved }: { T: any; emps: any[];
   const [paid, setPaid] = useStateHr(true);
   const [ovEmp, setOvEmp] = useStateHr<any>('');
   const [draftDays, setDraftDays] = useStateHr<any>({});
+  const [interval, setInterval] = useStateHr('financial_year');
   const [ov, setOv] = useStateHr<any>({});
   const reload = () => API.hrm.leaveTypes().then(setTypes);
   React.useEffect(() => { reload(); }, []);
@@ -1102,7 +1103,7 @@ function LeaveTypesManager({ T, emps, onClose, onSaved }: { T: any; emps: any[];
     try { await fn(); reload(); onSaved(); }
     catch (e: any) { setErr(e?.message || 'That did not work.'); }
   };
-  async function add() { if (!name.trim()) return; await run(async () => { await API.hrm.addLeaveType({ name, default_days: Number(days || 0), accrues, paid }); setName(''); setDays(''); setAccrues(false); setPaid(true); }); }
+  async function add() { if (!name.trim()) return; await run(async () => { await API.hrm.addLeaveType({ name, default_days: Number(days || 0), count_interval: interval, accrues, paid }); setName(''); setDays(''); setAccrues(false); setPaid(true); setInterval('financial_year'); }); }
   async function del(t: any) { await run(() => API.hrm.removeLeaveType(t.id)); }
   // Committed on blur, not per keystroke: the input is controlled off server
   // state, so typing "100" used to persist 1, then 10, then 100, and clearing
@@ -1121,20 +1122,31 @@ function LeaveTypesManager({ T, emps, onClose, onSaved }: { T: any; emps: any[];
         {types.map((t: any) => (
           <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', border: `1px solid ${T.line}`, borderRadius: T.r, background: T.paper }}>
             <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: T.ink }}>{t.name} {!t.paid && <Badge T={T} tone="gray" style={{ marginLeft: 4 }}>unpaid</Badge>}{t.accrues && <Badge T={T} tone="blue" style={{ marginLeft: 4 }}>accrues</Badge>}</span>
-            <span style={{ fontSize: 11, color: T.inkSub }}>days/yr</span>
+            <span style={{ fontSize: 11, color: T.inkSub }}>max</span>
             <input type="number" min={0}
               value={draftDays[t.id] != null ? draftDays[t.id] : t.default_days}
               onChange={e => setDraftDays((d: any) => ({ ...d, [t.id]: e.target.value }))}
               onBlur={e => commitDays(t, e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
               disabled={!t.paid} style={{ width: 60, padding: '5px 7px', fontSize: 12.5, fontFamily: T.fMono, textAlign: 'right', color: T.ink, background: t.paid ? T.paper : T.paperAlt, border: `1px solid ${T.line}`, borderRadius: 6, outline: 'none' }} />
+            <select value={t.count_interval || 'financial_year'} disabled={!t.paid}
+              onChange={e => run(() => API.hrm.updateLeaveType(t.id, { count_interval: e.target.value }))}
+              title="The window this maximum is counted over"
+              style={{ padding: '5px 7px', fontSize: 11.5, fontFamily: T.fBody, color: T.ink, background: t.paid ? T.paper : T.paperAlt, border: `1px solid ${T.line}`, borderRadius: 6, outline: 'none' }}>
+              <option value="month">per month</option>
+              <option value="financial_year">per financial year</option>
+              <option value="none">never resets</option>
+            </select>
             <button onClick={() => del(t)} style={{ width: 26, height: 26, borderRadius: 6, border: `1px solid ${T.line}`, background: T.paper, color: T.redText, cursor: 'pointer', fontSize: 12, lineHeight: 0 }}><LuX size={12} /></button>
           </div>
         ))}
       </div>
       <div style={{ borderTop: `1px solid ${T.line}`, paddingTop: 14, display: 'flex', alignItems: 'flex-end', gap: 8, flexWrap: 'wrap' }}>
         <div style={{ flex: 1, minWidth: 120 }}><div style={{ fontSize: 11, fontWeight: 600, color: T.inkSub, marginBottom: 5 }}>New type</div><TextField T={T} value={name} onChange={setName} placeholder="e.g. Maternity" /></div>
-        <div style={{ width: 80 }}><div style={{ fontSize: 11, fontWeight: 600, color: T.inkSub, marginBottom: 5 }}>Days/yr</div><TextField T={T} type="number" value={days} onChange={setDays} placeholder="0" /></div>
+        <div style={{ width: 80 }}><div style={{ fontSize: 11, fontWeight: 600, color: T.inkSub, marginBottom: 5 }}>Max count</div><TextField T={T} type="number" value={days} onChange={setDays} placeholder="0" /></div>
+        <div style={{ width: 160 }}><div style={{ fontSize: 11, fontWeight: 600, color: T.inkSub, marginBottom: 5 }}>Counted</div>
+          <SelectField T={T} value={interval} options={['month', 'financial_year', 'none']} onChange={(v: any) => setInterval(v)}
+            render={(v: any) => v === 'month' ? 'Current month' : v === 'financial_year' ? 'Current financial year' : 'None'} /></div>
         <button onClick={() => setPaid(p => !p)} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '9px 11px', borderRadius: T.r, border: `1px solid ${T.line}`, background: T.paper, cursor: 'pointer', fontFamily: T.fBody, fontSize: 12, color: T.inkMid }}>{paid ? <><LuCheck size={12} style={{ verticalAlign: -2, marginRight: 3 }} />Paid</> : 'Unpaid'}</button>
         <button onClick={() => setAccrues(a => !a)} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '9px 11px', borderRadius: T.r, border: `1px solid ${accrues ? T.accent.base : T.line}`, background: accrues ? T.accent.soft : T.paper, cursor: 'pointer', fontFamily: T.fBody, fontSize: 12, color: accrues ? T.accent.text : T.inkMid }}>{accrues ? <><LuCheck size={12} style={{ verticalAlign: -2, marginRight: 3 }} />Accrues</> : 'Accrues'}</button>
         <Btn T={T} kind="accent" onClick={add}>Add</Btn>
@@ -1205,7 +1217,7 @@ function LeaveModal({ T, emps, leaveTypes, holidays, onClose, onSaved }: { T: an
         <Field T={T} label="To"><TextField T={T} type="date" value={f.to} onChange={v => set('to', v)} /></Field>
         <Field T={T} label="Reason" full><TextField T={T} value={f.reason} onChange={v => set('reason', v)} placeholder="Reason for leave" /></Field>
       </FormGrid>
-      {typeBal && paidType && <div style={{ marginTop: 12, padding: '9px 13px', borderRadius: T.r, background: typeBal.balance > 0 ? T.accent.soft : T.amberSoft, color: typeBal.balance > 0 ? T.accent.text : T.amberText, fontSize: 12, lineHeight: 1.5 }}><b>{typeBal.balance}</b> of {typeBal.entitled} {f.type} day(s) available{typeBal.pending ? ` · ${typeBal.pending} pending` : ''}.</div>}
+      {typeBal && paidType && <div style={{ marginTop: 12, padding: '9px 13px', borderRadius: T.r, background: typeBal.balance > 0 ? T.accent.soft : T.amberSoft, color: typeBal.balance > 0 ? T.accent.text : T.amberText, fontSize: 12, lineHeight: 1.5 }}><b>{typeBal.balance}</b> of {typeBal.entitled} {f.type} day(s) available{typeBal.pending ? ` · ${typeBal.pending} pending` : ''}{typeBal.period_from ? ` · counted ${typeBal.period_from} to ${typeBal.period_to}` : ' · never resets'}.</div>}
       {err && <div style={{ marginTop: 14, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}><LuTriangleAlert size={13} style={{ verticalAlign: -2, marginRight: 5 }} />{err}</div>}
     </Modal>
   );

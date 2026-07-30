@@ -1086,6 +1086,10 @@ model LeaveType {
   businessId  String   @map("business_id") @db.Uuid
   name        String   @db.VarChar(100)
   defaultDays Int      @default(0) @map("default_days")
+  // The window Max Leave Count is counted over. Without this the cap was
+  // cumulative for the life of the employee record: 24 annual days used in
+  // year one meant never being able to apply again.
+  countInterval String @default("financial_year") @map("count_interval") @db.VarChar(20) // month | financial_year | none
   accrues     Boolean  @default(false)
   paid        Boolean  @default(true)
   createdAt   DateTime @default(now()) @map("created_at")

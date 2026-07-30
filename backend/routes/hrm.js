@@ -11,6 +11,7 @@ const commission = require('../lib/commission');
 const wa = require('../lib/whatsapp');
 const { auth, requireRole } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
+const { getBusinessSettings } = require('../lib/businessSettings');
 const { EmployeeSchema, EmployeeUpdateSchema, OrgUnitSchema, HrmSettingsSchema, HolidaySchema, ShiftTemplateSchema, ShiftAssignSchema, AttendanceClockSchema,
   LeaveTypeSchema, LeaveTypeUpdateSchema, LeaveSchema, LeaveStatusSchema, LeaveOverrideSchema,
   RosterShiftSchema, RosterSwapSchema, HrAdvanceSchema, HrTodoSchema, StatusSchema,
@@ -178,6 +179,7 @@ router.get('/employee/:id', auth, async (req, res, next) => {
     const pct = parseFloat(e.commissionPercent || 0);
     const settings = await loadSettings(businessId);
     const nowHM = tzParts(settings.timezone).hm;
+    const fyStart = (await getBusinessSettings(businessId)).fy_start_month;
     await ensureLeaveTypeDefaults(businessId);
     const [attendance, leaves, payroll, advances, types, overrides, sales] = await Promise.all([
       prisma.attendance.findMany({ where: { businessId, employeeId: e.id }, orderBy: { date: 'desc' }, take: 30 }),
@@ -198,7 +200,7 @@ router.get('/employee/:id', auth, async (req, res, next) => {
       payroll: payroll.map(serializePayroll),
       advances: advances.map(serializeAdvance),
       outstanding_advance: +advances.reduce((s, a) => s + parseFloat(a.outstanding || 0), 0).toFixed(2),
-      leave_balance: computeBalances(e, types, leaves, overrideMap),
+      leave_balance: computeBalances(e, types, leaves, overrideMap, fyStart),
       sales,
     });
   } catch (err) { next(err); }
@@ -942,20 +944,46 @@ function monthsWorked(joinedAt) {
   if (now.getDate() < j.getDate()) m -= 1; // monthly anniversary not yet reached
   return Math.max(0, Math.min(12, m));
 }
+// The window a type's Max Leave Count is counted over, as [start, end).
+// 'none' means never reset, which is the old cumulative-for-life behaviour and
+// is now opt-in rather than the only option.
+function intervalWindow(interval, fyStartMonth = 1, now = new Date()) {
+  if (interval === 'none') return null;
+  const y = now.getUTCFullYear();
+  if (interval === 'month') {
+    return [new Date(Date.UTC(y, now.getUTCMonth(), 1)), new Date(Date.UTC(y, now.getUTCMonth() + 1, 1))];
+  }
+  // Financial year: starts on the business's fy_start_month. If today is before
+  // that month, we are still inside the year that began last calendar year.
+  const startMonth = Math.min(12, Math.max(1, Number(fyStartMonth) || 1)) - 1;
+  const startYear = now.getUTCMonth() >= startMonth ? y : y - 1;
+  return [new Date(Date.UTC(startYear, startMonth, 1)), new Date(Date.UTC(startYear + 1, startMonth, 1))];
+}
+
 // Balances for one employee given the type catalog, their leaves, and overrides.
-function computeBalances(emp, types, leaves, overrideMap) {
+// `fyStart` is the business's financial-year start month (1-12).
+function computeBalances(emp, types, leaves, overrideMap, fyStart = 1) {
   const mw = monthsWorked(emp.joinedAt);
   return types.map(t => {
     const base = overrideMap[t.name] != null ? overrideMap[t.name] : t.defaultDays;
     const entitled = t.accrues ? Math.min(base, Math.round((base / 12) * mw)) : base;
-    const mine = leaves.filter(l => l.type === t.name);
+    // Only the leaves inside this type's counting window consume entitlement.
+    const win = intervalWindow(t.countInterval, fyStart);
+    const inWindow = (l) => !win || (l.fromDate >= win[0] && l.fromDate < win[1]);
+    const mine = leaves.filter(l => l.type === t.name && inWindow(l));
     const taken = mine.filter(l => l.status === 'approved').reduce((s, l) => s + l.days, 0);
     const pending = mine.filter(l => l.status === 'pending').reduce((s, l) => s + l.days, 0);
     // `balance` is what the user may still apply for, so pending requests count
     // against it — the admission test below uses exactly this figure. Showing
     // `entitled - taken` here meant the modal could read "12 available" and the
     // save then 422 with "Only 0 available".
-    return { type: t.name, paid: t.paid, entitled, taken, pending, balance: entitled - taken - pending };
+    return {
+      type: t.name, paid: t.paid, entitled, taken, pending,
+      balance: entitled - taken - pending,
+      count_interval: t.countInterval,
+      period_from: win ? win[0].toISOString().slice(0, 10) : null,
+      period_to: win ? new Date(win[1].getTime() - 86400000).toISOString().slice(0, 10) : null,
+    };
   });
 }
 function serializeLeave(l, empName) {
@@ -970,7 +998,7 @@ router.get('/leave-type', auth, async (req, res, next) => {
   try {
     await ensureLeaveTypeDefaults(req.user.business_id);
     const types = await prisma.leaveType.findMany({ where: { businessId: req.user.business_id }, orderBy: { name: 'asc' } });
-    res.json(types.map(t => ({ id: t.id, name: t.name, default_days: t.defaultDays, accrues: t.accrues, paid: t.paid })));
+    res.json(types.map(t => ({ id: t.id, name: t.name, default_days: t.defaultDays, count_interval: t.countInterval, accrues: t.accrues, paid: t.paid })));
   } catch (err) { next(err); }
 });
 router.post('/leave-type', auth, requireRole('owner', 'manager'), validate(LeaveTypeSchema), async (req, res, next) => {
@@ -986,21 +1014,22 @@ router.post('/leave-type', auth, requireRole('owner', 'manager'), validate(Leave
       });
     }
     const t = await prisma.leaveType.create({
-      data: { businessId, name: req.body.name, defaultDays: req.body.default_days, accrues: req.body.accrues, paid: req.body.paid },
+      data: { businessId, name: req.body.name, defaultDays: req.body.default_days, countInterval: req.body.count_interval, accrues: req.body.accrues, paid: req.body.paid },
     });
-    res.status(201).json({ id: t.id, name: t.name, default_days: t.defaultDays, accrues: t.accrues, paid: t.paid });
+    res.status(201).json({ id: t.id, name: t.name, default_days: t.defaultDays, count_interval: t.countInterval, accrues: t.accrues, paid: t.paid });
   } catch (err) { next(err); }
 });
 router.put('/leave-type/:id', auth, requireRole('owner', 'manager'), validate(LeaveTypeUpdateSchema), async (req, res, next) => {
   try {
     const existing = await prisma.leaveType.findFirst({ where: { id: req.params.id, businessId: req.user.business_id } });
     if (!existing) return res.status(404).json({ title: 'Not found', status: 404 });
-    const { default_days, accrues, paid } = req.body;
+    const { default_days, accrues, paid, count_interval } = req.body;
     const t = await prisma.leaveType.update({ where: { id: req.params.id }, data: {
       ...(default_days !== undefined && { defaultDays: default_days }),
+      ...(count_interval !== undefined && { countInterval: count_interval }),
       ...(accrues !== undefined && { accrues }), ...(paid !== undefined && { paid }),
     }});
-    res.json({ id: t.id, name: t.name, default_days: t.defaultDays, accrues: t.accrues, paid: t.paid });
+    res.json({ id: t.id, name: t.name, default_days: t.defaultDays, count_interval: t.countInterval, accrues: t.accrues, paid: t.paid });
   } catch (err) { next(err); }
 });
 router.delete('/leave-type/:id', auth, requireRole('owner', 'manager'), async (req, res, next) => {
@@ -1082,7 +1111,8 @@ router.post('/leave', auth, validate(LeaveSchema), async (req, res, next) => {
       prisma.employeeLeaveOverride.findMany({ where: { employeeId: emp.id } }),
     ]);
     const overrideMap = Object.fromEntries(overrides.map(o => [o.type, o.days]));
-    const bal = computeBalances(emp, types, leaves, overrideMap).find(b => b.type === req.body.type);
+    const fyStart = (await getBusinessSettings(businessId)).fy_start_month;
+    const bal = computeBalances(emp, types, leaves, overrideMap, fyStart).find(b => b.type === req.body.type);
     if (!bal) {
       return res.status(422).json({
         title: `"${req.body.type}" is not one of this business's leave types.`,
@@ -1138,6 +1168,7 @@ router.get('/leave-balance', auth, async (req, res, next) => {
   try {
     const businessId = req.user.business_id;
     await ensureLeaveTypeDefaults(businessId);
+    const fyStart = (await getBusinessSettings(businessId)).fy_start_month;
     const [emps, types, leaves, overrides] = await Promise.all([
       prisma.employee.findMany({ where: { businessId }, select: { id: true, name: true, joinedAt: true } }),
       prisma.leaveType.findMany({ where: { businessId } }),
@@ -1147,7 +1178,7 @@ router.get('/leave-balance', auth, async (req, res, next) => {
     ]);
     const res2 = emps.map(emp => {
       const ovMap = Object.fromEntries(overrides.filter(o => o.employeeId === emp.id).map(o => [o.type, o.days]));
-      return { employee_id: emp.id, employee_name: emp.name, balances: computeBalances(emp, types, leaves.filter(l => l.employeeId === emp.id), ovMap) };
+      return { employee_id: emp.id, employee_name: emp.name, balances: computeBalances(emp, types, leaves.filter(l => l.employeeId === emp.id), ovMap, fyStart) };
     });
     res.json(res2);
   } catch (err) { next(err); }
@@ -1159,13 +1190,14 @@ router.get('/leave-balance/:empId', auth, async (req, res, next) => {
     await ensureLeaveTypeDefaults(businessId);
     const emp = await prisma.employee.findFirst({ where: { id: req.params.empId, businessId }, select: { id: true, name: true, joinedAt: true } });
     if (!emp) return res.status(404).json({ title: 'Not found', status: 404 });
+    const fyStart = (await getBusinessSettings(businessId)).fy_start_month;
     const [types, leaves, overrides] = await Promise.all([
       prisma.leaveType.findMany({ where: { businessId } }),
       prisma.leave.findMany({ where: { businessId, employeeId: emp.id } }),
       prisma.employeeLeaveOverride.findMany({ where: { employeeId: emp.id } }),
     ]);
     const ovMap = Object.fromEntries(overrides.map(o => [o.type, o.days]));
-    res.json(computeBalances(emp, types, leaves, ovMap));
+    res.json(computeBalances(emp, types, leaves, ovMap, fyStart));
   } catch (err) { next(err); }
 });
 

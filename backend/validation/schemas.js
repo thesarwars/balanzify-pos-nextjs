@@ -513,13 +513,16 @@ const AttendanceClockSchema = z.object({
 const LeaveTypeSchema = z.object({
   name:         shortStr(100),
   default_days: z.coerce.number().int().min(0).default(0),
+  // The window Max Leave Count is counted over.
+  count_interval: z.enum(['month', 'financial_year', 'none']).default('financial_year'),
   accrues:      z.coerce.boolean().default(false),
   paid:         z.coerce.boolean().default(true),
 });
 const LeaveTypeUpdateSchema = z.object({
-  default_days: z.coerce.number().int().min(0).optional(),
-  accrues:      z.coerce.boolean().optional(),
-  paid:         z.coerce.boolean().optional(),
+  default_days:   z.coerce.number().int().min(0).optional(),
+  count_interval: z.enum(['month', 'financial_year', 'none']).optional(),
+  accrues:        z.coerce.boolean().optional(),
+  paid:           z.coerce.boolean().optional(),
 });
 const LeaveSchema = z.object({
   employee_id: uuid,
