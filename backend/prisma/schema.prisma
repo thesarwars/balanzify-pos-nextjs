@@ -625,6 +625,7 @@ model Business {
   holidays           Holiday[]
   shiftTemplates     ShiftTemplate[]
   payComponents      PayComponent[]
+  payrollGroups      PayrollGroup[]
   shiftAssignments   ShiftAssignment[]
   serviceTypes       ServiceType[]
   subscription         Subscription?
@@ -978,14 +979,25 @@ model Payroll {
   statutoryTotal   Decimal  @default(0) @map("statutory_total") @db.Decimal(12, 2)
   statutoryRemittedAt DateTime? @map("statutory_remitted_at") // statutory withholding paid to the authority
   net              Decimal  @default(0) @db.Decimal(12, 2)
+  // draft -> approved -> paid. The GL journal posts on the move to paid, so a
+  // batch can be assembled and reviewed before any money is committed.
   status           String   @default("paid") @db.VarChar(20)
+  referenceNo      String?  @map("reference_no") @db.VarChar(50)
+  locationId       String?  @map("location_id") @db.Uuid
+  createdById      String?  @map("created_by_id") @db.Uuid
+  groupId          String?  @map("group_id") @db.Uuid
+  paidAt           DateTime? @map("paid_at")
   createdAt        DateTime @default(now()) @map("created_at")
 
-  business Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  employee Employee      @relation(fields: [employeeId], references: [id], onDelete: Cascade)
-  lines    PayrollLine[]
+  business  Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  employee  Employee      @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  location  Location?     @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  createdBy User?         @relation("payrollsCreated", fields: [createdById], references: [id], onDelete: SetNull)
+  group     PayrollGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  lines     PayrollLine[]
 
   @@unique([businessId, employeeId, month]) // one payroll per employee per month
+  @@unique([businessId, referenceNo])
   @@index([businessId])
   @@map("payrolls")
 }
@@ -1216,6 +1228,30 @@ model ShiftAssignment {
 // A named, reusable earning or deduction. Optionally scoped to one employee
 // (null = everyone), effective from a date, fixed or a percentage of basic.
 // Payroll used to be six anonymous Decimal buckets retyped by hand each month.
+// A named batch of payrolls run together — the reference's "payroll groups".
+// A single POST /hrm/payroll still works for one employee; a group assembles
+// drafts for many and commits them in one reviewed step.
+model PayrollGroup {
+  id            String    @id @default(uuid()) @db.Uuid
+  businessId    String    @map("business_id") @db.Uuid
+  name          String    @db.VarChar(255)
+  month         String    @db.VarChar(7)
+  status        String    @default("draft") @db.VarChar(20)   // draft | approved | paid
+  paymentStatus String    @default("unpaid") @map("payment_status") @db.VarChar(20)
+  locationId    String?   @map("location_id") @db.Uuid
+  createdById   String?   @map("created_by_id") @db.Uuid
+  paidAt        DateTime? @map("paid_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  business  Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  location  Location? @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  createdBy User?     @relation("payrollGroupsMade", fields: [createdById], references: [id], onDelete: SetNull)
+  payrolls  Payroll[]
+
+  @@index([businessId, month])
+  @@map("payroll_groups")
+}
+
 model PayComponent {
   id             String    @id @default(uuid()) @db.Uuid
   businessId     String    @map("business_id") @db.Uuid
@@ -1485,6 +1521,8 @@ model User {
   assignedSuppliers Supplier[] @relation("supplier_assignee")
 
   @@map("users")
+  payrollsCreated    Payroll[]      @relation("payrollsCreated")
+  payrollGroupsMade  PayrollGroup[] @relation("payrollGroupsMade")
 }
 
 model Role {
@@ -1605,6 +1643,8 @@ model Location {
   purchaseOrders     PurchaseOrder[]
   purchaseReturns    PurchaseReturn[]
   holidays           Holiday[]
+  payrolls           Payroll[]
+  payrollGroups      PayrollGroup[]
   shifts             Shift[]
   sales              Sale[]
   reorderSuggestions ReorderSuggestion[]

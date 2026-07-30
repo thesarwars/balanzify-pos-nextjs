@@ -13,7 +13,7 @@ const { validate } = require('../middleware/validate');
 const { EmployeeSchema, EmployeeUpdateSchema, OrgUnitSchema, HrmSettingsSchema, HolidaySchema, ShiftTemplateSchema, ShiftAssignSchema, AttendanceClockSchema,
   LeaveTypeSchema, LeaveTypeUpdateSchema, LeaveSchema, LeaveStatusSchema, LeaveOverrideSchema,
   RosterShiftSchema, RosterSwapSchema, HrAdvanceSchema, HrTodoSchema, StatusSchema,
-  PayrollSchema, PayComponentSchema, PayslipSettingsSchema } = require('../validation/schemas');
+  PayrollSchema, PayrollGroupSchema, PayComponentSchema, PayslipSettingsSchema } = require('../validation/schemas');
 
 const router = express.Router();
 
@@ -1307,7 +1307,26 @@ function serializePayroll(p) {
       + parseFloat(p.bonus || 0) + parseFloat(p.incentive || 0)
       + (p.lines || []).filter(l => l.type === 'earning').reduce((s, l) => s + parseFloat(l.amount || 0), 0)).toFixed(2),
     net: parseFloat(p.net || 0), status: p.status,
+    reference_no: p.referenceNo || null,
+    location_id: p.locationId, location_name: p.location?.name || '',
+    department: p.employee?.department || '', designation: p.employee?.designation || '',
+    added_by: p.createdBy?.name || '', group_id: p.groupId,
+    payment_status: p.status === 'paid' ? 'paid' : 'unpaid',
+    paid_at: p.paidAt ? p.paidAt.toISOString() : null,
+    created_at: p.createdAt ? p.createdAt.toISOString() : null,
   };
+}
+
+// YYYY/NNNN per business per year. Allocated inside the caller's transaction,
+// and the unique index on (business_id, reference_no) is the real guard.
+async function nextPayrollRef(tx, businessId, month) {
+  const year = String(month).slice(0, 4);
+  const last = await tx.payroll.findFirst({
+    where: { businessId, referenceNo: { startsWith: `${year}/` } },
+    orderBy: { referenceNo: 'desc' }, select: { referenceNo: true },
+  });
+  const n = last ? parseInt(String(last.referenceNo).split('/')[1], 10) + 1 : 1;
+  return `${year}/${String(n).padStart(4, '0')}`;
 }
 
 // ── Pay components ──────────────────────────────────────────────────────────
@@ -1417,7 +1436,19 @@ router.delete('/pay-component/:id', auth, requireRole('owner', 'manager'), async
 
 router.get('/payroll', auth, async (req, res, next) => {
   try {
-    const rows = await prisma.payroll.findMany({ where: { businessId: req.user.business_id }, include: { employee: { select: { name: true } }, lines: true }, orderBy: { createdAt: 'desc' } });
+    const q = req.query;
+    const rows = await prisma.payroll.findMany({
+      where: {
+        businessId: req.user.business_id,
+        ...(q.month && { month: String(q.month) }),
+        ...(q.employee_id && PL_UUID.test(String(q.employee_id)) && { employeeId: String(q.employee_id) }),
+        ...(q.location_id && PL_UUID.test(String(q.location_id)) && { locationId: String(q.location_id) }),
+        ...(q.department && { employee: { department: String(q.department) } }),
+        ...(q.designation && { employee: { designation: String(q.designation) } }),
+      },
+      include: { employee: { select: { name: true, department: true, designation: true } }, lines: true, location: { select: { name: true } }, createdBy: { select: { name: true } } },
+      orderBy: { createdAt: 'desc' }, take: 1000,
+    });
     res.json(rows.map(serializePayroll));
   } catch (err) { next(err); }
 });
@@ -1425,7 +1456,7 @@ router.get('/payroll', auth, async (req, res, next) => {
 router.post('/payroll', auth, requireRole('owner', 'manager'), validate(PayrollSchema), async (req, res, next) => {
   try {
     const businessId = req.user.business_id, b = req.body;
-    const emp = await prisma.employee.findFirst({ where: { id: b.employee_id, businessId }, select: { id: true, name: true, joinedAt: true } });
+    const emp = await prisma.employee.findFirst({ where: { id: b.employee_id, businessId }, select: { id: true, name: true, joinedAt: true, locationId: true } });
     if (!emp) return res.status(404).json({ title: 'Employee not found', status: 404 });
 
     // Paying a month twice also posts the GL journal twice, so refuse it up
@@ -1496,17 +1527,166 @@ router.post('/payroll', auth, requireRole('owner', 'manager'), validate(PayrollS
           statutoryCountry: stat ? stat.country : null,
           paye: stat ? stat.paye : 0, nssf: stat ? stat.nssf : 0, shif: stat ? stat.shif : 0,
           housingLevy: stat ? stat.housing_levy : 0, statutoryTotal,
-          net, status: 'paid',
+          net,
+          // A single run is committed immediately, as before. A group builds
+          // drafts and commits them together — see POST /payroll-group.
+          status: b.status || 'paid',
+          paidAt: (b.status || 'paid') === 'paid' ? new Date() : null,
+          referenceNo: await nextPayrollRef(tx, businessId, b.month),
+          locationId: emp.locationId || null,
+          createdById: req.user.id,
+          groupId: b.group_id || null,
         },
         include: { employee: { select: { name: true } }, lines: true },
       });
       // GL: gross wages expensed, net paid in cash, freeform + statutory withheld as payables.
       // postPayroll's contract is `deduction = advanceRecovered + withholding`,
       // so hand it the combined figure to keep the journal balanced.
-      await accounting.postPayroll(tx, { businessId, gross, net, deduction: +(freeformDeduction + recovered).toFixed(2), advanceRecovered: recovered, statutory: statutoryTotal, sourceId: created.id, createdById: req.user.id });
+      // A draft commits no money, so it posts nothing until it is paid.
+      if (created.status === 'paid') {
+        await accounting.postPayroll(tx, { businessId, gross, net, deduction: +(freeformDeduction + recovered).toFixed(2), advanceRecovered: recovered, statutory: statutoryTotal, sourceId: created.id, createdById: req.user.id });
+      }
       return created;
     });
     res.status(201).json({ ...serializePayroll(payroll), ...(proration && { proration }) });
+  } catch (err) { next(err); }
+});
+
+// ── Payroll groups ──────────────────────────────────────────────────────────
+// A named batch: build drafts for several employees in one step, review the
+// total, then commit. Nothing hits the GL until the group is paid.
+function serializeGroup(g) {
+  const rows = g.payrolls || [];
+  return {
+    id: g.id, name: g.name, month: g.month,
+    status: g.status, payment_status: g.paymentStatus,
+    total_gross: +rows.reduce((s, p) => s + parseFloat(p.basic || 0) + parseFloat(p.allowance || 0)
+      + parseFloat(p.overtime || 0) + parseFloat(p.bonus || 0) + parseFloat(p.incentive || 0), 0).toFixed(2),
+    total_net: +rows.reduce((s, p) => s + parseFloat(p.net || 0), 0).toFixed(2),
+    employees: rows.length,
+    added_by: g.createdBy?.name || '',
+    location_id: g.locationId, location_name: g.location?.name || 'All locations',
+    created_at: g.createdAt ? g.createdAt.toISOString() : null,
+    paid_at: g.paidAt ? g.paidAt.toISOString() : null,
+  };
+}
+const groupInclude = {
+  payrolls: true, createdBy: { select: { name: true } }, location: { select: { name: true } },
+};
+
+router.get('/payroll-group', auth, async (req, res, next) => {
+  try {
+    const rows = await prisma.payrollGroup.findMany({
+      where: { businessId: req.user.business_id },
+      include: groupInclude, orderBy: { createdAt: 'desc' }, take: 500,
+    });
+    res.json(rows.map(serializeGroup));
+  } catch (err) { next(err); }
+});
+
+router.post('/payroll-group', auth, requireRole('owner', 'manager'), validate(PayrollGroupSchema), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id, b = req.body;
+    const ids = [...new Set(b.employee_ids)];
+    const emps = await prisma.employee.findMany({
+      where: { businessId, id: { in: ids } },
+      select: { id: true, name: true, salary: true, locationId: true, joinedAt: true },
+    });
+    if (emps.length !== ids.length) return res.status(404).json({ title: 'One or more employees were not found.', status: 404 });
+
+    // Anyone already paid for this month would violate the one-per-month rule.
+    const clash = await prisma.payroll.findMany({
+      where: { businessId, month: b.month, employeeId: { in: ids } },
+      include: { employee: { select: { name: true } } },
+    });
+    if (clash.length) {
+      return res.status(409).json({
+        title: `Already has a payroll for ${b.month}: ${clash.map(c => c.employee?.name).join(', ')}.`,
+        status: 409, code: 'PAYROLL_EXISTS',
+      });
+    }
+
+    const group = await prisma.$transaction(async (tx) => {
+      const g = await tx.payrollGroup.create({
+        data: {
+          businessId, name: b.name, month: b.month,
+          locationId: b.location_id || null, createdById: req.user.id,
+        },
+      });
+      for (const emp of emps) {
+        const basic = parseFloat(emp.salary || 0);
+        const comps = applyComponents(await componentsFor(businessId, emp.id, b.month), basic);
+        const gross = +(basic + comps.earnings).toFixed(2);
+        const net = +(gross - comps.deductions).toFixed(2);
+        await tx.payroll.create({
+          data: {
+            businessId, employeeId: emp.id, month: b.month, basic,
+            deduction: comps.deductions, net,
+            status: 'draft', groupId: g.id,
+            referenceNo: await nextPayrollRef(tx, businessId, b.month),
+            locationId: emp.locationId || null, createdById: req.user.id,
+            ...(comps.lines.length && { lines: { create: comps.lines } }),
+          },
+        });
+      }
+      return g;
+    });
+    const full = await prisma.payrollGroup.findUnique({ where: { id: group.id }, include: groupInclude });
+    res.status(201).json(serializeGroup(full));
+  } catch (err) { next(err); }
+});
+
+// Commit the batch: every draft becomes paid and posts its journal here, so a
+// group can be assembled and reviewed before any money moves.
+router.put('/payroll-group/:id/pay', auth, requireRole('owner', 'manager'), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const g = await prisma.payrollGroup.findFirst({
+      where: { id: req.params.id, businessId }, include: { payrolls: true },
+    });
+    if (!g) return res.status(404).json({ title: 'Not found', status: 404 });
+    if (g.paymentStatus === 'paid') return res.status(409).json({ title: 'This group has already been paid.', status: 409, code: 'ALREADY_PAID' });
+
+    const drafts = g.payrolls.filter(p => p.status === 'draft');
+    if (!drafts.length) return res.status(400).json({ title: 'Nothing left to pay in this group.', status: 400 });
+
+    const paidAt = new Date();
+    await prisma.$transaction(async (tx) => {
+      for (const p of drafts) {
+        const gross = +(parseFloat(p.basic) + parseFloat(p.allowance) + parseFloat(p.overtime)
+          + parseFloat(p.bonus) + parseFloat(p.incentive)).toFixed(2);
+        await tx.payroll.update({ where: { id: p.id }, data: { status: 'paid', paidAt } });
+        await accounting.postPayroll(tx, {
+          businessId, gross, net: parseFloat(p.net),
+          deduction: +(parseFloat(p.deduction) + parseFloat(p.advanceRecovered)).toFixed(2),
+          advanceRecovered: parseFloat(p.advanceRecovered),
+          statutory: parseFloat(p.statutoryTotal),
+          sourceId: p.id, createdById: req.user.id,
+        });
+      }
+      await tx.payrollGroup.update({
+        where: { id: g.id }, data: { status: 'paid', paymentStatus: 'paid', paidAt },
+      });
+    });
+    const full = await prisma.payrollGroup.findUnique({ where: { id: g.id }, include: groupInclude });
+    res.json(serializeGroup(full));
+  } catch (err) { next(err); }
+});
+
+// Only an unpaid group can be discarded — a paid one has journal entries.
+router.delete('/payroll-group/:id', auth, requireRole('owner', 'manager'), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id;
+    const g = await prisma.payrollGroup.findFirst({ where: { id: req.params.id, businessId }, select: { id: true, paymentStatus: true } });
+    if (!g) return res.status(404).json({ title: 'Not found', status: 404 });
+    if (g.paymentStatus === 'paid') {
+      return res.status(422).json({ title: 'A paid group cannot be deleted — it has posted journal entries.', status: 422, code: 'GROUP_PAID' });
+    }
+    await prisma.$transaction([
+      prisma.payroll.deleteMany({ where: { businessId, groupId: g.id, status: 'draft' } }),
+      prisma.payrollGroup.delete({ where: { id: g.id } }),
+    ]);
+    res.json({ deleted: true });
   } catch (err) { next(err); }
 });
 

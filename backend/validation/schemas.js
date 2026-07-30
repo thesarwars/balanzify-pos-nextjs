@@ -575,6 +575,15 @@ const PayrollSchema = z.object({
   statutory_country: z.enum(['KE', 'SO', 'none']).optional(),
   // Pro-rate the basic for a mid-month joiner (by days worked in the month).
   prorate:     z.boolean().optional().default(false),
+  // A draft commits no money and posts no journal until the group is paid.
+  status:      z.enum(['draft', 'paid']).optional(),
+  group_id:    uuid.optional().nullable(),
+});
+const PayrollGroupSchema = z.object({
+  name:         shortStr(255),
+  month:        z.string().regex(/^\d{4}-\d{2}$/, 'Use YYYY-MM'),
+  location_id:  uuid.optional().nullable(),
+  employee_ids: z.array(uuid).min(1, 'Pick at least one employee').max(500),
 });
 const PackageSchema = z.object({
   name:      shortStr(100),
@@ -1398,7 +1407,7 @@ module.exports = {
   EmployeeSchema, EmployeeUpdateSchema, OrgUnitSchema, HrmSettingsSchema, HolidaySchema, ShiftTemplateSchema, ShiftAssignSchema, AttendanceClockSchema,
   LeaveTypeSchema, LeaveTypeUpdateSchema, LeaveSchema, LeaveStatusSchema, LeaveOverrideSchema,
   RosterShiftSchema, RosterSwapSchema, HrAdvanceSchema, HrTodoSchema, StatusSchema,
-  PayrollSchema, PayComponentSchema, PayslipSettingsSchema, PackageSchema, ServiceTypeSchema,
+  PayrollSchema, PayrollGroupSchema, PayComponentSchema, PayslipSettingsSchema, PackageSchema, ServiceTypeSchema,
   PaginationSchema, ProductVariantSchema, OpeningStockSchema,
   CouponSchema, ApplyCouponSchema, LoyaltyRuleSchema, RewardSettingsSchema, PettyCashSchema,
   BundleSchema, ScheduledReportSchema, CustomerSegmentSchema,

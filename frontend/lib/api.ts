@@ -4593,9 +4593,31 @@ const API: any = {
       if (REAL_MODE) return await realReq('PUT', '/hrm/leave-override/' + empId, { body: { overrides } });
       return (await transport('PUT', '/connector/api/hrm/leave-override/' + empId, { body: { overrides } })).data;
     },
-    async payroll() {
-      if (REAL_MODE) return await realReq('GET', '/hrm/payroll');
+    // Server-side filters: month, employee_id, location_id, department, designation.
+    async payroll(params: any = {}) {
+      if (REAL_MODE) return await realReq('GET', '/hrm/payroll', { query: params });
       return (await transport('GET', '/connector/api/hrm/payroll')).data;
+    },
+    // Payroll groups — a named batch of drafts, committed in one reviewed step.
+    async payrollGroups() {
+      if (REAL_MODE) return await realReq('GET', '/hrm/payroll-group');
+      return [];
+    },
+    async addPayrollGroup(body: any) {
+      if (REAL_MODE) return await realReq('POST', '/hrm/payroll-group', { body: {
+        name: body.name, month: body.month,
+        location_id: isUuid(body.location_id) ? body.location_id : undefined,
+        employee_ids: body.employee_ids,
+      }});
+      return null;
+    },
+    async payPayrollGroup(id: any) {
+      if (REAL_MODE) return await realReq('PUT', '/hrm/payroll-group/' + id + '/pay');
+      return null;
+    },
+    async removePayrollGroup(id: any) {
+      if (REAL_MODE) return await realReq('DELETE', '/hrm/payroll-group/' + id);
+      return null;
     },
     async attendanceSummary(month: any) {
       if (REAL_MODE) return await realReq('GET', '/hrm/attendance-summary', { query: { month } });

@@ -45,6 +45,7 @@ export function HRM({ T }: { T: any }) {
   const [holidays, setHolidays] = useStateHr<any[]>([]);
   const [templates, setTemplates] = useStateHr<any[]>([]);
   const [payComps, setPayComps] = useStateHr<any[]>([]);
+  const [payGroups, setPayGroups] = useStateHr<any[]>([]);
   const [editComp, setEditComp] = useStateHr<any>(null);
   const [editTpl, setEditTpl] = useStateHr<any>(null);
   const [assignTpl, setAssignTpl] = useStateHr<any>(null);
@@ -74,6 +75,7 @@ export function HRM({ T }: { T: any }) {
     API.hrm.holidays().then(setHolidays).catch(() => {});
     API.hrm.shiftTemplates().then(setTemplates).catch(() => {});
     API.hrm.payComponents().then(setPayComps).catch(() => {});
+    API.hrm.payrollGroups().then(setPayGroups).catch(() => {});
     API.hrm.advances().then(setAdvances).catch(() => {});
   }, [leaveFrom, leaveTo]);
   useEffectHr(() => { API.module.list().then((ms: any[]) => setEnabled(!!(ms.find((m: any) => m.key === 'hrm') || {}).enabled)).catch(() => setEnabled(false)); }, []);
@@ -124,7 +126,7 @@ export function HRM({ T }: { T: any }) {
     report: () => ({ title: 'Attendance report ' + reportMonth, cols: ['Employee', 'Days', 'Present', 'Late', 'Absent', 'Hours', 'Overtime h', 'OT pay', 'Deductions'], rows: fReport.map((r: any) => [r.employee_name, r.days_worked, r.present, r.late, r.absent, r.total_hours, r.overtime_hours, r.overtime_pay, r.total_deduction]) }),
     shifts: () => ({ title: 'Shifts', cols: ['Employee', 'Date', 'Start', 'End', 'Role', 'Location'], rows: fShifts.map((s: any) => [s.employee_name, s.date, s.start, s.end, s.role, s.location_name]) }),
     leave: () => ({ title: 'Leave', cols: ['Employee', 'Type', 'From', 'To', 'Days', 'Reason', 'Status', 'Approved by'], rows: fLeaves.map((l: any) => [l.employee_name, l.type, l.from, l.to, l.days, l.reason, l.status, l.approved_by || '']) }),
-    payroll: () => ({ title: 'Payroll', cols: ['Employee', 'Month', 'Basic', 'Allowance', 'Overtime', 'Bonus', 'Incentive', 'Deduction', 'Net', 'Status'], rows: fPay.map((p: any) => [p.employee_name, p.month, p.basic, p.allowance || 0, p.overtime || 0, p.bonus || 0, p.incentive || 0, p.deduction, p.net, p.status]) }),
+    payroll: () => ({ title: 'Payroll', cols: ['Employee', 'Department', 'Designation', 'Month', 'Reference No', 'Total amount', 'Basic', 'Deduction', 'Net', 'Payment status'], rows: fPay.map((p: any) => [p.employee_name, p.department, p.designation, p.month, p.reference_no || '', p.gross, p.basic, p.deduction, p.net, p.payment_status]) }),
     advances: () => ({ title: 'Advances', cols: ['Employee', 'Date', 'Amount', 'Outstanding', 'Account', 'Note', 'Status'], rows: fAdvances.map((a: any) => [a.employee_name, a.date, a.amount, a.outstanding, a.account_name, a.note, a.status]) }),
     todos: () => ({ title: 'Tasks', cols: ['Task', 'Assigned to', 'Priority', 'Status', 'Due'], rows: fTodos.map((t: any) => [t.title, t.assigned_name, t.priority, t.status, t.due]) }),
     org: () => ({ title: 'Departments & designations', cols: ['Type', 'Name', 'Employees'], rows: [...org.departments.map((d: any) => ['Department', d.name, d.count]), ...org.designations.map((d: any) => ['Designation', d.name, d.count])] }),
@@ -167,7 +169,7 @@ export function HRM({ T }: { T: any }) {
           {tab === 'employees' ? <Btn T={T} kind="accent" onClick={() => setModal('employee')}>+ Add Employee</Btn>
           : tab === 'org' ? <Btn T={T} kind="accent" onClick={() => setModal('org')}>+ Add</Btn>
           : tab === 'leave' ? <><Btn T={T} kind="ghost" onClick={() => setModal('leavetypes')}><LuSettings size={13} style={{ verticalAlign: -2, marginRight: 5 }} />Leave Types</Btn><Btn T={T} kind="accent" onClick={() => setModal('leave')}>+ Apply Leave</Btn></>
-          : tab === 'payroll' ? <><Btn T={T} kind="ghost" onClick={() => setModal('payslipsettings')}><LuSettings size={13} style={{ verticalAlign: -2, marginRight: 5 }} />Payslip</Btn><Btn T={T} kind="accent" onClick={() => setModal('payroll')}><LuPlay size={12} style={{ verticalAlign: -2, marginRight: 5 }} />Run Payroll</Btn><Btn T={T} kind="ghost" onClick={() => setModal('paycomponent')}>+ Pay Component</Btn></>
+          : tab === 'payroll' ? <><Btn T={T} kind="ghost" onClick={() => setModal('payslipsettings')}><LuSettings size={13} style={{ verticalAlign: -2, marginRight: 5 }} />Payslip</Btn><Btn T={T} kind="accent" onClick={() => setModal('payroll')}><LuPlay size={12} style={{ verticalAlign: -2, marginRight: 5 }} />Run Payroll</Btn><Btn T={T} kind="ghost" onClick={() => setModal('paygroup')}>+ Payroll Group</Btn><Btn T={T} kind="ghost" onClick={() => setModal('paycomponent')}>+ Pay Component</Btn></>
           : tab === 'holidays' ? <Btn T={T} kind="accent" onClick={() => setModal('holiday')}>+ Add Holiday</Btn>
           : tab === 'shifts' ? <Btn T={T} kind="accent" onClick={() => setModal('shift')}>+ Add Shift</Btn>
           : tab === 'advances' ? <Btn T={T} kind="accent" onClick={() => setModal('advance')}>+ Give Advance</Btn>
@@ -418,6 +420,40 @@ export function HRM({ T }: { T: any }) {
           )}
 
           {/* PAYROLL */}
+          {tab === 'payroll' && payGroups.length > 0 && (
+            <div style={{ marginBottom: 16 }}>
+              <Panel T={T} title="Payroll groups" pad={false}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead><tr style={{ background: T.paperAlt }}>
+                    {['Name', 'Month', 'Status', 'Payment status', 'Total gross', 'Employees', 'Added by', 'Location', ''].map((h, i) => (
+                      <th key={h} style={{ padding: '10px 18px', textAlign: i === 8 ? 'right' : 'left', fontSize: 11, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', color: T.inkSub, borderBottom: `1px solid ${T.line}` }}>{h}</th>
+                    ))}
+                  </tr></thead>
+                  <tbody>
+                    {payGroups.map((g: any) => (
+                      <tr key={g.id}>
+                        <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 13, fontWeight: 600, color: T.ink }}>{g.name}</td>
+                        <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}`, fontFamily: T.fMono, fontSize: 12.5, color: T.inkSub }}>{g.month}</td>
+                        <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}` }}><Badge T={T} tone={g.status === 'paid' ? 'green' : 'amber'}>{g.status}</Badge></td>
+                        <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}` }}><Badge T={T} tone={g.payment_status === 'paid' ? 'green' : 'gray'}>{g.payment_status}</Badge></td>
+                        <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}`, fontFamily: T.fMono, fontSize: 12.5, fontWeight: 600, color: T.ink }}>{money(g.total_gross)}</td>
+                        <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 12.5, color: T.inkSub }}>{g.employees}</td>
+                        <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 12.5, color: T.inkSub }}>{g.added_by}</td>
+                        <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 12.5, color: T.inkSub }}>{g.location_name}</td>
+                        <td style={{ padding: '11px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right' }}>
+                          {g.payment_status !== 'paid' && <>
+                            <button onClick={() => API.hrm.payPayrollGroup(g.id).then(() => { show('Group paid'); reload(); }).catch((e: any) => show(e.message))} style={hrMini(T, 'accent')}>Pay</button>
+                            <button onClick={() => API.hrm.removePayrollGroup(g.id).then(reload).catch((e: any) => show(e.message))} style={{ ...hrMini(T, true), marginLeft: 6 }}>Discard</button>
+                          </>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </Panel>
+            </div>
+          )}
+
           {tab === 'payroll' && (
             <div style={{ marginBottom: 16 }}>
               <Panel T={T} title="Pay components" pad={false}>
@@ -450,17 +486,19 @@ export function HRM({ T }: { T: any }) {
           {tab === 'payroll' && (
             <Panel T={T} pad={false}>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead><tr>{[['Employee', 'l'], ['Month', 'l'], ['Basic', 'r'], ['Allowance', 'r'], ['Deduction', 'r'], ['Net pay', 'r'], ['Status', 'l']].map(([h, a], i) => <th key={i} style={{ textAlign: a === 'r' ? 'right' : 'left', padding: '11px 18px', fontSize: 10, fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', color: T.inkSub, background: T.paperAlt, borderBottom: `1px solid ${T.line}` }}>{h}</th>)}</tr></thead>
+                <thead><tr>{[['Employee', 'l'], ['Department', 'l'], ['Designation', 'l'], ['Month', 'l'], ['Reference No', 'l'], ['Total amount', 'r'], ['Deduction', 'r'], ['Net pay', 'r'], ['Payment status', 'l']].map(([h, a], i) => <th key={i} style={{ textAlign: a === 'r' ? 'right' : 'left', padding: '11px 18px', fontSize: 10, fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', color: T.inkSub, background: T.paperAlt, borderBottom: `1px solid ${T.line}` }}>{h}</th>)}</tr></thead>
                 <tbody>
                   {fPay.map((p: any) => (
                     <tr key={p.id}>
                       <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 13, fontWeight: 600, color: T.ink }}>{p.employee_name}</td>
+                      <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 12.5, color: T.inkSub }}>{p.department}</td>
+                      <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 12.5, color: T.inkSub }}>{p.designation}</td>
                       <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontFamily: T.fMono, fontSize: 12.5, color: T.inkSub }}>{p.month}</td>
-                      <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right', fontFamily: T.fMono, fontSize: 12.5, color: T.inkSub }}>{money(p.basic)}</td>
-                      <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right', fontFamily: T.fMono, fontSize: 12.5, color: T.greenText }}>+{money(p.allowance)}</td>
+                      <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontFamily: T.fMono, fontSize: 12.5, color: T.inkSub }}>{p.reference_no || '—'}</td>
+                      <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right', fontFamily: T.fMono, fontSize: 12.5, color: T.ink }}>{money(p.gross)}</td>
                       <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right', fontFamily: T.fMono, fontSize: 12.5, color: T.redText }}>−{money(p.deduction)}</td>
                       <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right', fontFamily: T.fMono, fontSize: 13, fontWeight: 700, color: T.ink }}>{money(p.net)}</td>
-                      <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}` }}><Badge T={T} tone="green">{p.status}</Badge></td>
+                      <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}` }}><Badge T={T} tone={p.payment_status === 'paid' ? 'green' : 'amber'}>{p.payment_status}</Badge></td>
                     </tr>
                   ))}
                 </tbody>
@@ -600,6 +638,7 @@ export function HRM({ T }: { T: any }) {
       </div>
 
       {modal === 'employee' && <EmployeeModal T={T} meta={meta} locs={locs} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Employee added'); reload(); }} />}
+      {modal === 'paygroup' && <PayrollGroupModal T={T} emps={emps} locs={locs} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Payroll group created as draft'); reload(); }} />}
       {modal === 'paycomponent' && <PayComponentModal T={T} emps={emps} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Pay component added'); reload(); }} />}
       {editComp && <PayComponentModal T={T} emps={emps} component={editComp} onClose={() => setEditComp(null)} onSaved={() => { setEditComp(null); show('Pay component updated'); reload(); }} />}
       {modal === 'shifttemplate' && <ShiftTemplateModal T={T} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Shift added'); reload(); }} />}
@@ -625,6 +664,57 @@ export function HRM({ T }: { T: any }) {
 }
 
 // Doubles as the edit form: pass `employee` to load it and PUT instead of POST.
+// Build a batch of DRAFT payrolls. Nothing posts to the ledger until the group
+// is paid, so the total can be reviewed first.
+function PayrollGroupModal({ T, emps, locs, onClose, onSaved }: { T: any; emps: any[]; locs: any[]; onClose: () => void; onSaved: () => void }) {
+  const [f, setF] = useStateHr<any>({ name: '', month: new Date().toISOString().slice(0, 7), location_id: '' });
+  const [sel, setSel] = useStateHr<any[]>([]);
+  const [busy, setBusy] = useStateHr(false); const [err, setErr] = useStateHr<any>(null);
+  const set = (k: string, v: any) => setF((s: any) => ({ ...s, [k]: v }));
+  // Narrowing by location narrows who you can pick, which is the point of the filter.
+  const pool = f.location_id ? emps.filter((e: any) => String(e.location_id) === String(f.location_id)) : emps;
+  const toggle = (id: any) => setSel((s: any[]) => s.includes(id) ? s.filter(x => x !== id) : [...s, id]);
+  const estimate = pool.filter((e: any) => sel.includes(e.id)).reduce((s: number, e: any) => s + (Number(e.salary) || 0), 0);
+  return (
+    <Modal T={T} title="New payroll group" width={560} onClose={onClose}
+      footer={<><div style={{ flex: 1, fontSize: 12.5, color: T.inkSub }}>{sel.length} employee(s) · basic {money(estimate)}</div><Btn T={T} kind="ghost" onClick={onClose}>Cancel</Btn><Btn T={T} kind="accent" onClick={async () => {
+        if (!f.name.trim()) { setErr('Name is required.'); return; }
+        if (!sel.length) { setErr('Pick at least one employee.'); return; }
+        setBusy(true); setErr(null);
+        try { await API.hrm.addPayrollGroup({ ...f, employee_ids: sel }); onSaved(); }
+        catch (e: any) { setErr(e.message); } finally { setBusy(false); }
+      }} disabled={busy}>{busy ? 'Creating…' : 'Proceed'}</Btn></>}>
+      <FormGrid>
+        <Field T={T} label="Name" full><TextField T={T} value={f.name} onChange={v => set('name', v)} placeholder="e.g. June 2026 — all staff" /></Field>
+        <Field T={T} label="Month"><TextField T={T} type="month" value={f.month} onChange={v => set('month', v)} /></Field>
+        <Field T={T} label="Location">
+          <SelectField T={T} value={String(f.location_id)} options={['', ...locs.map((l: any) => String(l.id))]}
+            onChange={v => { set('location_id', v); setSel([]); }}
+            render={(v: any) => v === '' ? 'All locations' : (locs.find((l: any) => String(l.id) === v) || {}).name || v} />
+        </Field>
+      </FormGrid>
+      <div style={{ display: 'flex', gap: 8, margin: '14px 0 8px' }}>
+        <Btn T={T} kind="ghost" onClick={() => setSel(pool.map((e: any) => e.id))}>Select all</Btn>
+        <Btn T={T} kind="ghost" onClick={() => setSel([])}>Deselect all</Btn>
+      </div>
+      <div style={{ maxHeight: 260, overflowY: 'auto', border: `1px solid ${T.line}`, borderRadius: T.r }}>
+        {pool.length === 0 && <div style={{ padding: 20, textAlign: 'center', fontSize: 12.5, color: T.inkMute }}>No employees at this location.</div>}
+        {pool.map((e: any, i: number) => (
+          <label key={e.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 13px', borderTop: i ? `1px solid ${T.line}` : 'none', cursor: 'pointer' }}>
+            <input type="checkbox" checked={sel.includes(e.id)} onChange={() => toggle(e.id)} />
+            <span style={{ flex: 1, fontSize: 13, color: T.ink }}>{e.name}</span>
+            <span style={{ fontFamily: T.fMono, fontSize: 12, color: T.inkSub }}>{money(e.salary)}</span>
+          </label>
+        ))}
+      </div>
+      <div style={{ marginTop: 12, padding: '9px 13px', borderRadius: T.r, background: T.paperAlt, border: `1px solid ${T.line}`, fontSize: 12, color: T.inkMid, lineHeight: 1.5 }}>
+        Creates drafts using each employee's salary plus any pay components. Nothing is posted to the ledger until you press Pay.
+      </div>
+      {err && <div style={{ marginTop: 14, padding: '10px 13px', borderRadius: T.r, background: T.redSoft, color: T.redText, fontSize: 12.5 }}><LuTriangleAlert size={13} style={{ verticalAlign: -2, marginRight: 5 }} />{err}</div>}
+    </Modal>
+  );
+}
+
 // A named earning or deduction applied automatically to every payroll run.
 function PayComponentModal({ T, emps, component, onClose, onSaved }: { T: any; emps: any[]; component?: any; onClose: () => void; onSaved: () => void }) {
   const editing = !!component;
