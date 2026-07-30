@@ -537,7 +537,7 @@ export function HRM({ T }: { T: any }) {
       {editHol && <HolidayModal T={T} locs={locs} holiday={editHol} onClose={() => setEditHol(null)} onSaved={() => { setEditHol(null); show('Holiday updated'); reload(); }} />}
       {editEmp && <EmployeeModal T={T} meta={meta} locs={locs} employee={editEmp} onClose={() => setEditEmp(null)} onSaved={() => { setEditEmp(null); show('Employee updated'); reload(); }} />}
       {modal === 'org' && <OrgModal T={T} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Added'); API.hrm.org().then(setOrg); API.hrm.meta().then(setMeta); }} />}
-      {modal === 'leave' && <LeaveModal T={T} emps={emps} leaveTypes={leaveTypes} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Leave applied'); reload(); API.hrm.leaveBalances().then(setLeaveBal); }} />}
+      {modal === 'leave' && <LeaveModal T={T} emps={emps} leaveTypes={leaveTypes} holidays={holidays} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Leave applied'); reload(); API.hrm.leaveBalances().then(setLeaveBal); }} />}
       {modal === 'leavetypes' && <LeaveTypesManager T={T} emps={emps} onClose={() => setModal(null)} onSaved={() => { API.hrm.leaveTypes().then(setLeaveTypes); API.hrm.leaveBalances().then(setLeaveBal); }} />}
       {modal === 'payroll' && <PayrollModal T={T} emps={emps} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Payroll run'); reload(); }} />}
       {modal === 'todo' && <TodoModal T={T} emps={emps} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Task added'); reload(); }} />}
@@ -697,7 +697,17 @@ function LeaveTypesManager({ T, emps, onClose, onSaved }: { T: any; emps: any[];
   );
 }
 
-function LeaveModal({ T, emps, leaveTypes, onClose, onSaved }: { T: any; emps: any[]; leaveTypes: any[]; onClose: () => void; onSaved: () => void }) {
+function LeaveModal({ T, emps, leaveTypes, holidays, onClose, onSaved }: { T: any; emps: any[]; leaveTypes: any[]; holidays: any[]; onClose: () => void; onSaved: () => void }) {
+  // Every day covered by a holiday, so the day count skips them.
+  const offDays = React.useMemo(() => {
+    const set = new Set<string>();
+    for (const h of holidays || []) {
+      for (let d = new Date(h.start_date); d <= new Date(h.end_date); d.setUTCDate(d.getUTCDate() + 1)) {
+        set.add(d.toISOString().slice(0, 10));
+      }
+    }
+    return set;
+  }, [holidays]);
   const types = (leaveTypes && leaveTypes.length) ? leaveTypes.map((t: any) => t.name) : ['Casual', 'Sick', 'Annual', 'Unpaid'];
   const today = new Date().toISOString().slice(0, 10);
   const [f, setF] = useStateHr<any>({ employee_id: (emps[0] || {}).id || '', type: types[0], from: today, to: today, days: 1, reason: '' });
@@ -710,7 +720,14 @@ function LeaveModal({ T, emps, leaveTypes, onClose, onSaved }: { T: any; emps: a
   const set = (k: string, v: any) => setF((s: any) => {
     const nf = { ...s, [k]: v };
     if ((k === 'from' || k === 'to') && nf.from && nf.to && nf.to >= nf.from) {
-      nf.days = Math.round((new Date(nf.to).getTime() - new Date(nf.from).getTime()) / 86400000) + 1;
+      // Calendar span minus any company holiday inside it — the server caps on
+      // the same figure, so the two never disagree.
+      let n = 0;
+      for (let d = new Date(nf.from); d <= new Date(nf.to); d.setUTCDate(d.getUTCDate() + 1)) {
+        const iso = d.toISOString().slice(0, 10);
+        if (!offDays.has(iso)) n++;
+      }
+      nf.days = Math.max(1, n);
     }
     return nf;
   });

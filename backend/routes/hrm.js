@@ -288,6 +288,20 @@ async function holidayDays(businessId, from, to, locationId) {
   return days;
 }
 
+// Which locations are off on `date`. Returns { all, locations } where `all` is
+// true when a company-wide holiday covers the day, and `locations` holds the
+// ids of branches with their own holiday that day.
+async function holidayScopeOn(businessId, date) {
+  const rows = await prisma.holiday.findMany({
+    where: { businessId, startDate: { lte: date }, endDate: { gte: date } },
+    select: { locationId: true },
+  });
+  return {
+    all: rows.some(r => r.locationId === null),
+    locations: new Set(rows.filter(r => r.locationId).map(r => r.locationId)),
+  };
+}
+
 router.get('/holiday', auth, async (req, res, next) => {
   try {
     const businessId = req.user.business_id;
@@ -556,25 +570,35 @@ router.post('/attendance/auto-absent', auth, requireRole('owner', 'manager'),
     const businessId = req.user.business_id;
     const settings = await loadSettings(businessId);
     const date = new Date(req.body.date || tzParts(settings.timezone).date);
-    const [emps, present, shifts, onLeave] = await Promise.all([
-      prisma.employee.findMany({ where: { businessId, status: 'active' }, select: { id: true } }),
+    const [emps, present, shifts, onLeave, holiday] = await Promise.all([
+      prisma.employee.findMany({ where: { businessId, status: 'active' }, select: { id: true, locationId: true } }),
       prisma.attendance.findMany({ where: { businessId, date }, select: { employeeId: true } }),
       prisma.employeeShift.findMany({ where: { employee: { businessId } }, select: { employeeId: true, type: true } }),
       // Someone on approved leave is not absent — we already know why they are out.
       onLeaveOn(businessId, date),
+      // Nor is anyone absent on a company holiday, or on their branch's.
+      holidayScopeOn(businessId, date),
     ]);
+    if (holiday.all) {
+      return res.json({ added: 0, skipped_on_leave: 0, skipped_holiday: emps.length, holiday: true });
+    }
     const has = new Set(present.map(p => p.employeeId));
     const flexible = new Set(shifts.filter(s => s.type === 'flexible').map(s => s.employeeId));
-    const toAdd = emps.filter(e => !has.has(e.id) && !flexible.has(e.id) && !onLeave.has(e.id));
+    const onHoliday = (e) => e.locationId && holiday.locations.has(e.locationId);
+    const toAdd = emps.filter(e => !has.has(e.id) && !flexible.has(e.id) && !onLeave.has(e.id) && !onHoliday(e));
     if (toAdd.length) {
       await prisma.attendance.createMany({ data: toAdd.map(e => ({ businessId, employeeId: e.id, date, status: 'absent' })), skipDuplicates: true });
     }
-    res.json({ added: toAdd.length, skipped_on_leave: emps.filter(e => onLeave.has(e.id) && !has.has(e.id)).length });
+    res.json({
+      added: toAdd.length,
+      skipped_on_leave: emps.filter(e => onLeave.has(e.id) && !has.has(e.id)).length,
+      skipped_holiday: emps.filter(e => onHoliday(e) && !has.has(e.id)).length,
+    });
   } catch (err) { next(err); }
 });
 
 // ── Attendance summary (monthly metrics + pay derivation) ──
-async function buildSummary(emp, records, settings) {
+async function buildSummary(emp, records, settings, holidayCount = 0) {
   const present = records.filter(r => r.status === 'present').length;
   const late = records.filter(r => r.status === 'late').length;
   const absent = records.filter(r => r.status === 'absent' || !r.clockIn).length;
@@ -592,7 +616,7 @@ async function buildSummary(emp, records, settings) {
   const absentDeduction = absent * absentDed;
   return {
     employee_id: emp.id, employee_name: emp.name, month: settings._month,
-    present, late, absent, days_worked: daysWorked,
+    present, late, absent, days_worked: daysWorked, holidays: holidayCount,
     total_hours: +totalHours.toFixed(2), expected_hours: +expected.toFixed(2),
     overtime_hours: +overtime.toFixed(2), hourly_rate: +hourly.toFixed(2),
     overtime_pay: +(overtime * hourly * otRate).toFixed(2),
@@ -613,12 +637,22 @@ router.get('/attendance-summary', auth, async (req, res, next) => {
     const { m, start, end } = monthRange(req.query.month);
     const settings = await loadSettings(businessId); settings._month = m;
     const [emps, records] = await Promise.all([
-      prisma.employee.findMany({ where: { businessId }, select: { id: true, name: true, salary: true } }),
+      prisma.employee.findMany({ where: { businessId }, select: { id: true, name: true, salary: true, locationId: true } }),
       prisma.attendance.findMany({ where: { businessId, date: { gte: start, lt: end } } }),
     ]);
     const byEmp = {};
     records.forEach(r => { (byEmp[r.employeeId] ||= []).push(r); });
-    const out = await Promise.all(emps.map(e => buildSummary(e, byEmp[e.id] || [], settings)));
+    // One query for the month, then a per-location count — a branch holiday
+    // only applies to staff at that branch.
+    const lastDay = new Date(end); lastDay.setUTCDate(lastDay.getUTCDate() - 1);
+    const holCache = new Map();
+    const holsFor = async (locId) => {
+      const key = locId || 'all';
+      if (!holCache.has(key)) holCache.set(key, (await holidayDays(businessId, start, lastDay, locId ?? null)).size);
+      return holCache.get(key);
+    };
+    const out = [];
+    for (const e of emps) out.push(await buildSummary(e, byEmp[e.id] || [], settings, await holsFor(e.locationId)));
     res.json(out);
   } catch (err) { next(err); }
 });
@@ -627,11 +661,13 @@ router.get('/attendance-summary/:empId', auth, async (req, res, next) => {
   try {
     const businessId = req.user.business_id;
     const { m, start, end } = monthRange(req.query.month);
-    const emp = await prisma.employee.findFirst({ where: { id: req.params.empId, businessId }, select: { id: true, name: true, salary: true } });
+    const emp = await prisma.employee.findFirst({ where: { id: req.params.empId, businessId }, select: { id: true, name: true, salary: true, locationId: true } });
     if (!emp) return res.status(404).json({ title: 'Not found', status: 404 });
     const settings = await loadSettings(businessId); settings._month = m;
     const records = await prisma.attendance.findMany({ where: { businessId, employeeId: emp.id, date: { gte: start, lt: end } } });
-    res.json(await buildSummary(emp, records, settings));
+    const lastDay = new Date(end); lastDay.setUTCDate(lastDay.getUTCDate() - 1);
+    const hols = await holidayDays(businessId, start, lastDay, emp.locationId ?? null);
+    res.json(await buildSummary(emp, records, settings, hols.size));
   } catch (err) { next(err); }
 });
 
@@ -808,12 +844,19 @@ router.post('/leave', auth, validate(LeaveSchema), async (req, res, next) => {
     }
     const fromDate = new Date(req.body.from), toDate = new Date(req.body.to);
     // Days must fit the period asked for, or a one-day request could burn a
-    // month of entitlement.
-    const spanDays = Math.round((toDate - fromDate) / 86400000) + 1;
-    if (req.body.days > spanDays) {
+    // month of entitlement. A company holiday inside the period is not a leave
+    // day, so it does not count towards the cap either.
+    const calendarDays = Math.round((toDate - fromDate) / 86400000) + 1;
+    const empLoc = await prisma.employee.findUnique({ where: { id: emp.id }, select: { locationId: true } });
+    const offDays = await holidayDays(businessId, fromDate, toDate, empLoc?.locationId ?? null);
+    const workingDays = Math.max(0, calendarDays - offDays.size);
+    if (req.body.days > workingDays) {
       return res.status(422).json({
-        title: `${req.body.days} day(s) does not fit ${req.body.from} to ${req.body.to} (${spanDays} day(s)).`,
+        title: offDays.size > 0
+          ? `${req.body.days} day(s) does not fit ${req.body.from} to ${req.body.to} — ${calendarDays} day(s) less ${offDays.size} holiday(s) leaves ${workingDays}.`
+          : `${req.body.days} day(s) does not fit ${req.body.from} to ${req.body.to} (${calendarDays} day(s)).`,
         status: 422, code: 'DAYS_EXCEED_PERIOD',
+        calendar_days: calendarDays, holidays: offDays.size, working_days: workingDays,
       });
     }
     if (bal.paid && req.body.days > bal.balance) {
