@@ -979,6 +979,7 @@ model Payroll {
   business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
 
+  @@unique([businessId, employeeId, month]) // one payroll per employee per month
   @@index([businessId])
   @@map("payrolls")
 }

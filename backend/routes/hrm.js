@@ -848,6 +848,18 @@ router.post('/payroll', auth, requireRole('owner', 'manager'), validate(PayrollS
     const emp = await prisma.employee.findFirst({ where: { id: b.employee_id, businessId }, select: { id: true, name: true, joinedAt: true } });
     if (!emp) return res.status(404).json({ title: 'Employee not found', status: 404 });
 
+    // Paying a month twice also posts the GL journal twice, so refuse it up
+    // front for a readable error. The unique index is the real guard.
+    const already = await prisma.payroll.findFirst({
+      where: { businessId, employeeId: emp.id, month: b.month }, select: { id: true },
+    });
+    if (already) {
+      return res.status(409).json({
+        title: `${emp.name} has already been paid for ${b.month}.`,
+        status: 409, code: 'PAYROLL_EXISTS', payroll_id: already.id,
+      });
+    }
+
     // Pro-rate the basic for a mid-month joiner: only the days from the join date
     // to month-end are paid. Opt-in, and only when the join falls in this month.
     let basic = b.basic, proration = null;
