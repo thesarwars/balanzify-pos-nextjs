@@ -4594,6 +4594,17 @@ const API: any = {
       if (REAL_MODE) return await realReq('POST', '/hrm/leave', { body: { employee_id: body.employee_id, type: body.type, from: body.from, to: body.to, days: Number(body.days || 1), reason: body.reason || undefined } });
       return (await transport('POST', '/connector/api/hrm/leave', { body })).data;
     },
+    async updateLeave(id: any, body: any) {
+      if (REAL_MODE) return await realReq('PUT', '/hrm/leave/' + id + '/details', { body: {
+        employee_id: body.employee_id, type: body.type, from: body.from, to: body.to,
+        days: Number(body.days || 1), reason: body.reason || undefined,
+      }});
+      return null;
+    },
+    async removeLeave(id: any) {
+      if (REAL_MODE) return await realReq('DELETE', '/hrm/leave/' + id);
+      return null;
+    },
     async setLeave(id: any, status: any) {
       if (REAL_MODE) return await realReq('PUT', '/hrm/leave/' + id, { body: { status } });
       return (await transport('PUT', '/connector/api/hrm/leave/' + id, { body: { status } })).data;

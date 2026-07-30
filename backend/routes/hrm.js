@@ -1375,6 +1375,56 @@ router.post('/leave', auth, validate(LeaveSchema), async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// Edit a pending request. Once it is approved the days are committed against
+// the entitlement, so changing it then would silently move someone's balance —
+// reject it back to pending first.
+router.put('/leave/:id/details', auth, requireRole('owner', 'manager'), validate(LeaveSchema), async (req, res, next) => {
+  try {
+    const businessId = req.user.business_id, b = req.body;
+    const leave = await prisma.leave.findFirst({ where: { id: req.params.id, businessId }, include: { employee: { select: { name: true } } } });
+    if (!leave) return res.status(404).json({ title: 'Not found', status: 404 });
+    if (leave.status === 'approved') {
+      return res.status(422).json({ title: 'An approved request cannot be edited — reject it first.', status: 422, code: 'LEAVE_APPROVED' });
+    }
+    const emp = await prisma.employee.findFirst({ where: { id: b.employee_id, businessId }, select: { id: true, name: true, joinedAt: true, locationId: true } });
+    if (!emp) return res.status(404).json({ title: 'Employee not found', status: 404 });
+    await ensureLeaveTypeDefaults(businessId);
+    const types = await prisma.leaveType.findMany({ where: { businessId } });
+    if (!types.some(t => t.name === b.type)) {
+      return res.status(422).json({ title: `"${b.type}" is not one of this business's leave types.`, status: 422, code: 'UNKNOWN_LEAVE_TYPE' });
+    }
+    const fromDate = new Date(b.from), toDate = new Date(b.to);
+    const calendarDays = Math.round((toDate - fromDate) / 86400000) + 1;
+    const offDays = await holidayDays(businessId, fromDate, toDate, emp.locationId ?? null);
+    const workingDays = Math.max(0, calendarDays - offDays.size);
+    if (b.days > workingDays) {
+      return res.status(422).json({
+        title: `${b.days} day(s) does not fit ${b.from} to ${b.to} (${workingDays} working day(s)).`,
+        status: 422, code: 'DAYS_EXCEED_PERIOD',
+      });
+    }
+    const updated = await prisma.leave.update({
+      where: { id: leave.id },
+      data: { employeeId: emp.id, type: b.type, fromDate, toDate, days: b.days, reason: b.reason || null },
+    });
+    res.json(serializeLeave(updated, emp.name));
+  } catch (err) { next(err); }
+});
+
+// Withdraw a request. An approved one has already moved the balance, so it must
+// be rejected first rather than vanishing from the record.
+router.delete('/leave/:id', auth, requireRole('owner', 'manager'), async (req, res, next) => {
+  try {
+    const leave = await prisma.leave.findFirst({ where: { id: req.params.id, businessId: req.user.business_id }, select: { id: true, status: true } });
+    if (!leave) return res.status(404).json({ title: 'Not found', status: 404 });
+    if (leave.status === 'approved') {
+      return res.status(422).json({ title: 'An approved request cannot be deleted — reject it first.', status: 422, code: 'LEAVE_APPROVED' });
+    }
+    await prisma.leave.delete({ where: { id: leave.id } });
+    res.json({ deleted: true });
+  } catch (err) { next(err); }
+});
+
 router.put('/leave/:id', auth, requireRole('owner', 'manager'), validate(LeaveStatusSchema), async (req, res, next) => {
   try {
     const leave = await prisma.leave.findFirst({ where: { id: req.params.id, businessId: req.user.business_id }, include: { employee: { select: { name: true } } } });

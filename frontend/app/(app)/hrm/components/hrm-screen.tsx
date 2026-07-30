@@ -69,6 +69,9 @@ export function HRM({ T }: { T: any }) {
   // are reached rather than silently falling off the end.
   const [leaveFrom, setLeaveFrom] = useStateHr('');
   const [leaveTo, setLeaveTo] = useStateHr('');
+  const [leaveEmp, setLeaveEmp] = useStateHr('');
+  const [leaveType, setLeaveType] = useStateHr('');
+  const [editLeave, setEditLeave] = useStateHr<any>(null);
   const [show, node] = useToast();
   React.useEffect(() => { setQ(''); setFDept(''); setFStatus(''); }, [tab]);
   const matchQ = (s: any) => !q || String(s || '').toLowerCase().includes(q.toLowerCase());
@@ -77,7 +80,7 @@ export function HRM({ T }: { T: any }) {
     API.hrm.summary().then(setSummary).catch(() => {});
     API.hrm.employees().then(setEmps).catch(() => {});
     API.hrm.attendance({ ...(attEmp && { employee_id: attEmp }), ...(attFrom && { from: attFrom }), ...(attTo && { to: attTo }) }).then(setAtt).catch(() => {});
-    API.hrm.leaves({ ...(leaveFrom && { from: leaveFrom }), ...(leaveTo && { to: leaveTo }) }).then(setLeaves).catch(() => {});
+    API.hrm.leaves({ ...(leaveFrom && { from: leaveFrom }), ...(leaveTo && { to: leaveTo }), ...(leaveEmp && { employee_id: leaveEmp }), ...(leaveType && { type: leaveType }) }).then(setLeaves).catch(() => {});
     API.hrm.payroll().then(setPay).catch(() => {});
     API.hrm.todos().then(setTodos).catch(() => {});
     API.hrm.shifts().then(setShifts).catch(() => {});
@@ -90,7 +93,7 @@ export function HRM({ T }: { T: any }) {
     API.hrm.payrollGroups().then(setPayGroups).catch(() => {});
     API.hrm.salesTargets().then(setTargets).catch(() => {});
     API.hrm.advances().then(setAdvances).catch(() => {});
-  }, [leaveFrom, leaveTo, attEmp, attFrom, attTo]);
+  }, [leaveFrom, leaveTo, leaveEmp, leaveType, attEmp, attFrom, attTo]);
   useEffectHr(() => { API.module.list().then((ms: any[]) => setEnabled(!!(ms.find((m: any) => m.key === 'hrm') || {}).enabled)).catch(() => setEnabled(false)); }, []);
   useEffectHr(() => {
     if (!enabled || tab !== 'attendance') return;
@@ -226,8 +229,19 @@ export function HRM({ T }: { T: any }) {
                 {tab !== 'todos' && <select value={fDept} onChange={e => setFDept(e.target.value)} style={hrFilterSel(T)}><option value="">All departments</option>{depts.map((d: any) => <option key={d} value={d}>{d}</option>)}</select>}
                 {statusOpts.length > 0 && <select value={fStatus} onChange={e => setFStatus(e.target.value)} style={hrFilterSel(T)}><option value="">All statuses</option>{statusOpts.map((s: any) => <option key={s} value={s}>{s}</option>)}</select>}
                 {tab === 'report' && <input type="month" value={reportMonth} onChange={e => setReportMonth(e.target.value)} style={hrFilterSel(T)} />}
-                {tab === 'leave' && <><input type="date" title="Leave from" value={leaveFrom} onChange={e => setLeaveFrom(e.target.value)} style={hrFilterSel(T)} /><input type="date" title="Leave to" value={leaveTo} onChange={e => setLeaveTo(e.target.value)} style={hrFilterSel(T)} /></>}
-                {(q || fDept || fStatus || leaveFrom || leaveTo) && <button onClick={() => { setQ(''); setFDept(''); setFStatus(''); setLeaveFrom(''); setLeaveTo(''); }} style={{ padding: '8px 12px', borderRadius: T.r, border: `1px solid ${T.line}`, background: T.paper, color: T.inkMid, cursor: 'pointer', fontFamily: T.fBody, fontSize: 12, fontWeight: 600 }}>Clear</button>}
+                {tab === 'leave' && <>
+                  <select value={leaveEmp} onChange={e => setLeaveEmp(e.target.value)} style={hrFilterSel(T)}>
+                    <option value="">All employees</option>
+                    {emps.map((e: any) => <option key={e.id} value={e.id}>{e.name}</option>)}
+                  </select>
+                  <select value={leaveType} onChange={e => setLeaveType(e.target.value)} style={hrFilterSel(T)}>
+                    <option value="">All leave types</option>
+                    {leaveTypes.map((t: any) => <option key={t.id} value={t.name}>{t.name}</option>)}
+                  </select>
+                  <input type="date" title="Leave from" value={leaveFrom} onChange={e => setLeaveFrom(e.target.value)} style={hrFilterSel(T)} />
+                  <input type="date" title="Leave to" value={leaveTo} onChange={e => setLeaveTo(e.target.value)} style={hrFilterSel(T)} />
+                </>}
+                {(q || fDept || fStatus || leaveFrom || leaveTo || leaveEmp || leaveType) && <button onClick={() => { setQ(''); setFDept(''); setFStatus(''); setLeaveFrom(''); setLeaveTo(''); setLeaveEmp(''); setLeaveType(''); }} style={{ padding: '8px 12px', borderRadius: T.r, border: `1px solid ${T.line}`, background: T.paper, color: T.inkMid, cursor: 'pointer', fontFamily: T.fBody, fontSize: 12, fontWeight: 600 }}>Clear</button>}
               </div>
             );
           })()}
@@ -560,7 +574,14 @@ export function HRM({ T }: { T: any }) {
                       <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 12.5, color: T.inkMid }}>{l.reason}</td>
                       <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}` }}><Badge T={T} tone={ltone[l.status]}>{l.status}</Badge></td>
                       <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 12.5, color: l.approved_by ? T.inkMid : T.inkMute }}>{l.approved_by || '—'}</td>
-                      <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right' }}>{l.status === 'pending' && <span style={{ display: 'inline-flex', gap: 6, justifyContent: 'flex-end' }}><button onClick={() => API.hrm.setLeave(l.id, 'approved').then(() => { reload(); API.hrm.leaveBalances().then(setLeaveBal); })} style={hrMini(T, 'accent')}>Approve</button><button onClick={() => API.hrm.setLeave(l.id, 'rejected').then(() => { reload(); API.hrm.leaveBalances().then(setLeaveBal); })} style={hrMini(T, true)}>Reject</button></span>}</td>
+                      <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, textAlign: 'right' }}>{l.status === 'pending'
+                        ? <span style={{ display: 'inline-flex', gap: 6, justifyContent: 'flex-end' }}>
+                            <button onClick={() => API.hrm.setLeave(l.id, 'approved').then(() => { reload(); API.hrm.leaveBalances().then(setLeaveBal); })} style={hrMini(T, 'accent')}>Approve</button>
+                            <button onClick={() => API.hrm.setLeave(l.id, 'rejected').then(() => { reload(); API.hrm.leaveBalances().then(setLeaveBal); })} style={hrMini(T, true)}>Reject</button>
+                            <button onClick={() => setEditLeave(l)} style={hrMini(T)}>Edit</button>
+                            <button onClick={() => API.hrm.removeLeave(l.id).then(() => { reload(); API.hrm.leaveBalances().then(setLeaveBal); }).catch((e: any) => show(e.message))} style={hrMini(T, true)}>Remove</button>
+                          </span>
+                        : <span style={{ fontSize: 11.5, color: T.inkMute }}>reject to edit</span>}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -796,6 +817,7 @@ export function HRM({ T }: { T: any }) {
       {editTpl && <ShiftTemplateModal T={T} template={editTpl} onClose={() => setEditTpl(null)} onSaved={() => { setEditTpl(null); show('Shift updated'); reload(); }} />}
       {assignTpl && <ShiftAssignModal T={T} emps={emps} template={assignTpl} onClose={() => setAssignTpl(null)} onSaved={() => { setAssignTpl(null); show('Employees assigned'); reload(); }} />}
       {(modal === 'org' || modal === 'designation') && <OrgUnitModal T={T} kind={modal === 'org' ? 'department' : 'designation'} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Added'); API.hrm.org().then(setOrg); }} />}
+      {editLeave && <LeaveModal T={T} emps={emps} leaveTypes={leaveTypes} holidays={holidays} leave={editLeave} onClose={() => setEditLeave(null)} onSaved={() => { setEditLeave(null); show('Leave updated'); reload(); API.hrm.leaveBalances().then(setLeaveBal); }} />}
       {editAtt && <AttendanceEntryModal T={T} emps={emps} templates={templates} record={editAtt.id ? editAtt : null} onClose={() => setEditAtt(null)} onSaved={() => { setEditAtt(null); show('Attendance saved'); reload(); }} />}
       {editOrg && <OrgUnitModal T={T} kind={editOrg.kind} unit={editOrg} onClose={() => setEditOrg(null)} onSaved={() => { setEditOrg(null); show('Saved'); API.hrm.org().then(setOrg); reload(); }} />}
       {modal === 'holiday' && <HolidayModal T={T} locs={locs} onClose={() => setModal(null)} onSaved={() => { setModal(null); show('Holiday added'); reload(); }} />}
@@ -1477,7 +1499,8 @@ function LeaveTypesManager({ T, emps, onClose, onSaved }: { T: any; emps: any[];
   );
 }
 
-function LeaveModal({ T, emps, leaveTypes, holidays, onClose, onSaved }: { T: any; emps: any[]; leaveTypes: any[]; holidays: any[]; onClose: () => void; onSaved: () => void }) {
+function LeaveModal({ T, emps, leaveTypes, holidays, leave, onClose, onSaved }: { T: any; emps: any[]; leaveTypes: any[]; holidays: any[]; leave?: any; onClose: () => void; onSaved: () => void }) {
+  const editing = !!leave;
   // Every day covered by a holiday, so the day count skips them.
   const offDays = React.useMemo(() => {
     const set = new Set<string>();
@@ -1490,7 +1513,9 @@ function LeaveModal({ T, emps, leaveTypes, holidays, onClose, onSaved }: { T: an
   }, [holidays]);
   const types = (leaveTypes && leaveTypes.length) ? leaveTypes.map((t: any) => t.name) : ['Casual', 'Sick', 'Annual', 'Unpaid'];
   const today = new Date().toISOString().slice(0, 10);
-  const [f, setF] = useStateHr<any>({ employee_id: (emps[0] || {}).id || '', type: types[0], from: today, to: today, days: 1, reason: '' });
+  const [f, setF] = useStateHr<any>(editing
+    ? { employee_id: leave.employee_id, type: leave.type, from: leave.from, to: leave.to, days: leave.days, reason: leave.reason || '' }
+    : { employee_id: (emps[0] || {}).id || '', type: types[0], from: today, to: today, days: 1, reason: '' });
   const [busy, setBusy] = useStateHr(false);
   const [err, setErr] = useStateHr<any>(null);
   const [bal, setBal] = useStateHr<any[]>([]);
@@ -1515,8 +1540,8 @@ function LeaveModal({ T, emps, leaveTypes, holidays, onClose, onSaved }: { T: an
   const typeBal: any = bal.find((b: any) => b.type === f.type);
   const paidType = typeBal && typeBal.paid !== false;
   return (
-    <Modal T={T} title="Apply leave" width={500} onClose={onClose}
-      footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Cancel</Btn><Btn T={T} kind="accent" onClick={async () => { if (!f.from || !f.to) { setErr('Pick a start and end date.'); return; } if (f.to < f.from) { setErr('End date cannot be before the start date.'); return; } setBusy(true); setErr(null); try { await API.hrm.addLeave(f); onSaved(); } catch (e: any) { setErr(e.message); } finally { setBusy(false); } }} disabled={busy}>{busy ? 'Saving…' : 'Apply'}</Btn></>}>
+    <Modal T={T} title={editing ? `Edit leave — ${leave.reference_no || leave.employee_name}` : 'Apply leave'} width={500} onClose={onClose}
+      footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Cancel</Btn><Btn T={T} kind="accent" onClick={async () => { if (!f.from || !f.to) { setErr('Pick a start and end date.'); return; } if (f.to < f.from) { setErr('End date cannot be before the start date.'); return; } setBusy(true); setErr(null); try { if (editing) await API.hrm.updateLeave(leave.id, f); else await API.hrm.addLeave(f); onSaved(); } catch (e: any) { setErr(e.message); } finally { setBusy(false); } }} disabled={busy}>{busy ? 'Saving…' : editing ? 'Save changes' : 'Apply'}</Btn></>}>
       <FormGrid>
         <Field T={T} label="Employee" full><SelectField T={T} value={String(f.employee_id)} options={emps.map((e: any) => String(e.id))} onChange={v => set('employee_id', /^\d+$/.test(String(v)) ? Number(v) : v)} render={v => (emps.find((e: any) => String(e.id) === v) || {}).name} /></Field>
         <Field T={T} label="Type"><SelectField T={T} value={f.type} options={types} onChange={v => set('type', v)} /></Field>
