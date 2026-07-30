@@ -223,10 +223,15 @@ describe('HRM', () => {
     const sum = (await request(app).get('/api/v1/hrm/attendance-summary/' + e.id + '?month=2026-06').set(auth(token))).body;
     expect(sum.present).toBe(1);
     expect(sum.total_hours).toBeCloseTo(9, 1);
-    // advance 150 then payroll deduction 200 recovers it (settled)
+    // advance 150, then a payroll that withholds 50 AND repays the advance.
+    // Recovery is its own instruction — a bare `deduction` must not touch the
+    // advance, or entering a tax deduction silently settles someone's loan.
     const acc = (await request(app).post('/api/v1/payment-accounts').set(auth(token)).send({ name: 'Cash', type: 'Cash', balance: 1000 })).body;
     await request(app).post('/api/v1/hrm/advance').set(auth(token)).send({ employee_id: e.id, amount: 150, date: '2026-06-01', account_id: acc.id });
-    const pay = (await request(app).post('/api/v1/hrm/payroll').set(auth(token)).send({ employee_id: e.id, month: '2026-06', basic: 800, deduction: 200 })).body;
+    const notRecovered = (await request(app).post('/api/v1/hrm/payroll').set(auth(token)).send({ employee_id: e.id, month: '2026-05', basic: 800, deduction: 200 })).body;
+    expect(parseFloat(notRecovered.advance_recovered)).toBe(0);
+    expect((await request(app).get('/api/v1/hrm/advance/outstanding/' + e.id).set(auth(token))).body.outstanding).toBe(150);
+    const pay = (await request(app).post('/api/v1/hrm/payroll').set(auth(token)).send({ employee_id: e.id, month: '2026-06', basic: 800, deduction: 50, advance_recovery: 150 })).body;
     expect(parseFloat(pay.net)).toBe(600);
     expect(parseFloat(pay.advance_recovered)).toBe(150);
     expect((await request(app).get('/api/v1/hrm/advance/outstanding/' + e.id).set(auth(token))).body.outstanding).toBe(0);

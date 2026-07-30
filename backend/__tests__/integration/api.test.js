@@ -1898,3 +1898,253 @@ describe('Tax report', () => {
     expect(bad.status).toBe(400);
   });
 });
+
+// ══════════════════════════════════════════════════════════════════════════════
+// HRM — the P0 correctness fixes
+// ══════════════════════════════════════════════════════════════════════════════
+
+describe('HRM', () => {
+  let hrToken, hrBizId, hrEmpId, hrLocId;
+
+  beforeAll(async () => {
+    const reg = await registerBusiness(`hrm_${RUN}`);
+    hrToken = reg.access_token;
+    hrBizId = reg.business.id;
+    // hrm is a paid add-on, so an owner cannot self-grant it through the API.
+    await prisma.business.update({ where: { id: hrBizId }, data: { enabledModules: ['core', 'hrm'] } });
+    await request(app).post('/api/v1/locations').set(auth(hrToken)).send({ name: 'HR Main', type: 'store' });
+    const locRes = await request(app).get('/api/v1/locations').set(auth(hrToken));
+    hrLocId = locRes.body.locations[0].id;
+    const emp = await request(app).post('/api/v1/hrm/employee').set(auth(hrToken)).send({
+      name: 'Hr Employee', email: `hremp_${RUN}@balanzify.test`, department: 'Sales',
+      designation: 'Cashier', location_id: hrLocId, salary: 1200, joined: '2026-01-01',
+    });
+    expect(emp.status).toBe(201);
+    hrEmpId = emp.body.id;
+  });
+
+  afterAll(async () => {
+    await prisma.business.deleteMany({ where: { id: hrBizId } }).catch(() => {});
+  });
+
+  test('settings accept the fields the payroll math actually reads', async () => {
+    const res = await request(app).put('/api/v1/hrm/settings').set(auth(hrToken)).send({
+      timezone: 'Africa/Mogadishu', overtime_rate: 2, working_days: 22,
+      late_deduction: 5, absent_deduction: 'day', work_start: '09:00',
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.timezone).toBe('Africa/Mogadishu');
+    expect(res.body.overtime_rate).toBe(2);
+    expect(res.body.working_days).toBe(22);
+    expect(res.body.late_deduction).toBe(5);
+    expect(res.body.absent_deduction).toBe('day');
+    // They must survive a round trip, not just be echoed back.
+    const back = await request(app).get('/api/v1/hrm/settings').set(auth(hrToken));
+    expect(back.body.overtime_rate).toBe(2);
+    expect(back.body.working_days).toBe(22);
+  });
+
+  test('an open attendance row is measured on the business clock, not the container one', async () => {
+    const clock = await request(app).post('/api/v1/hrm/attendance/clock')
+      .set(auth(hrToken)).send({ employee_id: hrEmpId });
+    expect(clock.status).toBe(200);
+    const list = await request(app).get('/api/v1/hrm/attendance').set(auth(hrToken));
+    expect(list.status).toBe(200);
+    const row = list.body.find(r => r.employee_id === hrEmpId);
+    expect(row).toBeTruthy();
+    expect(row.status).toBe('running');
+    // Clocked in seconds ago. Reading the container's UTC clock against an EAT
+    // clock-in made the span wrap past midnight and report ~21h.
+    expect(row.hours).toBeLessThan(1);
+  });
+
+  test('employees can be edited, and the profile is not a stub', async () => {
+    const upd = await request(app).put(`/api/v1/hrm/employee/${hrEmpId}`)
+      .set(auth(hrToken)).send({ salary: 1500, designation: 'Manager', commission_percent: 4 });
+    expect(upd.status).toBe(200);
+    expect(upd.body.salary).toBe(1500);
+    expect(upd.body.designation).toBe('Manager');
+    expect(upd.body.commission_percent).toBe(4);
+
+    const prof = await request(app).get(`/api/v1/hrm/employee/${hrEmpId}`).set(auth(hrToken));
+    expect(prof.status).toBe(200);
+    // These six were hardcoded empty literals, which is what made the payslip
+    // button unreachable.
+    expect(Array.isArray(prof.body.attendance)).toBe(true);
+    expect(prof.body.attendance.length).toBeGreaterThan(0);   // the clock-in above
+    expect(Array.isArray(prof.body.leaves)).toBe(true);
+    expect(Array.isArray(prof.body.payroll)).toBe(true);
+    expect(Array.isArray(prof.body.advances)).toBe(true);
+    expect(Array.isArray(prof.body.leave_balance)).toBe(true);
+    expect(prof.body.leave_balance.length).toBeGreaterThan(0);
+    expect(typeof prof.body.outstanding_advance).toBe('number');
+
+    const bad = await request(app).put(`/api/v1/hrm/employee/${hrEmpId}`)
+      .set(auth(hrToken)).send({ commission_percent: 500 });
+    expect(bad.status).toBe(422);
+  });
+
+  test('leave types reject a duplicate name and refuse to delete one in use', async () => {
+    const made = await request(app).post('/api/v1/hrm/leave-type')
+      .set(auth(hrToken)).send({ name: 'Study', default_days: 5, paid: true });
+    expect(made.status).toBe(201);
+    const dupe = await request(app).post('/api/v1/hrm/leave-type')
+      .set(auth(hrToken)).send({ name: 'Study', default_days: 1, paid: true });
+    expect(dupe.status).toBe(409);
+    // The original must be untouched — the upsert used to silently rewrite it.
+    const types = await request(app).get('/api/v1/hrm/leave-type').set(auth(hrToken));
+    expect(types.body.find(t => t.name === 'Study').default_days).toBe(5);
+
+    // Unused, so it deletes.
+    const del = await request(app).delete(`/api/v1/hrm/leave-type/${made.body.id}`).set(auth(hrToken));
+    expect(del.status).toBe(200);
+  });
+
+  test('leave validates dates, period and the leave-type catalog', async () => {
+    const base = { employee_id: hrEmpId, type: 'Sick', days: 2 };
+
+    const noDates = await request(app).post('/api/v1/hrm/leave').set(auth(hrToken)).send(base);
+    expect(noDates.status).toBe(422);
+
+    const backwards = await request(app).post('/api/v1/hrm/leave')
+      .set(auth(hrToken)).send({ ...base, from: '2026-08-10', to: '2026-08-01' });
+    expect(backwards.status).toBe(422);
+
+    // A one-day period cannot burn 30 days of entitlement.
+    const tooMany = await request(app).post('/api/v1/hrm/leave')
+      .set(auth(hrToken)).send({ ...base, from: '2026-08-01', to: '2026-08-01', days: 30 });
+    expect(tooMany.status).toBe(422);
+    expect(tooMany.body.code).toBe('DAYS_EXCEED_PERIOD');
+
+    // Free-text types used to skip the quota check entirely.
+    const unknown = await request(app).post('/api/v1/hrm/leave')
+      .set(auth(hrToken)).send({ ...base, type: 'Sabbatical', from: '2026-08-01', to: '2026-08-02' });
+    expect(unknown.status).toBe(422);
+    expect(unknown.body.code).toBe('UNKNOWN_LEAVE_TYPE');
+
+    const ok = await request(app).post('/api/v1/hrm/leave')
+      .set(auth(hrToken)).send({ ...base, from: '2026-08-01', to: '2026-08-02' });
+    expect(ok.status).toBe(201);
+    expect(ok.body.from).toBe('2026-08-01');
+    expect(ok.body.to).toBe('2026-08-02');
+
+    // Pending days now count against the figure the UI shows, so it matches the
+    // number the server enforces on the next request.
+    const bal = await request(app).get(`/api/v1/hrm/leave-balance/${hrEmpId}`).set(auth(hrToken));
+    const sick = bal.body.find(b => b.type === 'Sick');
+    expect(sick.pending).toBe(2);
+    expect(sick.balance).toBe(sick.entitled - sick.taken - sick.pending);
+  });
+
+  test('the leave list filters server-side and rejects bad filters', async () => {
+    const all = await request(app).get('/api/v1/hrm/leave').set(auth(hrToken));
+    expect(all.status).toBe(200);
+    expect(all.body.length).toBeGreaterThan(0);
+
+    const inWindow = await request(app).get('/api/v1/hrm/leave')
+      .set(auth(hrToken)).query({ from: '2026-08-01', to: '2026-08-31' });
+    expect(inWindow.body.length).toBe(all.body.length);
+    const outside = await request(app).get('/api/v1/hrm/leave')
+      .set(auth(hrToken)).query({ from: '2027-01-01', to: '2027-01-31' });
+    expect(outside.body.length).toBe(0);
+
+    const byStatus = await request(app).get('/api/v1/hrm/leave')
+      .set(auth(hrToken)).query({ status: 'approved' });
+    expect(byStatus.body.length).toBe(0);   // the one above is still pending
+
+    for (const q of [{ employee_id: 'nope' }, { status: 'weird' }, { from: '2026-13-40' }]) {
+      const bad = await request(app).get('/api/v1/hrm/leave').set(auth(hrToken)).query(q);
+      expect(bad.status).toBe(400);
+    }
+  });
+
+  test('approving leave does not brand the employee on_leave forever', async () => {
+    const filed = await request(app).post('/api/v1/hrm/leave').set(auth(hrToken))
+      .send({ employee_id: hrEmpId, type: 'Casual', days: 1, from: '2026-09-10', to: '2026-09-10' });
+    expect(filed.status).toBe(201);
+    const appr = await request(app).put(`/api/v1/hrm/leave/${filed.body.id}`)
+      .set(auth(hrToken)).send({ status: 'approved' });
+    expect(appr.status).toBe(200);
+
+    // The leave is months away, so the employee is not on leave today.
+    const list = await request(app).get('/api/v1/hrm/employee').set(auth(hrToken));
+    const me = list.body.find(e => e.id === hrEmpId);
+    expect(me.status).toBe('active');
+    expect(me.on_leave).toBe(false);
+    const sum = await request(app).get('/api/v1/hrm/summary').set(auth(hrToken));
+    expect(sum.body.on_leave).toBe(0);
+  });
+
+  test('auto-absent skips approved leave and validates its date', async () => {
+    const bad = await request(app).post('/api/v1/hrm/attendance/auto-absent')
+      .set(auth(hrToken)).send({ date: 'not-a-date' });
+    expect(bad.status).toBe(422);
+
+    // 2026-09-10 is the approved leave day from the test above.
+    const run = await request(app).post('/api/v1/hrm/attendance/auto-absent')
+      .set(auth(hrToken)).send({ date: '2026-09-10' });
+    expect(run.status).toBe(200);
+    expect(run.body.added).toBe(0);
+    expect(run.body.skipped_on_leave).toBe(1);
+  });
+
+  test('deleting every department does not resurrect the defaults', async () => {
+    const before = await request(app).get('/api/v1/hrm/org').set(auth(hrToken));
+    expect(before.body.departments.length).toBeGreaterThan(0);
+    for (const d of before.body.departments) {
+      await request(app).delete('/api/v1/hrm/org').set(auth(hrToken))
+        .query({ kind: 'department', name: d.name });
+    }
+    const after = await request(app).get('/api/v1/hrm/org').set(auth(hrToken));
+    // Only the ones still assigned to an employee may survive the in-use guard.
+    expect(after.body.departments.length).toBeLessThan(before.body.departments.length);
+    expect(after.body.departments.some(d => d.name === 'Finance')).toBe(false);
+  });
+
+  test('payroll separates advance recovery from deduction and refuses a repeat month', async () => {
+    const adv = await request(app).post('/api/v1/hrm/advance').set(auth(hrToken))
+      .send({ employee_id: hrEmpId, amount: 300, note: 'School fees' });
+    expect(adv.status).toBe(201);
+    const out = await request(app).get(`/api/v1/hrm/advance/outstanding/${hrEmpId}`).set(auth(hrToken));
+    expect(out.body.outstanding).toBeCloseTo(300, 2);
+
+    // A deduction is withholding. It must NOT quietly settle the advance.
+    const run = await request(app).post('/api/v1/hrm/payroll').set(auth(hrToken))
+      .send({ employee_id: hrEmpId, month: '2026-06', basic: 1000, deduction: 100 });
+    expect(run.status).toBe(201);
+    expect(run.body.net).toBeCloseTo(900, 2);
+    expect(run.body.advance_recovered).toBeCloseTo(0, 2);
+    const stillOut = await request(app).get(`/api/v1/hrm/advance/outstanding/${hrEmpId}`).set(auth(hrToken));
+    expect(stillOut.body.outstanding).toBeCloseTo(300, 2);
+
+    // Paying the same month again would post the GL journal twice.
+    const again = await request(app).post('/api/v1/hrm/payroll').set(auth(hrToken))
+      .send({ employee_id: hrEmpId, month: '2026-06', basic: 1000 });
+    expect(again.status).toBe(409);
+    expect(again.body.code).toBe('PAYROLL_EXISTS');
+
+    // Asking to recover more than is outstanding recovers only what exists.
+    const run2 = await request(app).post('/api/v1/hrm/payroll').set(auth(hrToken))
+      .send({ employee_id: hrEmpId, month: '2026-07', basic: 1000, deduction: 50, advance_recovery: 500 });
+    expect(run2.status).toBe(201);
+    expect(run2.body.advance_recovered).toBeCloseTo(300, 2);
+    expect(run2.body.net).toBeCloseTo(650, 2);   // 1000 - 50 withheld - 300 recovered
+    const settled = await request(app).get(`/api/v1/hrm/advance/outstanding/${hrEmpId}`).set(auth(hrToken));
+    expect(settled.body.outstanding).toBeCloseTo(0, 2);
+  });
+
+  test('statutory deductions actually apply when a country is sent', async () => {
+    const run = await request(app).post('/api/v1/hrm/payroll').set(auth(hrToken))
+      .send({ employee_id: hrEmpId, month: '2026-05', basic: 60000, statutory_country: 'KE' });
+    expect(run.status).toBe(201);
+    expect(run.body.statutory_total).toBeGreaterThan(0);
+    expect(run.body.paye).toBeGreaterThan(0);
+    expect(run.body.net).toBeCloseTo(60000 - run.body.statutory_total, 1);
+
+    // And the filing report can now see it — it filters on statutoryTotal > 0.
+    const rep = await request(app).get('/api/v1/hrm/payroll/statutory-report')
+      .set(auth(hrToken)).query({ month: '2026-05' });
+    expect(rep.status).toBe(200);
+    expect(rep.body.lines.length).toBe(1);
+  });
+});

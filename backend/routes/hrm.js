@@ -630,16 +630,24 @@ router.get('/leave', auth, async (req, res, next) => {
     if (q.status && !['pending', 'approved', 'rejected'].includes(String(q.status))) {
       return res.status(400).json({ title: 'status must be pending, approved or rejected.', status: 400 });
     }
-    for (const k of ['from', 'to']) {
-      if (q[k] && !/^\d{4}-\d{2}-\d{2}$/.test(String(q[k]))) {
-        return res.status(400).json({ title: `${k} must be YYYY-MM-DD.`, status: 400 });
-      }
+    // Shape alone is not enough — 2026-13-40 matches the pattern but is not a
+    // real day, and an Invalid Date reaches Prisma as a 500.
+    const day = (v) => {
+      const str = String(v);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(str)) return null;
+      const d = new Date(str);
+      return isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== str ? null : d;
+    };
+    const fromDay = q.from ? day(q.from) : null;
+    const toDay = q.to ? day(q.to) : null;
+    for (const [k, v, parsed] of [['from', q.from, fromDay], ['to', q.to, toDay]]) {
+      if (v && !parsed) return res.status(400).json({ title: `${k} must be a real YYYY-MM-DD date.`, status: 400 });
     }
     // A leave overlaps the window if it starts before the end and ends after
     // the start — not merely if its start falls inside it.
     const overlap = {};
-    if (q.to) overlap.fromDate = { lte: new Date(String(q.to)) };
-    if (q.from) overlap.toDate = { gte: new Date(String(q.from)) };
+    if (toDay) overlap.fromDate = { lte: toDay };
+    if (fromDay) overlap.toDate = { gte: fromDay };
     const take = Math.min(Math.max(parseInt(q.limit, 10) || 500, 1), 2000);
     const leaves = await prisma.leave.findMany({
       where: {
