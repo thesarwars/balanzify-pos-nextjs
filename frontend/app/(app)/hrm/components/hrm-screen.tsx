@@ -4,6 +4,7 @@ import { money, money0 } from '@/lib/theme';
 import { Btn, Badge, Panel, Modal, Field, TextField, SelectField, FormGrid, useToast } from '@/components/kit';
 import { Topbar, useSession } from '@/components/shell';
 import { API } from '@/lib/api';
+import { ListToolbar, ListFooter, usePaged } from '@/components/list-chrome';
 import { LuUsers, LuPrinter, LuSettings, LuTriangleAlert, LuSearch, LuCheck, LuClock, LuHourglass, LuBanknote, LuListTodo, LuX, LuPlay } from 'react-icons/lu';
 import { BUSINESS } from '@/lib/data';
 import { todayLocal } from '@/lib/business-settings';
@@ -141,6 +142,15 @@ export function HRM({ T }: { T: any }) {
   const fTodos = todos.filter((t: any) => (matchQ(t.title) || matchQ(t.assigned_name)) && (!fStatus || t.status === fStatus));
   const fReport = report.filter((r: any) => matchQ(r.employee_name) && inDept(r.employee_id));
 
+  // Paging the long lists. Exports still cover the whole filtered set — only
+  // what is rendered is paged, which is what "Show N entries" means.
+  const pAtt = usePaged(fAtt);
+  const pLeaves = usePaged(fLeaves);
+  const pPay = usePaged(fPay);
+  const pHolidays = usePaged(fHolidays);
+  const pTargets = usePaged(fTargets);
+  const pAdvances = usePaged(fAdvances);
+
   // ── Export / print for the active tab ─────────────────────────────
   const exportSets: any = {
     settings: () => ({ title: 'Settings', cols: [], rows: [] }),
@@ -158,31 +168,13 @@ export function HRM({ T }: { T: any }) {
     todos: () => ({ title: 'Tasks', cols: ['Task', 'Assigned to', 'Priority', 'Status', 'Due'], rows: fTodos.map((t: any) => [t.title, t.assigned_name, t.priority, t.status, t.due]) }),
   };
   const activeSet = () => (exportSets[tab] || exportSets.employees)();
-  function exportCSV() {
+  // Fed to the shared toolbar, so HRM exports the same five ways the reports do
+  // rather than the CSV-and-print pair it had.
+  const exportTable = () => {
     const { title, cols, rows } = activeSet();
-    const esc = (v: any) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
-    const csv = [cols, ...rows].map((r: any) => r.map(esc).join(',')).join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' }); const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href = url; a.download = `${bizName}-${title}.csv`.replace(/\s+/g, '-'); document.body.appendChild(a); a.click();
-    setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
-    show('Exported ' + title);
-  }
-  function printTable() {
-    const { title, cols, rows } = activeSet();
-    const w = window.open('', '_blank', 'width=900,height=700'); if (!w) return;
-    const thead = cols.map(function (c: any) { return '<th style="text-align:left;padding:7px 10px;background:#f4f1ea;border-bottom:1px solid #ddd;text-transform:uppercase;font-size:10px;letter-spacing:.5px;color:#666">' + c + '</th>'; }).join('');
-    const tbody = rows.map(function (r: any) {
-      const cells = r.map(function (c: any) { return '<td style="padding:7px 10px;border-bottom:1px solid #eee">' + (c == null ? '' : c) + '</td>'; }).join('');
-      return '<tr>' + cells + '</tr>';
-    }).join('');
-    const html = '<html><head><title>' + title + ' — ' + bizName + '</title></head>'
-      + '<body style="font-family:system-ui,sans-serif;margin:32px;color:#1a1a1a">'
-      + '<div style="display:flex;justify-content:space-between;align-items:baseline;border-bottom:2px solid #1a1a1a;padding-bottom:10px;margin-bottom:14px"><div style="font-size:20px;font-weight:800">' + bizName + '</div><div style="font-size:13px;color:#666">' + title + ' · ' + new Date().toLocaleDateString() + '</div></div>'
-      + '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr>' + thead + '</tr></thead><tbody>' + tbody + '</tbody></table>'
-      + '<div style="text-align:center;font-size:10px;color:#999;margin-top:24px">' + rows.length + ' rows · Balanzify POS</div>'
-      + '<scr' + 'ipt>window.onload=function(){setTimeout(function(){window.print()},300)}</scr' + 'ipt></body></html>';
-    w.document.write(html); w.document.close();
-  }
+    return { title, subtitle: bizName, fileName: `${bizName}-${title}`.replace(/\s+/g, '-'), cols, rows };
+  };
+
   const atone: any = { present: 'green', late: 'amber', absent: 'red', running: 'amber' };
   const ltone: any = { approved: 'green', pending: 'amber', rejected: 'red' };
   const ptone: any = { high: 'red', medium: 'amber', low: 'gray' };
@@ -191,7 +183,6 @@ export function HRM({ T }: { T: any }) {
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: T.paperAlt }}>
       <Topbar T={T} title="HRM / Essentials" subtitle="People, time & payroll"
         right={<span style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          {tab !== 'overview' && <><Btn T={T} kind="ghost" onClick={exportCSV}>⤓ Export</Btn><Btn T={T} kind="ghost" onClick={printTable}><LuPrinter size={13} style={{ verticalAlign: -2, marginRight: 5 }} />Print</Btn></>}
           {tab === 'employees' ? <Btn T={T} kind="accent" onClick={() => setModal('employee')}>+ Add Employee</Btn>
           : tab === 'org' || tab === 'designations' ? <Btn T={T} kind="accent" onClick={() => setModal(tab === 'org' ? 'org' : 'designation')}>+ Add</Btn>
           : tab === 'leave' ? <><Btn T={T} kind="ghost" onClick={() => setModal('leavetypes')}><LuSettings size={13} style={{ verticalAlign: -2, marginRight: 5 }} />Leave Types</Btn><Btn T={T} kind="accent" onClick={() => setModal('leave')}>+ Apply Leave</Btn></>
@@ -210,6 +201,11 @@ export function HRM({ T }: { T: any }) {
               <button key={id} onClick={() => setTab(id)} style={{ padding: '8px 16px', borderRadius: 7, border: 'none', cursor: 'pointer', fontFamily: T.fBody, fontSize: 13, fontWeight: tab === id ? 700 : 500, background: tab === id ? T.accent.base : 'transparent', color: tab === id ? T.accent.on : T.inkMid }}>{lbl}</button>
             ))}
           </div>
+
+          {/* EXPORT TOOLBAR — every data tab, matching the reports screens */}
+          {!['overview', 'settings'].includes(tab) && (
+            <ListToolbar T={T} table={exportTable} />
+          )}
 
           {/* FILTER BAR — shown on data tabs */}
           {['attendance', 'report', 'shifts', 'leave', 'payroll', 'advances', 'todos'].includes(tab) && (() => {
@@ -301,7 +297,7 @@ export function HRM({ T }: { T: any }) {
                 </tr></thead>
                 <tbody>
                   {fTargets.length === 0 && <tr><td colSpan={3} style={{ padding: 30, textAlign: 'center', fontSize: 12.5, color: T.inkMute }}>No users.</td></tr>}
-                  {fTargets.map((t: any) => (
+                  {pTargets.slice.map((t: any) => (
                     <tr key={t.user_id}>
                       <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 13, fontWeight: 600, color: T.ink }}>{t.name}</td>
                       <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 12.5, color: T.inkSub }}>
@@ -320,7 +316,8 @@ export function HRM({ T }: { T: any }) {
                   ))}
                 </tbody>
               </table>
-            </Panel>
+            <div style={{ padding: '0 18px' }}><ListFooter T={T} paged={pTargets} /></div>
+              </Panel>
           )}
 
           {tab === 'holidays' && (
@@ -333,7 +330,7 @@ export function HRM({ T }: { T: any }) {
                 </tr></thead>
                 <tbody>
                   {fHolidays.length === 0 && <tr><td colSpan={5} style={{ padding: 30, textAlign: 'center', fontSize: 12.5, color: T.inkMute }}>No holidays yet.</td></tr>}
-                  {fHolidays.map((h: any) => (
+                  {pHolidays.slice.map((h: any) => (
                     <tr key={h.id}>
                       <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 13, fontWeight: 600, color: T.ink }}>{h.name}</td>
                       <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 12.5, color: T.inkSub, fontFamily: T.fMono }}>{h.start_date === h.end_date ? h.start_date : `${h.start_date} → ${h.end_date}`}</td>
@@ -347,7 +344,8 @@ export function HRM({ T }: { T: any }) {
                   ))}
                 </tbody>
               </table>
-            </Panel>
+            <div style={{ padding: '0 18px' }}><ListFooter T={T} paged={pHolidays} /></div>
+              </Panel>
           )}
 
           {/* DEPARTMENTS & DESIGNATIONS */}
@@ -516,7 +514,7 @@ export function HRM({ T }: { T: any }) {
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                   <thead><tr>{[['Employee', 'l'], ['Date', 'l'], ['Clock in', 'l'], ['Clock out', 'l'], ['Work duration', 'r'], ['IP address', 'l'], ['Shift', 'l'], ['Status', 'l'], ['', 'r']].map(([h, a], i) => <th key={i} style={{ textAlign: a === 'r' ? 'right' : 'left', padding: '11px 18px', fontSize: 10, fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', color: T.inkSub, background: T.paperAlt, borderBottom: `1px solid ${T.line}` }}>{h}</th>)}</tr></thead>
                   <tbody>
-                    {fAtt.map((a: any) => (
+                    {pAtt.slice.map((a: any) => (
                       <tr key={a.id}>
                         <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 13, fontWeight: 600, color: T.ink }}>{a.employee_name}{a.flexible ? <span style={{ marginLeft: 7 }}><Badge T={T} tone="blue">flexible</Badge></span> : null}</td>
                         <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 12, color: T.inkSub, fontFamily: T.fMono }}>{a.date}</td>
@@ -537,6 +535,7 @@ export function HRM({ T }: { T: any }) {
                     ))}
                   </tbody>
                 </table>
+              <div style={{ padding: '0 18px' }}><ListFooter T={T} paged={pAtt} /></div>
               </Panel>
               </>}
             </>
@@ -565,7 +564,7 @@ export function HRM({ T }: { T: any }) {
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead><tr>{[['Reference No', 'l'], ['Employee', 'l'], ['Type', 'l'], ['Period', 'l'], ['Days', 'r'], ['Reason', 'l'], ['Status', 'l'], ['Approved by', 'l'], ['', 'r']].map(([h, a], i) => <th key={i} style={{ textAlign: a === 'r' ? 'right' : 'left', padding: '11px 18px', fontSize: 10, fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', color: T.inkSub, background: T.paperAlt, borderBottom: `1px solid ${T.line}` }}>{h}</th>)}</tr></thead>
                 <tbody>
-                  {fLeaves.map((l: any) => (
+                  {pLeaves.slice.map((l: any) => (
                     <tr key={l.id}>
                       <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontFamily: T.fMono, fontSize: 12, color: T.inkSub }}>{l.reference_no || '—'}</td>
                       <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 13, fontWeight: 600, color: T.ink }}>{l.employee_name}</td>
@@ -587,7 +586,8 @@ export function HRM({ T }: { T: any }) {
                   ))}
                 </tbody>
               </table>
-            </Panel>
+            <div style={{ padding: '0 18px' }}><ListFooter T={T} paged={pLeaves} /></div>
+              </Panel>
             </>
           )}
 
@@ -660,7 +660,7 @@ export function HRM({ T }: { T: any }) {
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead><tr>{[['Employee', 'l'], ['Department', 'l'], ['Designation', 'l'], ['Month', 'l'], ['Reference No', 'l'], ['Total amount', 'r'], ['Deduction', 'r'], ['Net pay', 'r'], ['Payment status', 'l']].map(([h, a], i) => <th key={i} style={{ textAlign: a === 'r' ? 'right' : 'left', padding: '11px 18px', fontSize: 10, fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', color: T.inkSub, background: T.paperAlt, borderBottom: `1px solid ${T.line}` }}>{h}</th>)}</tr></thead>
                 <tbody>
-                  {fPay.map((p: any) => (
+                  {pPay.slice.map((p: any) => (
                     <tr key={p.id}>
                       <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 13, fontWeight: 600, color: T.ink }}>{p.employee_name}</td>
                       <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 12.5, color: T.inkSub }}>{p.department}</td>
@@ -676,7 +676,8 @@ export function HRM({ T }: { T: any }) {
                 </tbody>
               </table>
               {pay.length === 0 && <div style={{ padding: 44, textAlign: 'center', color: T.inkMute, fontSize: 13 }}>No payroll runs yet.</div>}
-            </Panel>
+            <div style={{ padding: '0 18px' }}><ListFooter T={T} paged={pPay} /></div>
+              </Panel>
           )}
 
           {/* TODOS */}
@@ -789,7 +790,7 @@ export function HRM({ T }: { T: any }) {
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead><tr>{[['Employee', 'l'], ['Date', 'l'], ['Amount', 'r'], ['Outstanding', 'r'], ['Paid from', 'l'], ['Note', 'l'], ['Status', 'l'], ['', 'r']].map(([h, a], i) => <th key={i} style={{ textAlign: a === 'r' ? 'right' : 'left', padding: '11px 18px', fontSize: 10, fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', color: T.inkSub, background: T.paperAlt, borderBottom: `1px solid ${T.line}` }}>{h}</th>)}</tr></thead>
                 <tbody>
-                  {fAdvances.map((a: any) => (
+                  {pAdvances.slice.map((a: any) => (
                     <tr key={a.id}>
                       <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 13, fontWeight: 600, color: T.ink }}>{a.employee_name}</td>
                       <td style={{ padding: '12px 18px', borderBottom: `1px solid ${T.line}`, fontSize: 12, color: T.inkSub, fontFamily: T.fMono }}>{a.date}</td>
@@ -804,7 +805,8 @@ export function HRM({ T }: { T: any }) {
                 </tbody>
               </table>
               {advances.length === 0 && <div style={{ padding: 40, textAlign: 'center', color: T.inkMute, fontSize: 13 }}>No advances given. Advances draw from a payment account and recover automatically via payroll deduction.</div>}
-            </Panel>
+            <div style={{ padding: '0 18px' }}><ListFooter T={T} paged={pAdvances} /></div>
+              </Panel>
           )}
         </div>
       </div>
