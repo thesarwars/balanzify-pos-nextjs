@@ -498,7 +498,11 @@ function computeBalances(emp, types, leaves, overrideMap) {
     const mine = leaves.filter(l => l.type === t.name);
     const taken = mine.filter(l => l.status === 'approved').reduce((s, l) => s + l.days, 0);
     const pending = mine.filter(l => l.status === 'pending').reduce((s, l) => s + l.days, 0);
-    return { type: t.name, paid: t.paid, entitled, taken, pending, balance: entitled - taken };
+    // `balance` is what the user may still apply for, so pending requests count
+    // against it — the admission test below uses exactly this figure. Showing
+    // `entitled - taken` here meant the modal could read "12 available" and the
+    // save then 422 with "Only 0 available".
+    return { type: t.name, paid: t.paid, entitled, taken, pending, balance: entitled - taken - pending };
   });
 }
 function serializeLeave(l, empName) {
@@ -592,14 +596,29 @@ router.post('/leave', auth, validate(LeaveSchema), async (req, res, next) => {
     ]);
     const overrideMap = Object.fromEntries(overrides.map(o => [o.type, o.days]));
     const bal = computeBalances(emp, types, leaves, overrideMap).find(b => b.type === req.body.type);
-    if (bal && bal.paid) {
-      const available = bal.entitled - bal.taken - bal.pending;
-      if (req.body.days > available) return res.status(422).json({ title: `Only ${available} ${req.body.type} day(s) available`, status: 422 });
+    if (!bal) {
+      return res.status(422).json({
+        title: `"${req.body.type}" is not one of this business's leave types.`,
+        status: 422, code: 'UNKNOWN_LEAVE_TYPE',
+        leave_types: types.map(t => t.name),
+      });
+    }
+    const fromDate = new Date(req.body.from), toDate = new Date(req.body.to);
+    // Days must fit the period asked for, or a one-day request could burn a
+    // month of entitlement.
+    const spanDays = Math.round((toDate - fromDate) / 86400000) + 1;
+    if (req.body.days > spanDays) {
+      return res.status(422).json({
+        title: `${req.body.days} day(s) does not fit ${req.body.from} to ${req.body.to} (${spanDays} day(s)).`,
+        status: 422, code: 'DAYS_EXCEED_PERIOD',
+      });
+    }
+    if (bal.paid && req.body.days > bal.balance) {
+      return res.status(422).json({ title: `Only ${bal.balance} ${req.body.type} day(s) available`, status: 422 });
     }
     const created = await prisma.leave.create({ data: {
       businessId, employeeId: emp.id, type: req.body.type,
-      fromDate: req.body.from ? new Date(req.body.from) : new Date(),
-      toDate: req.body.to ? new Date(req.body.to) : new Date(),
+      fromDate, toDate,
       days: req.body.days, reason: req.body.reason || null,
     }});
     res.status(201).json(serializeLeave(created, emp.name));

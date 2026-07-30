@@ -609,17 +609,27 @@ function LeaveTypesManager({ T, emps, onClose, onSaved }: { T: any; emps: any[];
 
 function LeaveModal({ T, emps, leaveTypes, onClose, onSaved }: { T: any; emps: any[]; leaveTypes: any[]; onClose: () => void; onSaved: () => void }) {
   const types = (leaveTypes && leaveTypes.length) ? leaveTypes.map((t: any) => t.name) : ['Casual', 'Sick', 'Annual', 'Unpaid'];
-  const [f, setF] = useStateHr<any>({ employee_id: (emps[0] || {}).id || '', type: types[0], from: '', to: '', days: 1, reason: '' });
+  const today = new Date().toISOString().slice(0, 10);
+  const [f, setF] = useStateHr<any>({ employee_id: (emps[0] || {}).id || '', type: types[0], from: today, to: today, days: 1, reason: '' });
   const [busy, setBusy] = useStateHr(false);
   const [err, setErr] = useStateHr<any>(null);
   const [bal, setBal] = useStateHr<any[]>([]);
-  const set = (k: string, v: any) => setF((s: any) => ({ ...s, [k]: v }));
+  // Changing either date re-derives the day count, so the two can't disagree.
+  // It stays editable for a partial claim (skipping a weekend, say); the server
+  // caps it at the length of the period.
+  const set = (k: string, v: any) => setF((s: any) => {
+    const nf = { ...s, [k]: v };
+    if ((k === 'from' || k === 'to') && nf.from && nf.to && nf.to >= nf.from) {
+      nf.days = Math.round((new Date(nf.to).getTime() - new Date(nf.from).getTime()) / 86400000) + 1;
+    }
+    return nf;
+  });
   React.useEffect(() => { if (f.employee_id) API.hrm.empLeaveBalance(f.employee_id).then(setBal).catch(() => {}); }, [f.employee_id]);
   const typeBal: any = bal.find((b: any) => b.type === f.type);
   const paidType = typeBal && typeBal.paid !== false;
   return (
     <Modal T={T} title="Apply leave" width={500} onClose={onClose}
-      footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Cancel</Btn><Btn T={T} kind="accent" onClick={async () => { setBusy(true); setErr(null); try { await API.hrm.addLeave(f); onSaved(); } catch (e: any) { setErr(e.message); } finally { setBusy(false); } }} disabled={busy}>{busy ? 'Saving…' : 'Apply'}</Btn></>}>
+      footer={<><div style={{ flex: 1 }} /><Btn T={T} kind="ghost" onClick={onClose}>Cancel</Btn><Btn T={T} kind="accent" onClick={async () => { if (!f.from || !f.to) { setErr('Pick a start and end date.'); return; } if (f.to < f.from) { setErr('End date cannot be before the start date.'); return; } setBusy(true); setErr(null); try { await API.hrm.addLeave(f); onSaved(); } catch (e: any) { setErr(e.message); } finally { setBusy(false); } }} disabled={busy}>{busy ? 'Saving…' : 'Apply'}</Btn></>}>
       <FormGrid>
         <Field T={T} label="Employee" full><SelectField T={T} value={String(f.employee_id)} options={emps.map((e: any) => String(e.id))} onChange={v => set('employee_id', /^\d+$/.test(String(v)) ? Number(v) : v)} render={v => (emps.find((e: any) => String(e.id) === v) || {}).name} /></Field>
         <Field T={T} label="Type"><SelectField T={T} value={f.type} options={types} onChange={v => set('type', v)} /></Field>

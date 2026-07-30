@@ -4488,7 +4488,9 @@ const API: any = {
       return (await transport('GET', '/connector/api/hrm/leave')).data;
     },
     async addLeave(body: any) {
-      if (REAL_MODE) return await realReq('POST', '/hrm/leave', { body: { employee_id: body.employee_id, type: body.type, from: body.from || undefined, to: body.to || undefined, days: Number(body.days || 1), reason: body.reason || undefined } });
+      // from/to are required by the API — sending undefined used to make the
+      // server silently substitute today for both.
+      if (REAL_MODE) return await realReq('POST', '/hrm/leave', { body: { employee_id: body.employee_id, type: body.type, from: body.from, to: body.to, days: Number(body.days || 1), reason: body.reason || undefined } });
       return (await transport('POST', '/connector/api/hrm/leave', { body })).data;
     },
     async setLeave(id: any, status: any) {

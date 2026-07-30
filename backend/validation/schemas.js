@@ -471,11 +471,14 @@ const LeaveTypeUpdateSchema = z.object({
 const LeaveSchema = z.object({
   employee_id: uuid,
   type:        shortStr(100),
-  from:        isoDate,
-  to:          isoDate,
+  // Required. They used to be optional and silently defaulted to today, so a
+  // 30-day request could be stored as a same-day one while still burning 30
+  // days of entitlement.
+  from:        z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD'),
+  to:          z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD'),
   days:        z.coerce.number().int().positive().default(1),
   reason:      optStr(500),
-});
+}).refine(v => v.to >= v.from, { message: 'End date cannot be before the start date.', path: ['to'] });
 const LeaveStatusSchema = z.object({
   status:      z.enum(['pending', 'approved', 'rejected']),
   approved_by: optStr(255),
