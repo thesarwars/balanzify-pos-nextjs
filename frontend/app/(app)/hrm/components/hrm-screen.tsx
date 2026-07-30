@@ -73,6 +73,11 @@ export function HRM({ T }: { T: any }) {
   const [leaveTo, setLeaveTo] = useStateHr('');
   const [leaveEmp, setLeaveEmp] = useStateHr('');
   const [leaveType, setLeaveType] = useStateHr('');
+  // Payroll list filters, all resolved server-side.
+  const [payEmp, setPayEmp] = useStateHr('');
+  const [payLoc, setPayLoc] = useStateHr('');
+  const [payDesig, setPayDesig] = useStateHr('');
+  const [payMonth, setPayMonth] = useStateHr('');
   const [editLeave, setEditLeave] = useStateHr<any>(null);
   const [show, node] = useToast();
   React.useEffect(() => { setQ(''); setFDept(''); setFStatus(''); }, [tab]);
@@ -83,7 +88,10 @@ export function HRM({ T }: { T: any }) {
     API.hrm.employees().then(setEmps).catch(() => {});
     API.hrm.attendance({ ...(attEmp && { employee_id: attEmp }), ...(attFrom && { from: attFrom }), ...(attTo && { to: attTo }) }).then(setAtt).catch(() => {});
     API.hrm.leaves({ ...(leaveFrom && { from: leaveFrom }), ...(leaveTo && { to: leaveTo }), ...(leaveEmp && { employee_id: leaveEmp }), ...(leaveType && { type: leaveType }) }).then(setLeaves).catch(() => {});
-    API.hrm.payroll().then(setPay).catch(() => {});
+    API.hrm.payroll({
+      ...(payEmp && { employee_id: payEmp }), ...(payLoc && { location_id: payLoc }),
+      ...(payDesig && { designation: payDesig }), ...(payMonth && { month: payMonth }),
+    }).then(setPay).catch(() => {});
     API.hrm.todos().then(setTodos).catch(() => {});
     API.hrm.shifts().then(setShifts).catch(() => {});
     API.hrm.shiftSwaps().then(setSwaps).catch(() => {});
@@ -95,7 +103,7 @@ export function HRM({ T }: { T: any }) {
     API.hrm.payrollGroups().then(setPayGroups).catch(() => {});
     API.hrm.salesTargets().then(setTargets).catch(() => {});
     API.hrm.advances().then(setAdvances).catch(() => {});
-  }, [leaveFrom, leaveTo, leaveEmp, leaveType, attEmp, attFrom, attTo]);
+  }, [leaveFrom, leaveTo, leaveEmp, leaveType, attEmp, attFrom, attTo, payEmp, payLoc, payDesig, payMonth]);
   useEffectHr(() => { API.module.list().then((ms: any[]) => setEnabled(!!(ms.find((m: any) => m.key === 'hrm') || {}).enabled)).catch(() => setEnabled(false)); }, []);
   useEffectHr(() => {
     if (!enabled || tab !== 'attendance') return;
@@ -226,6 +234,21 @@ export function HRM({ T }: { T: any }) {
                 {tab !== 'todos' && <select value={fDept} onChange={e => setFDept(e.target.value)} style={hrFilterSel(T)}><option value="">All departments</option>{depts.map((d: any) => <option key={d} value={d}>{d}</option>)}</select>}
                 {statusOpts.length > 0 && <select value={fStatus} onChange={e => setFStatus(e.target.value)} style={hrFilterSel(T)}><option value="">All statuses</option>{statusOpts.map((s: any) => <option key={s} value={s}>{s}</option>)}</select>}
                 {tab === 'report' && <input type="month" value={reportMonth} onChange={e => setReportMonth(e.target.value)} style={hrFilterSel(T)} />}
+                {tab === 'payroll' && <>
+                  <select value={payEmp} onChange={e => setPayEmp(e.target.value)} style={hrFilterSel(T)}>
+                    <option value="">All employees</option>
+                    {emps.map((e: any) => <option key={e.id} value={e.id}>{e.name}</option>)}
+                  </select>
+                  <select value={payLoc} onChange={e => setPayLoc(e.target.value)} style={hrFilterSel(T)}>
+                    <option value="">All locations</option>
+                    {locs.map((l: any) => <option key={l.id} value={l.id}>{l.name}</option>)}
+                  </select>
+                  <select value={payDesig} onChange={e => setPayDesig(e.target.value)} style={hrFilterSel(T)}>
+                    <option value="">All designations</option>
+                    {(meta.designations || []).map((d: any) => <option key={d} value={d}>{d}</option>)}
+                  </select>
+                  <input type="month" title="Month/Year" value={payMonth} onChange={e => setPayMonth(e.target.value)} style={hrFilterSel(T)} />
+                </>}
                 {tab === 'leave' && <>
                   <select value={leaveEmp} onChange={e => setLeaveEmp(e.target.value)} style={hrFilterSel(T)}>
                     <option value="">All employees</option>
@@ -238,7 +261,7 @@ export function HRM({ T }: { T: any }) {
                   <input type="date" title="Leave from" value={leaveFrom} onChange={e => setLeaveFrom(e.target.value)} style={hrFilterSel(T)} />
                   <input type="date" title="Leave to" value={leaveTo} onChange={e => setLeaveTo(e.target.value)} style={hrFilterSel(T)} />
                 </>}
-                {(q || fDept || fStatus || leaveFrom || leaveTo || leaveEmp || leaveType) && <button onClick={() => { setQ(''); setFDept(''); setFStatus(''); setLeaveFrom(''); setLeaveTo(''); setLeaveEmp(''); setLeaveType(''); }} style={{ padding: '8px 12px', borderRadius: T.r, border: `1px solid ${T.line}`, background: T.paper, color: T.inkMid, cursor: 'pointer', fontFamily: T.fBody, fontSize: 12, fontWeight: 600 }}>Clear</button>}
+                {(q || fDept || fStatus || leaveFrom || leaveTo || leaveEmp || leaveType || payEmp || payLoc || payDesig || payMonth) && <button onClick={() => { setQ(''); setFDept(''); setFStatus(''); setLeaveFrom(''); setLeaveTo(''); setLeaveEmp(''); setLeaveType(''); setPayEmp(''); setPayLoc(''); setPayDesig(''); setPayMonth(''); }} style={{ padding: '8px 12px', borderRadius: T.r, border: `1px solid ${T.line}`, background: T.paper, color: T.inkMid, cursor: 'pointer', fontFamily: T.fBody, fontSize: 12, fontWeight: 600 }}>Clear</button>}
               </div>
             );
           })()}
