@@ -45,6 +45,16 @@ function serializeEmployee(e) {
   };
 }
 
+// Employee ids with an approved leave covering `date`. This is the single
+// source of truth for "on leave" — Employee.status stays an employment state.
+async function onLeaveOn(businessId, date) {
+  const rows = await prisma.leave.findMany({
+    where: { businessId, status: 'approved', fromDate: { lte: date }, toDate: { gte: date } },
+    select: { employeeId: true },
+  });
+  return new Set(rows.map(r => r.employeeId));
+}
+
 async function employeeSales(businessId, userId, pct) {
   if (!userId) return { total_sale: 0, tx_count: 0, commission: 0, commission_percent: pct };
   const agg = await prisma.sale.aggregate({
@@ -63,7 +73,7 @@ router.get('/summary', auth, async (req, res, next) => {
     const today = new Date(tzParts(settings.timezone).date);
     const [employees, onLeave, present, pendingLeave, openTodos, payroll] = await Promise.all([
       prisma.employee.count({ where: { businessId } }),
-      prisma.employee.count({ where: { businessId, status: 'on_leave' } }),
+      onLeaveOn(businessId, today).then(s => s.size),
       prisma.attendance.count({ where: { businessId, date: today, clockIn: { not: null } } }),
       prisma.leave.count({ where: { businessId, status: 'pending' } }),
       prisma.hrTodo.count({ where: { businessId, status: 'pending' } }),
@@ -76,12 +86,17 @@ router.get('/summary', auth, async (req, res, next) => {
 // ── Employees ─────────────────────────────────────────────────────────────────
 router.get('/employee', auth, async (req, res, next) => {
   try {
-    const employees = await prisma.employee.findMany({
-      where: { businessId: req.user.business_id },
-      include: { location: { select: { name: true } } },
-      orderBy: { name: 'asc' },
-    });
-    res.json(employees.map(serializeEmployee));
+    const businessId = req.user.business_id;
+    const settings = await loadSettings(businessId);
+    const [employees, onLeave] = await Promise.all([
+      prisma.employee.findMany({
+        where: { businessId },
+        include: { location: { select: { name: true } } },
+        orderBy: { name: 'asc' },
+      }),
+      onLeaveOn(businessId, new Date(tzParts(settings.timezone).date)),
+    ]);
+    res.json(employees.map(e => ({ ...serializeEmployee(e), on_leave: onLeave.has(e.id) })));
   } catch (err) { next(err); }
 });
 
@@ -574,8 +589,6 @@ router.put('/leave/:id', auth, requireRole('owner', 'manager'), validate(LeaveSt
       where: { id: req.params.id },
       data: { status, approvedBy: status === 'approved' ? (req.body.approved_by || req.user.name || 'Manager') : null },
     });
-    // Mirror the mock: approving puts the employee on leave; otherwise back to active.
-    await prisma.employee.update({ where: { id: leave.employeeId }, data: { status: status === 'approved' ? 'on_leave' : 'active' } });
     res.json(serializeLeave(updated, leave.employee?.name || '—'));
   } catch (err) { next(err); }
 });
