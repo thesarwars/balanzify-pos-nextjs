@@ -4694,6 +4694,19 @@ const API: any = {
       if (REAL_MODE) return await realReq('PUT', '/hrm/sales-target/' + userId, { body: { bands } });
       return null;
     },
+    // Self-service: the logged-in user's own record, payroll and components.
+    async me() {
+      if (REAL_MODE) return await realReq('GET', '/hrm/me');
+      return null;
+    },
+    async myPayroll() {
+      if (REAL_MODE) return await realReq('GET', '/hrm/me/payroll');
+      return [];
+    },
+    async myPayComponents() {
+      if (REAL_MODE) return await realReq('GET', '/hrm/me/pay-components');
+      return [];
+    },
     async payComponents() {
       if (REAL_MODE) return await realReq('GET', '/hrm/pay-component');
       return [];

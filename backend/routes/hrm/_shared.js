@@ -558,7 +558,21 @@ const groupInclude = {
   payrolls: { include: { lines: true } }, createdBy: { select: { name: true } }, location: { select: { name: true } },
 };
 
+// The employee record for the logged-in user, if they are linked to one. This
+// is what every self-service route scopes to; there was previously no way at
+// all to resolve "me", which is why nobody could see their own payslip.
+async function myEmployee(req) {
+  if (!req.user?.id) return null;
+  return prisma.employee.findFirst({
+    where: { businessId: req.user.business_id, userId: req.user.id },
+    include: { location: { select: { name: true } } },
+  });
+}
+
+const isManager = (req) => req.user?.role === 'owner' || req.user?.role === 'manager';
+
 module.exports = {
+  myEmployee, isManager,
   DEFAULT_DEPARTMENTS, DEFAULT_DESIGNATIONS, DEFAULT_LEAVE_TYPES, IMPORT_TS, PL_UUID,
   advanceInclude, applyComponents, buildSummary, clockStatusFor, componentsFor,
   computeBalances, decorateAtt, empShiftMap, employeeSales, ensureLeaveTypeDefaults,

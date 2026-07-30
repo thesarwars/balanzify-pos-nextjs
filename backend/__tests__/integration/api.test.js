@@ -2493,6 +2493,62 @@ describe('HRM', () => {
     expect(del.status).toBe(422);
   });
 
+  test('an employee sees their own payroll and nobody else\'s', async () => {
+    // A cashier linked to an employee record — the link that made self-service
+    // possible at all.
+    const cashier = await request(app).post('/api/v1/users').set(auth(hrToken))
+      .send({ name: 'Self Serve', email: `self_${RUN}@balanzify.test`, password: 'SecurePass123!', role: 'cashier' });
+    expect(cashier.status).toBe(201);
+    const emp = await request(app).post('/api/v1/hrm/employee').set(auth(hrToken))
+      .send({ name: 'Self Serve', salary: 900, joined: '2026-01-01', user_id: cashier.body.id });
+    expect(emp.status).toBe(201);
+    const login = await request(app).post('/api/v1/auth/login')
+      .send({ email: `self_${RUN}@balanzify.test`, password: 'SecurePass123!' });
+    const selfToken = login.body.access_token;
+
+    const me = await request(app).get('/api/v1/hrm/me').set(auth(selfToken));
+    expect(me.status).toBe(200);
+    expect(me.body.id).toBe(emp.body.id);
+    expect(me.body.is_manager).toBe(false);
+    // Own view: no salary or commission.
+    expect(me.body.salary).toBeUndefined();
+    expect(Array.isArray(me.body.leave_balance)).toBe(true);
+
+    await request(app).post('/api/v1/hrm/payroll').set(auth(hrToken))
+      .send({ employee_id: emp.body.id, month: '2026-02', basic: 900 });
+    const mine = await request(app).get('/api/v1/hrm/me/payroll').set(auth(selfToken));
+    expect(mine.status).toBe(200);
+    expect(mine.body.length).toBe(1);
+    expect(mine.body[0].month).toBe('2026-02');
+    const comps = await request(app).get('/api/v1/hrm/me/pay-components').set(auth(selfToken));
+    expect(comps.status).toBe(200);
+
+    // The three leaks: business payroll totals, another employee's record, and
+    // another employee's payslip were all readable by any authenticated user.
+    const sum = await request(app).get('/api/v1/hrm/summary').set(auth(selfToken));
+    expect(sum.status).toBe(200);
+    expect(sum.body.payroll).toBeUndefined();
+    expect(sum.body.employees).toBeGreaterThan(0);
+    const mgrSum = await request(app).get('/api/v1/hrm/summary').set(auth(hrToken));
+    expect(typeof mgrSum.body.payroll).toBe('number');
+
+    const other = await request(app).get(`/api/v1/hrm/employee/${hrEmpId}`).set(auth(selfToken));
+    expect(other.status).toBe(403);
+    const own = await request(app).get(`/api/v1/hrm/employee/${emp.body.id}`).set(auth(selfToken));
+    expect(own.status).toBe(200);
+
+    const theirPayroll = await request(app).get('/api/v1/hrm/payroll').set(auth(hrToken)).query({ employee_id: hrEmpId });
+    const slip = await request(app).get(`/api/v1/hrm/payslip/${theirPayroll.body[0].id}`).set(auth(selfToken));
+    expect(slip.status).toBe(403);
+    const ownSlip = await request(app).get(`/api/v1/hrm/payslip/${mine.body[0].id}`).set(auth(selfToken));
+    expect(ownSlip.status).toBe(200);
+
+    // An unlinked login gets a clear answer rather than an empty screen.
+    const unlinked = await request(app).get('/api/v1/hrm/me').set(auth(hrToken));
+    expect(unlinked.status).toBe(404);
+    expect(unlinked.body.code).toBe('NO_EMPLOYEE_RECORD');
+  });
+
   test('settings expose every field the Settings tab edits, and refs are prefixed', async () => {
     const res = await request(app).put('/api/v1/hrm/settings').set(auth(hrToken)).send({
       leave_ref_prefix: 'LV-', leave_instructions: 'Apply two weeks ahead.',

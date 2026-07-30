@@ -4,7 +4,7 @@
 const {
   EmployeeSchema, EmployeeUpdateSchema, auth, computeBalances, decorateAtt, empShiftMap,
   employeeSales, ensureLeaveTypeDefaults, ensureOrgDefaults, express, getBusinessSettings,
-  loadSettings, onLeaveOn, prisma, requireRole, serializeAdvance, serializeEmployee,
+  isManager, loadSettings, myEmployee, onLeaveOn, prisma, requireRole, serializeAdvance, serializeEmployee,
   serializeLeave, serializePayroll, tzParts, validate,
 } = require('./_shared');
 
@@ -23,7 +23,12 @@ router.get('/summary', auth, async (req, res, next) => {
       prisma.hrTodo.count({ where: { businessId, status: 'pending' } }),
       prisma.payroll.aggregate({ where: { businessId, status: 'paid' }, _sum: { net: true } }),
     ]);
-    res.json({ employees, present, on_leave: onLeave, pending_leave: pendingLeave, payroll: parseFloat(payroll._sum.net || 0), open_todos: openTodos });
+    // The payroll total is management information — it used to go to every
+    // authenticated user, cashiers included.
+    res.json({
+      employees, present, on_leave: onLeave, pending_leave: pendingLeave, open_todos: openTodos,
+      ...(isManager(req) && { payroll: parseFloat(payroll._sum.net || 0) }),
+    });
   } catch (err) { next(err); }
 });
 
@@ -45,6 +50,14 @@ router.get('/employee', auth, async (req, res, next) => {
 
 router.get('/employee/:id', auth, async (req, res, next) => {
   try {
+    // Salary, commission and sales are not public within a business. A manager
+    // may read anyone; everyone else may read only themselves.
+    if (!isManager(req)) {
+      const me = await myEmployee(req);
+      if (!me || me.id !== req.params.id) {
+        return res.status(403).json({ title: 'You can only view your own record.', status: 403 });
+      }
+    }
     const e = await prisma.employee.findFirst({
       where: { id: req.params.id, businessId: req.user.business_id },
       include: { location: { select: { name: true } }, user: { select: { name: true } } },

@@ -9,6 +9,7 @@ const router = express.Router();
 
 router.use('/', require('./sales-targets'));
 router.use('/', require('./employees'));
+router.use('/', require('./me'));
 router.use('/', require('./org'));
 router.use('/', require('./holidays'));
 router.use('/', require('./settings'));

@@ -6,6 +6,7 @@ const {
   accounting, applyComponents, auth, buildSummary, componentsFor, express, grossOf,
   groupInclude, loadSettings, monthRange, nextPayrollRef, prisma, requireRole,
   serializeComponent, serializeGroup, serializePayroll, statutory, validate, wa, z,
+  isManager, myEmployee,
 } = require('./_shared');
 
 const router = express.Router();
@@ -381,6 +382,16 @@ router.get('/payroll/statutory-report', auth, async (req, res, next) => {
 router.get('/payslip/:id', auth, async (req, res, next) => {
   try {
     const businessId = req.user.business_id;
+    // A payslip is the employee's own document and management information for
+    // everyone else. This was `auth` only, so any authenticated user in the
+    // business could read anyone's pay by guessing an id.
+    if (!isManager(req)) {
+      const me = await myEmployee(req);
+      const owned = me && await prisma.payroll.findFirst({
+        where: { id: req.params.id, businessId, employeeId: me.id }, select: { id: true },
+      });
+      if (!owned) return res.status(403).json({ title: 'You can only view your own payslip.', status: 403 });
+    }
     const p = await prisma.payroll.findFirst({
       where: { id: req.params.id, businessId },
       include: { employee: { include: { location: { select: { name: true } } } }, lines: true },

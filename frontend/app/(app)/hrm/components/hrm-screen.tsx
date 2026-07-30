@@ -10,6 +10,7 @@ import { BUSINESS } from '@/lib/data';
 import { todayLocal } from '@/lib/business-settings';
 import { DOW, hrAvatar, hrFilterSel, hrInitials, hrMini } from './shared';
 import { HrmSettingsPanel } from './settings-panel';
+import { MyPayrolls } from './my-payrolls';
 import { AttendanceEntryModal, AttendanceImport, AttendanceSettings, ShiftAssignModal, ShiftModal, ShiftTemplateModal, SwapModal } from './attendance-modals';
 import { EmployeeModal, EmployeeProfile, HolidayModal, OrgModal, OrgUnitModal } from './people-modals';
 import { AdvanceModal, PayComponentModal, PayrollGroupModal, PayrollModal, PayslipSettings, SalesTargetModal, TodoModal } from './payroll-modals';
@@ -138,7 +139,7 @@ export function HRM({ T }: { T: any }) {
   }
   if (enabled === null) return <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: T.paperAlt, fontFamily: T.fMono, fontSize: 12.5, color: T.inkSub }}>Loading…</div>;
 
-  const tabs = [['overview', 'Overview'], ['employees', 'Employees'], ['org', 'Departments'], ['designations', 'Designations'], ['attendance', 'Attendance'], ['report', 'Report'], ['shifts', 'Shifts'], ['leave', 'Leave'], ['holidays', 'Holiday'], ['payroll', 'Payroll'], ['targets', 'Sales Targets'], ['settings', 'Settings'], ['advances', 'Advances'], ['todos', 'Tasks']];
+  const tabs = [['overview', 'Overview'], ['employees', 'Employees'], ['org', 'Departments'], ['designations', 'Designations'], ['attendance', 'Attendance'], ['report', 'Report'], ['shifts', 'Shifts'], ['leave', 'Leave'], ['holidays', 'Holiday'], ['payroll', 'Payroll'], ['targets', 'Sales Targets'], ['mypay', 'My Payrolls'], ['settings', 'Settings'], ['advances', 'Advances'], ['todos', 'Tasks']];
   const inDept = (empId: any) => !fDept || (emps.find((e: any) => e.id === empId) || {}).department === fDept;
   const fAtt = att.filter((a: any) => matchQ(a.employee_name) && inDept(a.employee_id) && (!fStatus || a.status === fStatus));
   const fLeaves = leaves.filter((l: any) => (matchQ(l.employee_name) || matchQ(l.type) || matchQ(l.reason)) && inDept(l.employee_id) && (!fStatus || l.status === fStatus));
@@ -162,6 +163,7 @@ export function HRM({ T }: { T: any }) {
   // ── Export / print for the active tab ─────────────────────────────
   const exportSets: any = {
     settings: () => ({ title: 'Settings', cols: [], rows: [] }),
+    mypay: () => ({ title: 'My payrolls', cols: [], rows: [] }),
     org: () => ({ title: 'Departments', cols: ['Department', 'Department ID', 'Description', 'Staff'], rows: (org.departments || []).map((d: any) => [d.name, d.code, d.description, d.count]) }),
     designations: () => ({ title: 'Designations', cols: ['Designation', 'Description', 'Staff'], rows: (org.designations || []).map((d: any) => [d.name, d.description, d.count]) }),
     targets: () => ({ title: 'Sales targets', cols: ['User', 'Bands', 'Rates'], rows: fTargets.map((t: any) => [t.name, t.bands.length || 'flat', t.bands.length ? t.bands.map((b: any) => `${b.from_amount}-${b.to_amount ?? '∞'} @ ${b.commission_percent}%`).join('; ') : `${t.flat_percent}%`]) }),
@@ -220,7 +222,7 @@ export function HRM({ T }: { T: any }) {
             const statusOpts = ({
               attendance: ['present', 'late', 'absent', 'running', 'on break'],
               leave: ['pending', 'approved', 'rejected'],
-              shifts: [], payroll: [], report: [], holidays: [], targets: [], settings: [],
+              shifts: [], payroll: [], report: [], holidays: [], targets: [], settings: [], mypay: [],
               advances: ['outstanding', 'settled'],
               todos: ['pending', 'done'],
             } as any)[tab] || [];
@@ -307,6 +309,8 @@ export function HRM({ T }: { T: any }) {
               </table>
             </Panel>
           )}
+
+          {tab === 'mypay' && <MyPayrolls T={T} />}
 
           {tab === 'settings' && <HrmSettingsPanel T={T} onSaved={() => { show('Settings saved'); reload(); }} />}
 
