@@ -4540,7 +4540,7 @@ const API: any = {
       return (await transport('GET', '/connector/api/hrm/attendance-summary/' + id, { query: { month } })).data;
     },
     async addPayroll(body: any) {
-      if (REAL_MODE) return await realReq('POST', '/hrm/payroll', { body: { employee_id: body.employee_id, month: body.month, basic: Number(body.basic || 0), allowance: Number(body.allowance || 0), overtime: Number(body.overtime || 0), bonus: Number(body.bonus || 0), incentive: Number(body.incentive || 0), deduction: Number(body.deduction || 0) } });
+      if (REAL_MODE) return await realReq('POST', '/hrm/payroll', { body: { employee_id: body.employee_id, month: body.month, basic: Number(body.basic || 0), allowance: Number(body.allowance || 0), overtime: Number(body.overtime || 0), bonus: Number(body.bonus || 0), incentive: Number(body.incentive || 0), deduction: Number(body.deduction || 0), advance_recovery: Number(body.advance_recovery || 0) } });
       return (await transport('POST', '/connector/api/hrm/payroll', { body })).data;
     },
     async payslip(id: any) {

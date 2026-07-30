@@ -518,7 +518,11 @@ const PayrollSchema = z.object({
   overtime:    money.default(0),
   bonus:       money.default(0),
   incentive:   money.default(0),
+  // Genuine withholding only. Advance repayment is a separate instruction —
+  // see advance_recovery — so that typing a tax deduction cannot silently
+  // settle someone's outstanding loan.
   deduction:   money.default(0),
+  advance_recovery: money.default(0),
   // Optional: auto-compute statutory deductions for this country (e.g. 'KE').
   statutory_country: z.enum(['KE', 'SO', 'none']).optional(),
   // Pro-rate the basic for a mid-month joiner (by days worked in the month).

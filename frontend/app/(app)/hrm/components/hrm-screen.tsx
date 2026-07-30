@@ -611,16 +611,17 @@ function LeaveModal({ T, emps, leaveTypes, onClose, onSaved }: { T: any; emps: a
 }
 
 function PayrollModal({ T, emps, onClose, onSaved }: { T: any; emps: any[]; onClose: () => void; onSaved: () => void }) {
-  const [f, setF] = useStateHr<any>({ employee_id: (emps[0] || {}).id || '', month: new Date().toISOString().slice(0, 7), basic: '', allowance: '', overtime: '', bonus: '', incentive: '', deduction: '' });
+  const [f, setF] = useStateHr<any>({ employee_id: (emps[0] || {}).id || '', month: new Date().toISOString().slice(0, 7), basic: '', allowance: '', overtime: '', bonus: '', incentive: '', deduction: '', advance_recovery: '' });
   const [busy, setBusy] = useStateHr(false);
   const set = (k: string, v: any) => setF((s: any) => ({ ...s, [k]: v }));
   const emp = emps.find((e: any) => String(e.id) === String(f.employee_id));
   const [advance, setAdvance] = useStateHr<any>(0);
   const [summary, setSummary] = useStateHr<any>(null);
   React.useEffect(() => { if (emp && !f.basic) set('basic', String(emp.salary)); }, [f.employee_id]);
-  React.useEffect(() => { if (f.employee_id) API.hrm.outstandingAdvance(f.employee_id).then((v: any) => { setAdvance(v); if (v > 0) set('deduction', String(v)); }).catch(() => {}); }, [f.employee_id]);
-  React.useEffect(() => { if (f.employee_id) API.hrm.empSummary(f.employee_id, f.month).then((s: any) => { setSummary(s); if (s.overtime_pay > 0) set('overtime', String(s.overtime_pay)); const dd = (advance || 0) + (s.total_deduction || 0); if (dd > 0) set('deduction', String(+dd.toFixed(2))); }).catch(() => {}); }, [f.employee_id, f.month, advance]);
-  const net = (Number(f.basic) || 0) + (Number(f.allowance) || 0) + (Number(f.overtime) || 0) + (Number(f.bonus) || 0) + (Number(f.incentive) || 0) - (Number(f.deduction) || 0);
+  React.useEffect(() => { if (f.employee_id) API.hrm.outstandingAdvance(f.employee_id).then((v: any) => { setAdvance(v); set('advance_recovery', v > 0 ? String(v) : ''); }).catch(() => {}); }, [f.employee_id]);
+  // Deduction is late/absent withholding only — advance repayment has its own field.
+  React.useEffect(() => { if (f.employee_id) API.hrm.empSummary(f.employee_id, f.month).then((s: any) => { setSummary(s); if (s.overtime_pay > 0) set('overtime', String(s.overtime_pay)); set('deduction', s.total_deduction > 0 ? String(+s.total_deduction.toFixed(2)) : ''); }).catch(() => {}); }, [f.employee_id, f.month]);
+  const net = (Number(f.basic) || 0) + (Number(f.allowance) || 0) + (Number(f.overtime) || 0) + (Number(f.bonus) || 0) + (Number(f.incentive) || 0) - (Number(f.deduction) || 0) - (Number(f.advance_recovery) || 0);
   return (
     <Modal T={T} title="Run payroll" width={500} onClose={onClose}
       footer={<><div style={{ flex: 1, fontSize: 13, color: T.inkSub }}>Net <b style={{ color: T.ink, fontFamily: T.fMono, marginLeft: 6 }}>{money(net)}</b></div><Btn T={T} kind="ghost" onClick={onClose}>Cancel</Btn><Btn T={T} kind="accent" onClick={async () => { setBusy(true); try { await API.hrm.addPayroll(f); onSaved(); } finally { setBusy(false); } }} disabled={busy}>{busy ? 'Saving…' : 'Pay'}</Btn></>}>
@@ -633,9 +634,10 @@ function PayrollModal({ T, emps, onClose, onSaved }: { T: any; emps: any[]; onCl
         <Field T={T} label="Bonus"><TextField T={T} type="number" value={f.bonus} onChange={v => set('bonus', v)} placeholder="0" /></Field>
         <Field T={T} label="Incentive"><TextField T={T} type="number" value={f.incentive} onChange={v => set('incentive', v)} placeholder="0" /></Field>
         <Field T={T} label="Deduction"><TextField T={T} type="number" value={f.deduction} onChange={v => set('deduction', v)} placeholder="0" /></Field>
+        <Field T={T} label="Advance recovery"><TextField T={T} type="number" value={f.advance_recovery} onChange={v => set('advance_recovery', v)} placeholder="0" /></Field>
       </FormGrid>
       {summary && <div style={{ marginTop: 12, padding: '9px 13px', borderRadius: T.r, background: T.paperAlt, border: `1px solid ${T.line}`, fontSize: 12, color: T.inkMid, lineHeight: 1.6 }}>{summary.days_worked} days · {summary.total_hours}h worked ({summary.expected_hours}h expected){summary.overtime_hours > 0 ? <> · <b style={{ color: T.amberText }}>{summary.overtime_hours}h overtime → {money(summary.overtime_pay)}</b> @ {money(summary.hourly_rate)}/h ×1.5</> : ''}{summary.total_deduction > 0 ? <> · <b style={{ color: T.redText }}>{summary.late} late / {summary.absent} absent → −{money(summary.total_deduction)}</b></> : ''}</div>}
-      {advance > 0 && <div style={{ marginTop: 12, padding: '9px 13px', borderRadius: T.r, background: T.amberSoft, color: T.amberText, fontSize: 12, lineHeight: 1.5 }}>Outstanding advance of <b>{money(advance)}</b> pre-filled as a deduction — it will be recovered when you pay.</div>}
+      {advance > 0 && <div style={{ marginTop: 12, padding: '9px 13px', borderRadius: T.r, background: T.amberSoft, color: T.amberText, fontSize: 12, lineHeight: 1.5 }}>Outstanding advance of <b>{money(advance)}</b> pre-filled as Advance recovery — clear the field to skip recovering it this month.</div>}
     </Modal>
   );
 }

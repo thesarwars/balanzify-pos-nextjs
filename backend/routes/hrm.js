@@ -880,11 +880,13 @@ router.post('/payroll', auth, requireRole('owner', 'manager'), validate(PayrollS
       ? statutory.compute(b.statutory_country, gross)
       : null;
     const statutoryTotal = stat ? stat.total_statutory : 0;
-    const net = +(gross - b.deduction - statutoryTotal).toFixed(2);
 
     const payroll = await prisma.$transaction(async (tx) => {
-      // Recover outstanding advances from the deduction (oldest first).
-      let remaining = b.deduction, recovered = 0;
+      // Recover outstanding advances (oldest first) up to what was asked for.
+      // This is deliberately NOT taken out of `deduction`: those are two
+      // different instructions, and conflating them meant a tax deduction
+      // silently settled the employee's loan instead.
+      let remaining = b.advance_recovery, recovered = 0;
       if (remaining > 0) {
         const advances = await tx.hrAdvance.findMany({ where: { businessId, employeeId: emp.id, status: 'outstanding' }, orderBy: { createdAt: 'asc' } });
         for (const adv of advances) {
@@ -897,11 +899,15 @@ router.post('/payroll', auth, requireRole('owner', 'manager'), validate(PayrollS
           recovered += take;
         }
       }
+      recovered = +recovered.toFixed(2);
+      // Net is reduced by what was ACTUALLY recovered — asking to recover more
+      // than is outstanding must not over-deduct the employee.
+      const net = +(gross - b.deduction - recovered - statutoryTotal).toFixed(2);
       const created = await tx.payroll.create({
         data: {
           businessId, employeeId: emp.id, month: b.month, basic, allowance: b.allowance,
           overtime: b.overtime, bonus: b.bonus, incentive: b.incentive, deduction: b.deduction,
-          advanceRecovered: +recovered.toFixed(2),
+          advanceRecovered: recovered,
           statutoryCountry: stat ? stat.country : null,
           paye: stat ? stat.paye : 0, nssf: stat ? stat.nssf : 0, shif: stat ? stat.shif : 0,
           housingLevy: stat ? stat.housing_levy : 0, statutoryTotal,
@@ -910,7 +916,9 @@ router.post('/payroll', auth, requireRole('owner', 'manager'), validate(PayrollS
         include: { employee: { select: { name: true } } },
       });
       // GL: gross wages expensed, net paid in cash, freeform + statutory withheld as payables.
-      await accounting.postPayroll(tx, { businessId, gross, net, deduction: b.deduction, advanceRecovered: +recovered.toFixed(2), statutory: statutoryTotal, sourceId: created.id, createdById: req.user.id });
+      // postPayroll's contract is `deduction = advanceRecovered + withholding`,
+      // so hand it the combined figure to keep the journal balanced.
+      await accounting.postPayroll(tx, { businessId, gross, net, deduction: +(b.deduction + recovered).toFixed(2), advanceRecovered: recovered, statutory: statutoryTotal, sourceId: created.id, createdById: req.user.id });
       return created;
     });
     res.status(201).json({ ...serializePayroll(payroll), ...(proration && { proration }) });
