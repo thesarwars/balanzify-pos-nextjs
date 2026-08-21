@@ -1,0 +1,82 @@
+# Balanzify marketing site — apex vhost.
+#
+# Dropped into the POS nginx container at /etc/nginx/sites/landing.conf by
+# infrastructure/nginx/nginx-entrypoint.sh, which substitutes LANDING_DOMAIN and
+# only emits this file when the matching certificate exists. That guard matters:
+# an ssl_certificate pointing at a missing file makes nginx refuse to start,
+# which would take the POS down with it.
+#
+# Content is served straight off a read-only bind mount of the static build —
+# no upstream, no second container, no Node process.
+
+# Cache-Control is computed here rather than set per-location, because nginx
+# `add_header` does NOT merge across levels: a single add_header inside a
+# location REPLACES every add_header inherited from the server block. Setting
+# the cache policy through a map keeps all add_header directives at one level,
+# so the security headers below actually reach the client.
+map $uri $balanzify_cache_control {
+    default                                        "no-cache";
+    "~^/_astro/"                                   "public, max-age=31536000, immutable";
+    "~*\.(?:png|jpe?g|gif|svg|webp|avif|ico|woff2?)$" "public, max-age=2592000";
+}
+
+# www → apex, so there is a single canonical host.
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name www.LANDING_DOMAIN;
+
+    ssl_certificate     /etc/nginx/certs/live/LANDING_DOMAIN/fullchain.pem;
+    ssl_certificate_key /etc/nginx/certs/live/LANDING_DOMAIN/privkey.pem;
+
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+
+    return 301 https://LANDING_DOMAIN$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name LANDING_DOMAIN;
+
+    ssl_certificate     /etc/nginx/certs/live/LANDING_DOMAIN/fullchain.pem;
+    ssl_certificate_key /etc/nginx/certs/live/LANDING_DOMAIN/privkey.pem;
+
+    root /usr/share/nginx/landing;
+    index index.html;
+
+    # Reuses the limit zones declared at http{} level in nginx.conf.
+    limit_conn conn_limit_per_ip 20;
+    limit_req  zone=static burst=30 nodelay;
+
+    # Every add_header for this vhost lives here, at server level. Do not add
+    # one inside a location block — doing so drops all of these for that path.
+    add_header Cache-Control $balanzify_cache_control always;
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+
+    # Stricter than the app's policy: the built page has no inline <script> at
+    # all, so script-src can stay at 'self'. 'unsafe-inline' remains only for
+    # style, because the markup uses inline style="" attributes for layout.
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" always;
+
+    location = /health {
+        access_log off;
+        default_type text/plain;
+        return 200 'ok';
+    }
+
+    # Astro fingerprints everything under /_astro/, so it is safe to cache hard.
+    # Cache-Control comes from the map above; no add_header here on purpose.
+    location /_astro/ {
+        access_log off;
+        try_files $uri =404;
+    }
+
+    location / {
+        try_files $uri $uri/ $uri.html /index.html;
+    }
+}
