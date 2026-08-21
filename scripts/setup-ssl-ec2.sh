@@ -1,5 +1,5 @@
 #!/bin/bash
-# Obtain Let's Encrypt certificate for pos.balanzify.ai (run AFTER DNS points to EC2)
+# Obtain Let's Encrypt certificate for pos.balanzify.africa (run AFTER DNS points to EC2)
 set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -13,7 +13,7 @@ if [ -f "$ENV_FILE" ]; then
   DOMAIN=$(grep '^DOMAIN=' "$ENV_FILE" | cut -d= -f2- | tr -d '\r' || true)
 fi
 
-DOMAIN="${DOMAIN:-pos.balanzify.ai}"
+DOMAIN="${DOMAIN:-pos.balanzify.africa}"
 SSH="ssh -i $EC2_KEY -o StrictHostKeyChecking=no $EC2_HOST"
 
 echo "=== Checking DNS for $DOMAIN ==="
@@ -25,7 +25,7 @@ echo "  EC2 public IP:       18.221.211.50"
 if [ "$RESOLVED" != "18.221.211.50" ]; then
   echo ""
   echo "WARNING: DNS does not point to EC2 yet."
-  echo "In GoDaddy DNS for balanzify.ai, set:"
+  echo "In GoDaddy DNS for balanzify.africa, set:"
   echo "  Type A | Name pos | Value 18.221.211.50"
   echo ""
   read -r -p "Continue anyway? [y/N] " ans

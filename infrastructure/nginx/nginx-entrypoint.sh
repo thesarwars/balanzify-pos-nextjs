@@ -2,7 +2,7 @@
 # Pick HTTP-only nginx until Let's Encrypt certs exist, then use HTTPS template.
 set -eu
 
-DOMAIN="${BALANZIFY_DOMAIN:-pos.balanzify.ai}"
+DOMAIN="${BALANZIFY_DOMAIN:-pos.balanzify.africa}"
 CERT="/etc/nginx/certs/live/${DOMAIN}/fullchain.pem"
 
 if [ -f "$CERT" ]; then

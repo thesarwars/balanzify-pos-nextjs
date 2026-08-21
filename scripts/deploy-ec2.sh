@@ -51,7 +51,7 @@ $SSH "cd $REMOTE_DIR && sudo docker compose -f docker-compose.ec2.yml up -d --bu
 echo "[5/5] Checking health ..."
 sleep 15
 $SSH "cd $REMOTE_DIR && sudo docker compose -f docker-compose.ec2.yml ps"
-curl -sf "http://18.221.211.50/health" && echo "" || echo "WARN: /health not reachable yet — check logs with: ssh ... 'sudo docker compose -f docker-compose.ec2.yml logs -f api'"
+curl -sf "https://pos.balanzify.africa/health" && echo "" || echo "WARN: /health not reachable yet — check logs with: ssh ... 'sudo docker compose -f docker-compose.ec2.yml logs -f api'"
 
 echo ""
-echo "Done. App URL: http://18.221.211.50"
+echo "Done. App URL: https://pos.balanzify.africa"
